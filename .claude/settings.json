@@ -1,4 +1,10 @@
 {
+  "permissions": {
+    "allow": [
+      "Bash(curl *nlm-server-8823.com*)",
+      "Bash(nlm auth *)"
+    ]
+  },
   "hooks": {
     "SessionStart": [
       {
