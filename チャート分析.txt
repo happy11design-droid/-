@@ -102,14 +102,19 @@ Google Drive連携ツール（create_file等）を使う際は、`.md`ファイ�
 
 ### 手順A: VPS経由での自動再認証（PC不要、Claude自身で実行可能）
 環境変数 `NLM_VPS_CDP_BASE`（例: `wss://nlm-server-8823.com:443/nlmcdp-<秘密トークン>`）が設定されている場合、以下をClaude自身が実行してよい。
-1. 現在のChromeのUUIDを取得する。`NLM_VPS_CDP_BASE` の `wss://` を `https://` に読み替えたURLに `/json/version` を付けて取得する。
+
+**重要（過去に間違えた点）**: 接続先は必ず `$NLM_VPS_CDP_BASE` に入っているドメイン名（`nlm-server-8823.com`）をそのまま使うこと。VPSのIPアドレス（`34.133.108.107`等、NOTEBOOKLM_SETUP.mdに記載）を直接使ったり、`/json/version`のレスポンスに含まれる`webSocketDebuggerUrl`のホスト部分（`127.0.0.1`になっている）をそのまま流用したりしては絶対にいけない。ドメイン宛のTLS証明書を使っているため、IPアドレスやドメイン以外のホスト名で接続するとTLS証明書検証エラーで必ず失敗する。UUID（`/devtools/browser/`の後ろの部分）だけを取り出し、それ以外は`$NLM_VPS_CDP_BASE`の文字列をそのまま使うこと。
+
+1. 現在のChromeのUUIDを取得し、`$NLM_VPS_CDP_BASE`と組み合わせて接続先URLを機械的に組み立てる（以下をそのままコピーして実行してよい。手で書き換えない）。
+   ```bash
+   HTTP_BASE="${NLM_VPS_CDP_BASE/wss:/https:}"
+   UUID=$(curl -sS "$HTTP_BASE/json/version" | grep -oE '/devtools/browser/[a-f0-9-]+' | head -1 | sed 's#/devtools/browser/##')
+   CDP_URL="${NLM_VPS_CDP_BASE}/devtools/browser/${UUID}"
+   echo "$CDP_URL"   # ドメイン名(nlm-server-8823.com)になっているか必ず目視確認してからnlmに渡すこと
    ```
-   curl -s "${NLM_VPS_CDP_BASE/wss:/https:}/json/version"
-   ```
-   返ってきたJSONの `webSocketDebuggerUrl` から `/devtools/browser/<UUID>` の部分を取り出す。
-2. パッチ版 `nlm`（session-start.shが自動ビルド済み）で再認証する。
-   ```
-   nlm auth -cdp-url "${NLM_VPS_CDP_BASE}/devtools/browser/<UUID>"
+2. `echo`で表示された`$CDP_URL`にIPアドレスが含まれていないこと（ドメイン名になっていること）を確認した上で、パッチ版 `nlm`（session-start.shが自動ビルド済み）で再認証する。
+   ```bash
+   nlm auth -cdp-url "$CDP_URL"
    ```
 3. 成功すれば認証情報が自動的に反映されるので、そのまま分析を再実行する。
 4. もし手順2が「redirected to authentication page」「detected sign-in page」等、Googleセッション自体が切れていることを示すエラーになった場合は、VM上のChrome自体への再ログインが必要（手順Aでは解決できない）。ユーザーに、ブラウザで `http://34.133.108.107:6080/vnc.html`（VMのnoVNC、事前にVM側で `x11vnc`/`websockify` が起動している必要あり）を開いてNotebookLM専用サブアカウントに再ログインするよう依頼し、ログイン完了の報告を受けてから手順1に戻ること。これは携帯のブラウザからでも操作可能なので、PCは不要。
