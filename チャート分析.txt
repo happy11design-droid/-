@@ -98,7 +98,23 @@ Google Drive連携ツール（create_file等）を使う際は、`.md`ファイ�
 保存が完了したら、チャットの最後に一言「■Obsidianへ保存しました（日次記録/ファイル名）」と報告すること。
 
 ## 補足: NotebookLM認証（NLM_AUTH_TOKEN / NLM_COOKIES）が失効している場合
-`nlm` コマンドが「authentication expired or invalid」等のエラーを返す場合、サブアカウントのGoogleセッションが失効している。この場合は分析を中断し、ユーザーに以下の再認証手順を依頼すること（Claude側では自動復旧できない）。
+`nlm` コマンドが「authentication expired or invalid」等のエラーを返す場合、サブアカウントのGoogleセッションが失効している。この場合は分析を中断し、まず以下の手順A（PC不要・VPS経由）を試すこと。手順Aが使えない場合（環境変数`NLM_VPS_CDP_BASE`が未設定、またはVPS自体が停止している等）のみ、手順B（PC必須）をユーザーに依頼する。
+
+### 手順A: VPS経由での自動再認証（PC不要、Claude自身で実行可能）
+環境変数 `NLM_VPS_CDP_BASE`（例: `wss://nlm-server-8823.com:443/nlmcdp-<秘密トークン>`）が設定されている場合、以下をClaude自身が実行してよい。
+1. 現在のChromeのUUIDを取得する。`NLM_VPS_CDP_BASE` の `wss://` を `https://` に読み替えたURLに `/json/version` を付けて取得する。
+   ```
+   curl -s "${NLM_VPS_CDP_BASE/wss:/https:}/json/version"
+   ```
+   返ってきたJSONの `webSocketDebuggerUrl` から `/devtools/browser/<UUID>` の部分を取り出す。
+2. パッチ版 `nlm`（session-start.shが自動ビルド済み）で再認証する。
+   ```
+   nlm auth -cdp-url "${NLM_VPS_CDP_BASE}/devtools/browser/<UUID>"
+   ```
+3. 成功すれば認証情報が自動的に反映されるので、そのまま分析を再実行する。
+4. もし手順2が「redirected to authentication page」「detected sign-in page」等、Googleセッション自体が切れていることを示すエラーになった場合は、VM上のChrome自体への再ログインが必要（手順Aでは解決できない）。ユーザーに、ブラウザで `http://34.133.108.107:6080/vnc.html`（VMのnoVNC、事前にVM側で `x11vnc`/`websockify` が起動している必要あり）を開いてNotebookLM専用サブアカウントに再ログインするよう依頼し、ログイン完了の報告を受けてから手順1に戻ること。これは携帯のブラウザからでも操作可能なので、PCは不要。
+
+### 手順B: PC経由での再認証（手順Aが使えない場合のみ）
 1. PCでChromeを完全終了し、`--remote-debugging-port=9222 --user-data-dir="C:\chrome-nlm-debug"` 付きで起動
 2. NotebookLM専用サブアカウントで再ログインし、https://notebook.google.com を開く
 3. `nlm auth -cdp-url ws://localhost:9222` で再認証

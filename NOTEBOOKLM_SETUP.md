@@ -2,7 +2,7 @@
 
 このドキュメントは、携帯（PC）からチャート画像を貼り付けるだけでNotebookLM経由の投資分析を実行できるようにするために行った構築作業の記録です。トラブル時の復旧や、将来の変更の際の参照用にまとめています。
 
-**現在の状態（2026-09-20時点）: 方式Aが稼働中。方式B（VPS完全自動化）は未解決の壁により保留中。**
+**現在の状態（2026-09-20時点）: 方式A・方式Bともに動作確認済み。方式B（VPS完全自動化、PCの電源不要）はクラウドセッションからの実接続・NotebookLM認証情報の取得・`nlm notebook list`によるAPI疎通まで完全に成功した。**
 
 ---
 
@@ -97,61 +97,75 @@ NotebookLMのセッションCookieは**有効期限が短く、頻繁に失効�
 
 ---
 
-## 方式B: VPS完全自動化（PCの電源すら不要にする試み） — 現在保留中
+## 方式B: VPS完全自動化（PCの電源すら不要） — 2026-09-20 完全動作確認済み
 
-「PCを一切使わず、携帯だけで完結させたい」という目標のため、常時起動のクラウドサーバー（VPS）上でChromeを常時ログイン状態に維持し、Claude Codeのクラウド環境からそこへ直接接続する方式を試みた。**VM側の構築は完了・正常動作しているが、Claude Code環境からVMへの接続が最後の最後でブロックされ、原因未解明のまま保留中。**
+「PCを一切使わず、携帯だけで完結させたい」という目標のため、常時起動のクラウドサーバー（VPS）上でChromeを常時ログイン状態に維持し、Claude Codeのクラウド環境からそこへ直接接続する方式。**長期間「Claude Codeのクラウド環境からは外部サーバーに到達できないのではないか」という仮説のもとで保留していたが、実際には仮説が誤りで、VM側に3つの独立した設定不備が重なっていただけだった。すべて修正し、クラウドセッションから実際にNotebookLM専用サブアカウントの認証情報を取得し、`nlm notebook list`でノートブック一覧取得まで成功した。**
 
-### 構築済みのインフラ（すべて正常稼働中）
+### 構築済みのインフラ
 
 - **VPS**: Google Cloud Platform (GCP) 無料枠、インスタンス名 `nlm-server`
   - リージョン: `us-central1-a`、マシンタイプ: `e2-micro`（Always Free対象）
   - 外部IP: `34.133.108.107`（固定IPではない。VM再起動で変わる可能性あり）
   - OS: Debian GNU/Linux 13、ユーザー名: `happy11design`
   - GCPプロジェクト: `project-7a8501cc-0f70-4619-953`
-  - **90日間の無料トライアル中（2026年9月19日開始）。90日以内に「フルアカウントへアップグレード」しないと自動削除される（課金はされない設計だが、アップグレードしないとインスタンスが消える）。**
+  - 90日間の無料トライアル中（2026年9月19日開始）。90日以内に「フルアカウントへアップグレード」しないと自動削除される。
 - **ドメイン**: `nlm-server-8823.com`（Porkbunで購入、2026-09-19、年更新$11.81）
   - DNS Aレコード: `34.133.108.107` を指す
 - **VM上のソフトウェア構成**:
-  - Chrome（サブアカウント notebookbunseki@gmail.com でログイン済み、`--remote-debugging-port=9222 --remote-allow-origins=*`）
-  - Xvfb（仮想ディスプレイ、Chromeを画面なしサーバーで動かすため）
-  - nginx（リバースプロキシ、443番でTLS終端しCDPポート9222へ中継、Basic認証つき: ユーザー`nlm`）
+  - Chrome（サブアカウント notebookbunseki@gmail.com でログイン済み、`--remote-debugging-port=9222 --remote-allow-origins=* --disable-metrics --disable-metrics-reporting`）
+  - Xvfb（仮想ディスプレイ）、`nlm-xvfb.service` / `nlm-chrome.service`（systemd、`Restart=always`）
+  - nginx（リバースプロキシ、443番でTLS終端しCDPポート9222へ中継）
   - Let's Encrypt証明書（certbot、`nlm-server-8823.com`用、自動更新設定済み）
-  - スワップファイル2GB追加済み（e2-microはメモリ1GBしかなく、Chrome+VNC同時起動でメモリ不足になったため）
-  - systemdサービス化済み（`nlm-xvfb.service`, `nlm-chrome.service`）でクラッシュ時自動再起動
-  - SSH公開鍵をClaude Code用に登録済み（`~/.ssh/authorized_keys`、コメント`claude-code-nlm-vps`）
-  - Basic認証パスワード: `/etc/nginx/.htpasswd`（ユーザー`nlm`）
+  - スワップファイル2GB（e2-microはメモリ1GBしかないため）
+  - noVNC（`x11vnc` + `websockify`、6080番ポート、systemd化されていないため再起動時は手動起動が必要）
 
-### 突き当たった壁: Claude Code環境からVMへの接続がブロックされる
+### 判明した3つの真因（「ゲートウェイが外部接続を一律ブロックしている」という当初の仮説は誤りだった）
 
-Claude Codeが動いているクラウドサンドボックス環境（`分析`環境、`anthropic_cloud`種別）の出口には、**Anthropicの検査用プロキシ（"sandbox-egress-gateway"）**が入っており、すべての外向き通信を一度TLS復号して検査している。この検査ゲートウェイの挙動を切り分けた結果、以下が判明：
+過去のセッションでは「Anthropicのサンドボックス出口ゲートウェイが、この種のクラウド環境から任意の外部サーバーへの到達を一律ブロックしている」と結論づけていたが、これは誤診断だった。**実際にVM側の設定を1つずつ検証したところ、ゲートウェイは真のHTTPS/WebSocket通信を問題なく通していた。** 真因は以下の3つがすべて重なっていたこと：
 
-1. **生のSSH（22番ポート）は通らない**（HTTPS以外のプロトコルはブロックされる）
-2. **SSHを443番ポートに変更しても通らない**（ポート番号ではなく中身のプロトコルを見ている。HTTPを期待する応答が返ってきた）
-3. **自己署名証明書や`nip.io`（IPアドレスを疑似ドメイン化する無料サービス）経由のTLSは、ゲートウェイに独自証明書で中間者化(MITM)された上で、最終的に「upstream connect error」で失敗**（`nip.io`が回避目的のドメインとしてブロック対象になっている可能性を疑った）
-4. **正式に購入した独自ドメイン（`nlm-server-8823.com`）+ Let's Encrypt正規証明書 + nginx Basic認証という「本物のHTTPS」構成にしても、依然として同じ「upstream connect error / 503」で失敗**（VM側のnginx・Chromeは正常動作をVM上のローカル確認・curlで確認済み。ゲートウェイが実際の転送先へ到達できていないだけ）
+1. **sshdが443番ポートを掴んでいた**: 過去のトラブルシュートで「SSHが22番で繋がらないので443番でも待ち受けさせる」設定 (`sshd_config`に`Port 443`) を追加していたが、これがnginxの443番バインドと競合していた。`systemctl status nginx`は一見正常に見えても、実際には443番のリッスンに失敗し続けており、`ss -tlnp`で確認するとsshdだけが443番を握っていた。TLSハンドシェイクをすると相手がSSHデーモンのため「wrong version number」エラーになる。
+   → **対処**: `sshd_config`の`Port 443`をコメントアウトし、22番のみに戻す（現在のSSHはGCP IAPトンネル経由で22番を使っているため、443番を外しても切断されない。実際のSSH接続元は`echo $SSH_CONNECTION`と`ss -tnp | grep sshd`で確認できる）。
+2. **Xvfbのクラッシュループ**: ディスク満杯時にXvfbが異常終了し、`/tmp/.X1-lock`ロックファイルが残ったまま、かつ手動起動していた古いXvfbプロセス（systemd管理外）がディスプレイ`:1`のソケットを握ったままになっていた。`nlm-xvfb.service`は「already active」「Cannot establish any listening sockets」で無限に再起動ループしており、Chromeもディスプレイ先を得られず数秒で落ち続けていた。
+   → **対処**: `ps aux | grep -i xvfb`で systemd管理外の古いプロセスを特定して`kill -9`、`/tmp/.X1-lock`と`/tmp/.X11-unix/X1`を削除してから`systemctl start`。
+3. **chromedpの`gobwas/ws`ライブラリはURLの`user:pass@host`形式を一切HTTPヘッダーに変換しない**: `curl -u`やブラウザは`wss://user:pass@host/...`形式のURLを自動的に`Authorization: Basic ...`ヘッダーに変換するが、`nlm`が内部で使っている生WebSocketクライアント（`github.com/gobwas/ws`）は**この変換を行わない**。そのためnginxの`auth_basic`（Basic認証）は、`curl`では通っても`nlm`の接続では常に401 Unauthorizedになっていた。加えて、chromedpの`RemoteAllocator`はデフォルトで`modifyURL`という処理を行い、平文HTTPで`/json/version`を取得し直し、接続先ホストをIPアドレスに書き換えてしまう（`forceIP`）。これによりTLS証明書（ドメイン名用）とIPアドレスが不一致になり検証エラーになる問題も別途あった。
+   → **対処（2点）**:
+   a. `nlm`（`tmc/nlm`）にパッチを適用: 接続先URLに`/devtools/browser/`が含まれる場合は`chromedp.NoModifyURL`オプションを使い、`modifyURL`処理（平文HTTP参照 + IPホスト書き換え）を完全にスキップする。パッチは本リポジトリの `tools/nlm-nomodifyurl.patch` に保存し、`.claude/hooks/session-start.sh`がセッション開始時に自動でクローン・パッチ適用・ビルドする。
+   b. nginx側の認証方式をBasic認証から「秘密パスプレフィックス」方式に変更（`location /nlmcdp-<ランダム40文字hex>/ { rewrite ^/nlmcdp-<同じ文字列>/(.*)$ /$1 break; proxy_pass http://127.0.0.1:9222; ... }`）。パス・クエリは生WebSocket接続でも正しく送信されるため、どんなクライアントでも通る。
 
-**現時点の仮説（未検証）**: 購入したてで日が浅いドメインを、セキュリティゲートウェイが一時的に警戒・ブロックしている可能性（新規登録ドメインへのアクセス制限はフィッシング対策として一般的な手法のため）。24〜48時間程度おいてから再テストする必要があるが、少し時間を置いた程度（数時間）では改善が見られなかった。**恒久的な制約（Claude Codeのこの種のクラウド環境からは、そもそもユーザー自身の任意の外部サーバーに到達できない設計）である可能性も残っている。**
+### 現在の接続方法
 
-### 今後の検証・選択肢
-
-1. **丸1日以上待ってから再テスト**（ドメインエイジングが原因なら解決する可能性）
-2. **「自分のPCをセルフホスト環境としてClaude Codeに登録する」方式に切り替える**（以前検討したが保留していた案。この場合Anthropicのサンドボックスを経由しないため、今回のブロックの影響を受けない）
-3. **方式Bを諦め、方式A（PCで都度認証）を継続する**
-
-VM・ドメイン自体は方式B専用というわけではなく、**Claude Code以外（携帯やPCの通常ブラウザ）からは普通にアクセスできるはずなので、無駄にはなっていない**。将来的に上記2の「セルフホスト環境」に切り替えれば、このVM・ドメインをそのまま活用できる見込み。
-
-### 接続確認用コマンド（次回検証時に使う）
-
-Claude Code環境側から:
 ```bash
-env -u https_proxy -u HTTPS_PROXY -u http_proxy -u HTTP_PROXY curl -v -u nlm:（Basic認証パスワード） https://nlm-server-8823.com/json/version
+# 1. 現在のChromeのUUID（devtools/browser/のパス）を取得
+curl -s "https://nlm-server-8823.com/nlmcdp-<秘密トークン>/json/version"
+# → webSocketDebuggerUrl の "devtools/browser/<UUID>" 部分を使う
+
+# 2. パッチ版nlmで認証情報を取得（session-start.shが自動ビルドしたものを使用）
+nlm auth -cdp-url "wss://nlm-server-8823.com:443/nlmcdp-<秘密トークン>/devtools/browser/<UUID>"
+# → 成功すると /root/.nlm/env に NLM_AUTH_TOKEN / NLM_COOKIES が書き込まれる
+
+# 3. 動作確認
+nlm notebook list
 ```
 
-VM側（SSH接続後）:
+**秘密トークンの管理**: nginxの秘密パスは事実上「VMのChromeを丸ごと遠隔操作できる鍵」に相当するため、`チャート分析.txt`のような平文のリポジトリファイルに直接書き込むのではなく、claude.ai/codeの環境「分析」の環境変数欄に `NLM_VPS_CDP_BASE=wss://nlm-server-8823.com:443/nlmcdp-<秘密トークン>` として保存し、手順内では `$NLM_VPS_CDP_BASE` を参照する運用を推奨する。
+
+### Googleセッション自体が切れた場合（nlmの認証情報とは別問題）
+
+上記の接続方法はあくまで「VM上のChromeがログイン状態を維持している」前提での認証情報の取得・更新である。Googleアカウント自体のログインセッションが切れた場合（体感的に方式Aと同様、短時間で切れることがある）は、VM上のChromeへ実際にログイン操作をする必要があり、これはPCなしで携帯のブラウザからでも可能：
+
 ```bash
-curl -s http://127.0.0.1:9222/json/version   # Chromeが生きているか
-sudo systemctl status nlm-chrome.service nlm-xvfb.service nginx --no-pager
+# VM側でnoVNCを起動（systemd化されていないため再起動時は手動実行が必要）
+nohup x11vnc -display :1 -forever -shared -rfbport 5900 -nopw > /tmp/x11vnc.log 2>&1 &
+nohup websockify --web=/usr/share/novnc/ 6080 localhost:5900 > /tmp/websockify.log 2>&1 &
 ```
+
+携帯・PCのブラウザで `http://34.133.108.107:6080/vnc.html` を開き、NotebookLM専用サブアカウントで再ログインする（GCPファイアウォールで6080番へのアクセスが許可されている必要がある）。ログイン後は上記「現在の接続方法」の手順1からやり直す。
+
+### 今後の改善候補（未着手）
+
+- noVNC（x11vnc/websockify）もsystemdサービス化し、`Restart=always`にする（現状はVM再起動のたびに手動起動が必要）。
+- Chromeの安定性確認のため、しばらく運用してcrashpad/ディスク使用量を定点観測する（`--disable-metrics`フラグ追加後の効果は未検証のまま今回の作業に入ったため）。
+- `nlm-xvfb.service`に`ExecStartPre`で`/tmp/.X1-lock`等の自動クリーンアップを追加し、同種のクラッシュループの再発を防ぐ（今回は手動対処のみ）。
 
 ---
 
@@ -164,7 +178,9 @@ sudo systemctl status nlm-chrome.service nlm-xvfb.service nginx --no-pager
 - **新しいセッションは既定でmainブランチを見る**。作業ブランチだけにコミットしても、mainにマージしない限り新規セッションには反映されない。
 - **環境の設定変更（環境変数・ネットワークアクセス等）は新しいセッションから適用される**。既存セッションには反映されない。
 - **ネットワークアクセスが「Trusted」だと`notebook.google.com`への通信がブロックされる**。「Full」に変更する必要がある。
-- **Claude Codeのクラウド環境から、SSHや自前サーバーへの直接接続は極めて困難**（上記「方式B」参照）。HTTPSであっても、Anthropicの検査ゲートウェイが実際に転送してくれるとは限らない。
+- **Claude Codeのクラウド環境から、自前サーバーへのHTTPS/WebSocket接続自体は問題なく通る**（当初「ゲートウェイが一律ブロックしている」と誤診断していたが、実際はVM側の設定不備が原因だった。上記「方式B」の真因3点を参照）。ただし生のSSH（22番・443番問わず）は通らない。
+- **`chromedp`（`nlm`が内部で使う）の`gobwas/ws`ライブラリは、URLの`user:pass@host`形式のBasic認証情報を一切HTTPヘッダーに変換しない**。`curl -u`やブラウザは自動変換するが、生WebSocketクライアントは一般にそうとは限らないため、nginx側で認証する場合はBasic認証ではなくURLパス（秘密プレフィックス等）を使う方が互換性が高い。
+- **`chromedp.NewRemoteAllocator`はデフォルトで`modifyURL`処理を行い、平文HTTPで`/json/version`を取得し直し、接続先をIPアドレスに書き換える**。独自ドメイン+TLS証明書の構成では、この書き換えによりホスト名とIPが不一致になり証明書検証に失敗する。`/devtools/browser/<uuid>`まで含む完全なURLを渡した上で`chromedp.NoModifyURL`オプションを使えばこの処理を完全にスキップできる。
 
 ### NotebookLM / nlm CLI関連
 - **nlmの自動ブラウザ認証(`nlm auth login`)は、コピーしたプロファイルでの自動操作だとGoogleにログイン画面へリダイレクトされて失敗しやすい**。実際に動いたのは、Chromeを`--remote-debugging-port`付きで起動し、CDP接続(`nlm auth -cdp-url ws://localhost:9222`)で実ブラウザのセッションをそのまま使う方法。
