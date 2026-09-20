@@ -22,8 +22,18 @@
                  ├─ 手順4: nlm notebook list で対象ノートブック特定
                  ├─ 手順5: 各ノートブックへ並行して画像を送り nlm generate-chat
                  │        （NotebookLM専用サブアカウントで認証）
-                 └─ 手順6: 複数ノートブックの回答を横断したClaudeの総合見解
+                 ├─ 手順6: 複数ノートブックの回答を横断したClaudeの総合見解
+                 └─ 手順7: 結果をGoogle Drive経由でObsidian vaultへ自動保存
 ```
+
+## 補足: Obsidianへの自動保存（Google Drive連携）
+
+「第2の脳」vault（元は `C:\ファイル\Obsidian`）を丸ごと `G:\マイドライブ\Obsidian\第2の脳` へ移動し、Google Driveで同期される状態にした。これにより、Claude Codeのクラウドセッション（Google Drive連携ツールを使用）から直接ノートを書き込め、PC側のObsidianには同期を通じて自動反映される。
+
+- 保存先フォルダ: `Obsidian/第2の脳/株式分析/日次記録/`（フォルダID: `1PbrnfdA7Oc8Ooa7wvWqVDQIbaIQ71ylo`）
+- Google Drive連携の権限は当初「読み取り専用」だったため、claude.aiの設定画面でGoogle Driveコネクタを書き込み権限つきで再連携する必要があった。
+- ファイル作成時は `disableConversionToGoogleType: true` を指定しないと、`.md`ファイルがGoogleドキュメントに自動変換されてしまうため注意。
+- **注意点**: Obsidian公式はGoogle DriveのようなクラウドDriveでのvault同期を推奨していない（`.obsidian`設定フォルダ等で同期競合が起きるリスクがあるため）。今回は「日次記録に新規ファイルを追加するだけ」の運用に留めることでリスクを抑えている。PCのGoogle Driveアプリが起動していないと、書き込んだ内容はPC側にすぐには反映されない。
 
 ### リポジトリ内のファイル
 
