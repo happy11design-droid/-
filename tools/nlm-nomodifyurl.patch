@@ -1,0 +1,20 @@
+diff --git a/internal/auth/auth.go b/internal/auth/auth.go
+index b79e90b..1a56157 100644
+--- a/internal/auth/auth.go
++++ b/internal/auth/auth.go
+@@ -131,7 +131,14 @@ func (ba *BrowserAuth) authViaRemoteCDP(remoteCDPURL, targetURL string) (token,
+ 		fmt.Fprintf(os.Stderr, "Connecting to remote CDP at %s\n", remoteCDPURL)
+ 	}
+
+-	allocCtx, allocCancel := chromedp.NewRemoteAllocator(context.Background(), remoteCDPURL)
++	remoteAllocOpts := []chromedp.RemoteAllocatorOption{}
++	if strings.Contains(remoteCDPURL, "/devtools/browser/") {
++		// Skip chromedp's default modifyURL (HTTP /json/version lookup + forceIP
++		// host rewrite) when a fully-qualified debugger URL is already given, so
++		// the domain name (and its TLS cert) is preserved as-is.
++		remoteAllocOpts = append(remoteAllocOpts, chromedp.NoModifyURL)
++	}
++	allocCtx, allocCancel := chromedp.NewRemoteAllocator(context.Background(), remoteCDPURL, remoteAllocOpts...)
+ 	defer allocCancel()
+
+ 	ctx, ctxCancel := chromedp.NewContext(allocCtx)
