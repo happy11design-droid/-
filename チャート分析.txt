@@ -63,6 +63,7 @@
 取得した内容は、後の手順5-3で【送信プロンプト】の「銘柄ファンダメンタルズ情報」欄に貼り付けて使用する。
 
 ## 手順4: 対象ノートブックの特定
+`nlm notebook list` を実行する前に、必ず「補足: NotebookLM認証の更新」に従って手順Aを先に実行し、認証を更新すること。認証エラーが出るのを待ってから手順Aを実行するのではなく、**先に手順Aを済ませてから** `nlm notebook list` を叩く（NotebookLMのセッションCookieは分析依頼のたびに失効していることが多く、素で叩いて失敗するのを待つより、先に更新した方が速い）。既に認証が有効な場合でも、手順Aの再実行によるデメリットはない。
 `nlm notebook list` を実行し、タイトルに「Claude」（大文字・小文字は問わない）を含むノートブックをすべて対象とする。対象ノートブックの一覧をコード側に固定せず、その時点で該当するものをすべて自動的に対象へ含めること。
 手順0で「Claude_新高値ブレイク投資術」「Claude_株空売り 5つの戦術」の分析がNOと回答された場合、この2つを対象ノートブック一覧から除外する。YESの場合、または手順0自体が省略された場合は、通常通りこの2つも対象に含める。
 
@@ -196,8 +197,8 @@ Google Driveの `日次記録/` フォルダ（フォルダID: `1PbrnfdA7Oc8Ooa7
 - フロントマターは `type: weekly` / `date` / `period_start` / `period_end` を付ける
 - `disableConversionToGoogleType` と `contentMimeType: text/markdown` の指定は手順7と同じ
 
-## 補足: NotebookLM認証（NLM_AUTH_TOKEN / NLM_COOKIES）が失効している場合
-`nlm` コマンドが「authentication expired or invalid」等のエラーを返す場合、サブアカウントのGoogleセッションが失効している。この場合は分析を中断し、まず以下の手順A（PC不要・VPS経由）を試すこと。手順Aが使えない場合（環境変数`NLM_VPS_CDP_BASE`が未設定、またはVPS自体が停止している等）のみ、手順B（PC必須）をユーザーに依頼する。
+## 補足: NotebookLM認証（NLM_AUTH_TOKEN / NLM_COOKIES）の更新
+手順4の直前に、認証エラーの有無を問わず毎回この手順Aを先に実行すること（詳細は手順4を参照）。`nlm` コマンドが「authentication expired or invalid」等のエラーを実際に返した場合も同様に、まず以下の手順A（PC不要・VPS経由）を試すこと。手順Aが使えない場合（環境変数`NLM_VPS_CDP_BASE`が未設定、またはVPS自体が停止している等）のみ、手順B（PC必須）をユーザーに依頼する。
 
 ### 手順A: VPS経由での自動再認証（PC不要、Claude自身で実行可能）
 環境変数 `NLM_VPS_CDP_BASE`（例: `wss://nlm-server-8823.com:443/nlmcdp-<秘密トークン>`）が設定されている場合、以下をClaude自身が実行してよい。
