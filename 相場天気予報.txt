@@ -114,6 +114,8 @@ nikkei_vi: 28.75
 ### W-4-1: Obsidian（Google Drive）へ保存
 Google Driveの `Obsidian/第2の脳/株式分析/` 配下の `相場天気予報/` フォルダへ保存する。フォルダが存在しない場合は作成すること（`日次記録/` フォルダのID `1PbrnfdA7Oc8Ooa7wvWqVDQIbaIQ71ylo` の親が `株式分析/` である）。
 
+**Google Drive連携ツール（`mcp__Google_Drive__*`）が使用できない場合**（Routineから起動されたセッションにコネクタが引き継がれていない場合等）は、このW-4-1をスキップし、W-4-2（リポジトリへの保存）は必ず実行したうえで、レポート末尾に「※Google Driveへの保存は連携ツールが利用できないためスキップしました（リポジトリには保存済み）」と明記すること。Drive保存ができないことを理由に、天気予報の作成自体を中止してはならない。
+
 ファイル名: `YYYY-MM-DD_相場天気予報.md`
 
 `.md`ファイルがGoogleドキュメントへ自動変換されないよう、`disableConversionToGoogleType`を有効にし、`contentMimeType`は`text/markdown`を指定すること。
