@@ -2,7 +2,23 @@
   "permissions": {
     "allow": [
       "Bash(curl *nlm-server-8823.com*)",
-      "Bash(nlm auth *)"
+      "Bash(nlm auth *)",
+      "Bash(git status)",
+      "Bash(git status *)",
+      "Bash(git log)",
+      "Bash(git log *)",
+      "Bash(git fetch *)",
+      "Bash(git checkout *)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(git push *)"
+    ],
+    "deny": [
+      "Bash(git push * --force)",
+      "Bash(git push * --force *)",
+      "Bash(git push * -f)",
+      "Bash(git push * -f *)",
+      "Bash(git push * --force-with-lease*)"
     ]
   },
   "hooks": {
