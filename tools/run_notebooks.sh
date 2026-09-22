@@ -9,14 +9,10 @@
 #     tools/run_notebooks.sh --phase images --image <画像パス> [--image <画像パス2> ...] [--exclude <正規表現>]
 #
 #   プロンプト送信と回答取得（手順5-3・5-4 / 手順9-2）
-#     tools/run_notebooks.sh --phase chat --prompt <プロンプトファイル> --out <出力ディレクトリ> [--exclude <正規表現>] [--continue]
+#     tools/run_notebooks.sh --phase chat --prompt <プロンプトファイル> --out <出力ディレクトリ> [--exclude <正規表現>]
 #
-#   図解チャート画像の生成依頼（手順5-5。完了を待たず即座に戻る）
-#     tools/run_notebooks.sh --phase image [--exclude <正規表現>]
-#
-# --continue は既存の会話を継続する（`nlm generate-chat --web`）。手順9のQ&Aで使い、手順5の新規分析では使わない。
-# --phase image は `画像生成プロンプト.txt` を会話継続で送り、生成完了を待たずに終了する。
-# 画像生成には数分かかるが、ユーザーはNotebookLMのStudioパネルで直接閲覧するため、待つ必要がない。
+# 送信は常に `nlm generate-chat --web` で行う。--web はサーバー側の会話を使うため、
+# やり取りがNotebookLMの画面に履歴として残り、ユーザーが後からUIで追加の依頼（図解画像の生成など）をできる。
 #
 # --exclude には除外したいノートブック名の拡張正規表現を渡す（手順0でNOと回答された場合など）。
 #   例: --exclude '新高値ブレイク投資術|株空売り'
@@ -31,7 +27,6 @@ PHASE=""
 PROMPT=""
 OUTDIR=""
 EXCLUDE=""
-CONTINUE=0
 IMAGES=()
 
 while [[ $# -gt 0 ]]; do
@@ -41,7 +36,6 @@ while [[ $# -gt 0 ]]; do
     --out)      OUTDIR="${2:-}"; shift 2 ;;
     --exclude)  EXCLUDE="${2:-}"; shift 2 ;;
     --image)    IMAGES+=("${2:-}"); shift 2 ;;
-    --continue) CONTINUE=1; shift ;;
     *) echo "不明な引数: $1" >&2; exit 2 ;;
   esac
 done
@@ -55,16 +49,8 @@ case "$PHASE" in
     [[ -f "$PROMPT" ]] || { echo "プロンプトファイルが見つかりません: $PROMPT" >&2; exit 2; }
     mkdir -p "$OUTDIR"
     ;;
-  image)
-    # 図解画像の生成依頼。完了を待たず、依頼を投げた時点で即座に戻る。
-    PROMPT="${PROMPT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/画像生成プロンプト.txt}"
-    [[ -f "$PROMPT" ]] || { echo "プロンプトファイルが見つかりません: $PROMPT" >&2; exit 2; }
-    OUTDIR="${OUTDIR:-$(mktemp -d)}"
-    mkdir -p "$OUTDIR"
-    CONTINUE=1   # 直前の判定を踏まえさせるため、会話を継続する
-    ;;
   *)
-    echo "--phase は images / chat / image のいずれかを指定してください" >&2; exit 2 ;;
+    echo "--phase は images または chat を指定してください" >&2; exit 2 ;;
 esac
 
 # 認証情報の読み込み（`nlm auth -cdp-url ...` が書き出した内容。手順Aを参照）
@@ -118,29 +104,14 @@ run_chat() {
   local id="$1" title="$2"
   local out="$OUTDIR/${title//\//_}.txt"
   local err="$out.err"
-  local opts=(--citations off)
-  # --continue は既存の会話を継続する（手順9のQ&Aで、著者が直前の分析を踏まえて答えられるようにする）
-  (( CONTINUE )) && opts+=(--web)
-  if ! nlm generate-chat "${opts[@]}" --prompt-file "$PROMPT" "$id" >"$out" 2>"$err"; then
+  # --web は「サーバー側の最新の会話を使う」。これを付けないと generate-chat は one-shot 扱いとなり、
+  # やり取りが手元にしか残らず、NotebookLMの画面には履歴が一切現れない（2026-09-22に実際に発生）。
+  # ユーザーが後からUIで「直前の判定を図解して」等と追加依頼できるよう、常に付けること。
+  if ! nlm generate-chat --citations off --web --prompt-file "$PROMPT" "$id" >"$out" 2>"$err"; then
     { echo "【エラー: 回答を取得できませんでした】"; cat "$err"; } >"$out"
   fi
   rm -f "$err"
 }
-
-# 図解画像の生成は数分かかるが、ユーザーはNotebookLMのStudioパネルで直接閲覧するため、
-# 依頼を投げたら完了を待たずに戻る。生成はバックグラウンドで継続する。
-if [[ "$PHASE" == "image" ]]; then
-  for row in "${ROWS[@]}"; do
-    id="${row%%$'\t'*}"
-    title="${row#*$'\t'}"
-    nohup nlm generate-chat --citations off --web --prompt-file "$PROMPT" "$id" \
-      >"$OUTDIR/${title//\//_}.txt" 2>&1 &
-    disown
-  done
-  echo "図解画像の生成を依頼しました（対象 ${#ROWS[@]} 件）。生成完了を待たずに終了します。"
-  echo "完成した画像はNotebookLMのStudioパネルで確認してください（数分かかります）。"
-  exit 0
-fi
 
 PIDS=()
 TITLES=()
