@@ -20,6 +20,8 @@ tools/market_data.py ticker <ティッカー> "$D"     # $D/<ティッカー>_ch
 tools/market_data.py macro "$D/macro.txt"         # 株価指数・為替・金利・逆イールド・CNN Fear & Greed Index
 # 当日の相場天気予報（手順2-3のキャッシュ）。天気予報はRoutine用ブランチにしかコミットされないため、必ずそこから取り出す
 git fetch -q origin claude/ecstatic-tesla-660dhs && git show "origin/claude/ecstatic-tesla-660dhs:相場天気予報/$(TZ=Asia/Tokyo date +%F).md" > "$D/weather_cache.md" 2>/dev/null || rm -f "$D/weather_cache.md"
+# 銘柄メモ（過去の急騰・急落の原因や決算実績の調査結果）。あればサブエージェントは新しい分だけを調べる
+tools/research_cache.sh get <ティッカー> "$D/memo.md"
 ```
 - チャート画像（日足）: 直近約9ヶ月の日足（ローソク足、MA20/50/200、ボリンジャーバンド20日±2σ・±3σ、日中VWAP、出来高、MACD(12,26,9)、RSI(6,12,24)）。凡例の数値はすべて**最終日時点**の値である。
 - チャート画像（5分足）: 直近2営業日の5分足と日中VWAP（日ごとにリセット）。おーちゃんのマニュアルはVWAPを「当日の日中VWAP（分足）」と定義し、VWAPへの押し込みからの反発を買い、割り込んで戻らなければ損切りとしているため（2026-09-23にノートブックへ確認済み）。
@@ -39,10 +41,13 @@ git fetch -q origin claude/ecstatic-tesla-660dhs && git show "origin/claude/ecst
 サブエージェントへの指示は、`tools/データ収集指示.md` を読ませるだけでよい（指示文を毎回書き起こさない）。プロンプトには次の3点だけを書く。
 - ティッカー、本日の日付（JST）、出力ディレクトリ `$D`
 - 「`tools/データ収集指示.md` を読み、その通りに実行すること」
-- 天気予報キャッシュ `$D/weather_cache.md` の有無（手順1で取り出せたかどうか）
+- 天気予報キャッシュ `$D/weather_cache.md` と銘柄メモ `$D/memo.md` の有無（手順1で取り出せたかどうか）
 - タスクA（経済指標）を省略してよいか: **同じセッション内で本日既に経済指標を取得済みなら「省略可」とし、その `econ_search.txt` を再利用する**（2銘柄目以降の分析で検索を丸ごと省ける）。それ以外は「実行」とする。
 
-サブエージェントは結果を `$D/econ_search.txt` と `$D/fund_search.txt` に書き出し、同じ内容とチェック結果を返す。
+サブエージェントは結果を `$D/econ_search.txt` と `$D/fund_search.txt` に書き出し、同じ内容とチェック結果を返す。あわせて更新した銘柄メモを `$D/memo_new.md` に書き出すので、メインは送信（手順5-3）と並行して次を実行し、データ用ブランチへ保存する（失敗しても分析は続ける）。
+```bash
+tools/research_cache.sh put <ティッカー> "$D/memo_new.md"
+```
 
 **あわせて、このサブエージェントの起動と同時に、以下2つをメイン側で並行実行すること。** データ収集の完了を待ってから始めると、その分だけ全体の所要時間が延びる。
 1. 手順4のNotebookLM認証（手順A）。認証には60秒以上かかることがある。
