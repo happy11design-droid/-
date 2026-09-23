@@ -14,8 +14,9 @@
 # 送信は常に `nlm generate-chat --web` で行う。--web はサーバー側の会話を使うため、
 # やり取りがNotebookLMの画面に履歴として残り、ユーザーが後からUIで追加の依頼（図解画像の生成など）をできる。
 #
-# --exclude には除外したいノートブック名の拡張正規表現を渡す（手順0でNOと回答された場合など）。
-#   例: --exclude '新高値ブレイク投資術|株空売り'
+# --only には対象を絞り込むノートブック名の拡張正規表現、--exclude には除外する正規表現を渡す（手順0の段階分析用）。
+#   段階1: --only '株価チャート分析|マット・ペトラリア|テクニカル分析 最強の組み合わせ術'
+#   段階2: --exclude '株価チャート分析|マット・ペトラリア|テクニカル分析 最強の組み合わせ術'
 #
 # --phase chat は各ノートブックの回答を <出力ディレクトリ>/<ノートブック名>.txt へ保存し、
 # 全件完了後に「=== ノートブック名 ===」の見出し付きで標準出力へまとめて出力する。
@@ -27,6 +28,7 @@ PHASE=""
 PROMPT=""
 OUTDIR=""
 EXCLUDE=""
+ONLY=""
 IMAGES=()
 
 while [[ $# -gt 0 ]]; do
@@ -35,6 +37,7 @@ while [[ $# -gt 0 ]]; do
     --prompt)   PROMPT="${2:-}"; shift 2 ;;
     --out)      OUTDIR="${2:-}"; shift 2 ;;
     --exclude)  EXCLUDE="${2:-}"; shift 2 ;;
+    --only)     ONLY="${2:-}"; shift 2 ;;
     --image)    IMAGES+=("${2:-}"); shift 2 ;;
     *) echo "不明な引数: $1" >&2; exit 2 ;;
   esac
@@ -69,6 +72,15 @@ LIST=$(nlm notebook list) || {
 # ID<TAB>TITLE の行を取り出す（1行目はヘッダ）
 mapfile -t ROWS < <(printf '%s\n' "$LIST" | awk -F'\t' 'NR>1 && tolower($2) ~ /claude/ {print $1"\t"$2}')
 
+if [[ -n "$ONLY" ]]; then
+  KEPT=()
+  for row in "${ROWS[@]}"; do
+    title="${row#*$'\t'}"
+    [[ "$title" =~ $ONLY ]] && KEPT+=("$row")
+  done
+  ROWS=("${KEPT[@]}")
+fi
+
 if [[ -n "$EXCLUDE" ]]; then
   KEPT=()
   for row in "${ROWS[@]}"; do
@@ -78,7 +90,7 @@ if [[ -n "$EXCLUDE" ]]; then
   ROWS=("${KEPT[@]}")
 fi
 
-[[ ${#ROWS[@]} -gt 0 ]] || { echo "対象ノートブックが0件です（--exclude が広すぎる可能性があります）" >&2; exit 1; }
+[[ ${#ROWS[@]} -gt 0 ]] || { echo "対象ノートブックが0件です（--only / --exclude の指定を確認してください）" >&2; exit 1; }
 
 # 既存の画像ソースを削除し、新しい画像を追加する（テキスト等の非画像ソースには触れない）
 swap_images() {
