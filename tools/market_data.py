@@ -24,6 +24,8 @@ UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like 
 CHART_BARS = 180          # チャートの表示本数（約9ヶ月）
 RECENT_BARS = 10          # テキストで渡す直近日足の本数
 MAX_BIG_MOVES = 15
+DPI = 160                 # スマホで拡大しても文字が読めるように（100だとユーザーには読めなかった）
+FONT = {"font.size": 12, "legend.fontsize": 12, "axes.labelsize": 12, "xtick.labelsize": 12, "ytick.labelsize": 12}
 
 
 def fetch(url, headers=()):
@@ -184,6 +186,7 @@ def draw_intraday(days, symbol, path, n_days=2):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+    plt.rcParams.update(FONT)
 
     keys = sorted(days)[-n_days:]
     B, V, starts = [], [], []
@@ -195,12 +198,12 @@ def draw_intraday(days, symbol, path, n_days=2):
     up, dn = "#e0294a", "#10a37f"
     col = [up if b["c"] >= b["o"] else dn for b in B]
 
-    fig, (p, pv) = plt.subplots(2, 1, figsize=(15, 7), dpi=100, sharex=True,
+    fig, (p, pv) = plt.subplots(2, 1, figsize=(15, 7), dpi=DPI, sharex=True,
                                 gridspec_kw={"height_ratios": [4, 1.3], "hspace": 0.06})
     fig.subplots_adjust(top=0.9)
     fig.suptitle(f"{symbol}  5-min  |  last {len(keys)} sessions ({keys[0]} to {keys[-1]}, US Eastern time, regular hours)\n"
                  f"VWAP = intraday volume-weighted average price, resets each session. Last session VWAP {V[-1]:,.2f}",
-                 fontsize=12, x=0.01, ha="left")
+                 fontsize=15, x=0.01, ha="left")
     p.vlines(x, [b["l"] for b in B], [b["h"] for b in B], colors=col, linewidth=1)
     p.bar(x, [abs(b["c"] - b["o"]) or 0.0005 * b["c"] for b in B], bottom=[min(b["o"], b["c"]) for b in B], color=col, width=0.7)
     for j, s0 in enumerate(starts):
@@ -209,7 +212,7 @@ def draw_intraday(days, symbol, path, n_days=2):
         if s0:
             for a in (p, pv):
                 a.axvline(s0 - 0.5, color="#9ca3af", lw=0.8, ls="--")
-    p.legend(loc="upper left", fontsize=9); p.grid(alpha=0.25)
+    p.legend(loc="upper left", fontsize=12); p.grid(alpha=0.25)
     pv.bar(x, [b["v"] / 1e3 for b in B], color=col, width=0.7)
     pv.set_ylabel("Vol (K)"); pv.grid(alpha=0.25)
     ticks = [i for i in x if (B[i]["t"].minute == 0 and B[i]["t"].hour in (11, 13)) or i in starts]
@@ -224,6 +227,7 @@ def draw_chart(bars, ind, symbol, path, label, vwap):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+    plt.rcParams.update(FONT)
 
     s = max(0, len(bars) - CHART_BARS)
     B = bars[s:]
@@ -233,15 +237,15 @@ def draw_chart(bars, ind, symbol, path, label, vwap):
     col = [up if b["c"] >= b["o"] else dn for b in B]
     L = len(bars) - 1
 
-    fig, ax = plt.subplots(4, 1, figsize=(15, 11), dpi=100, sharex=True,
+    fig, ax = plt.subplots(4, 1, figsize=(15, 11), dpi=DPI, sharex=True,
                            gridspec_kw={"height_ratios": [5, 1.4, 1.4, 1.4], "hspace": 0.06})
     fig.subplots_adjust(top=0.93)
     p, pv, pm, pr = ax
     last = B[-1]
     chg = (last["c"] - bars[-2]["c"]) / bars[-2]["c"] * 100
-    fig.suptitle(f"{symbol}  Daily  |  {label}  {last['date']}  Close {last['c']:,.2f} ({chg:+.2f}%)  "
+    fig.suptitle(f"{symbol}  Daily  |  {last['date']}  {label} {last['c']:,.2f} ({chg:+.2f}%)  "
                  f"O {last['o']:,.2f}  H {last['h']:,.2f}  L {last['l']:,.2f}  Vol {last['v']/1e6:,.2f}M\n"
-                 f"All indicator values in legends are as of {last['date']} (the last bar).", fontsize=12, x=0.01, ha="left")
+                 f"All indicator values in legends are as of {last['date']} (the last bar).", fontsize=15, x=0.01, ha="left")
 
     p.vlines(x, [b["l"] for b in B], [b["h"] for b in B], colors=col, linewidth=1)
     p.bar(x, [abs(b["c"] - b["o"]) or 0.001 * b["c"] for b in B], bottom=[min(b["o"], b["c"]) for b in B], color=col, width=0.7)
@@ -255,25 +259,25 @@ def draw_chart(bars, ind, symbol, path, label, vwap):
     if vx:
         p.scatter(vx, [vwap[B[i]["date"]] for i in vx], marker="_", s=60, color="#7c3aed", zorder=5,
                   label=f"Daily VWAP (from 5-min) {fmt(vwap.get(last['date']))}")
-    p.legend(loc="upper left", fontsize=9, ncol=4, framealpha=0.85)
+    p.legend(loc="upper left", fontsize=12, ncol=4, framealpha=0.85)
     p.grid(alpha=0.25)
 
     pv.bar(x, [b["v"] / 1e6 for b in B], color=col, width=0.7)
     pv.plot(x, [y / 1e6 if y else float("nan") for y in sl("VMA50")], color="#6b7280", lw=1, label=f"Vol MA50 {fmt((ind['VMA50'][L] or 0)/1e6)}M")
-    pv.set_ylabel("Vol (M)"); pv.legend(loc="upper left", fontsize=9); pv.grid(alpha=0.25)
+    pv.set_ylabel("Vol (M)"); pv.legend(loc="upper left", fontsize=12); pv.grid(alpha=0.25)
 
     h = sl("HIST")
     pm.bar(x, h, color=[up if y >= 0 else dn for y in h], width=0.7)
     pm.plot(x, sl("DIF"), color="#f97316", lw=1.1, label=f"DIF {ind['DIF'][L]:,.2f}")
     pm.plot(x, sl("DEA"), color="#0ea5e9", lw=1.1, label=f"DEA {ind['DEA'][L]:,.2f}")
     pm.axhline(0, color="#9ca3af", lw=0.8)
-    pm.set_ylabel("MACD(12,26,9)"); pm.legend(loc="upper left", fontsize=9, ncol=2); pm.grid(alpha=0.25)
+    pm.set_ylabel("MACD(12,26,9)"); pm.legend(loc="upper left", fontsize=12, ncol=2); pm.grid(alpha=0.25)
 
     for k, cl in [("RSI6", "#f97316"), ("RSI12", "#0ea5e9"), ("RSI24", "#d946ef")]:
         pr.plot(x, sl(k), color=cl, lw=1.1, label=f"{k} {ind[k][L]:.1f}")
     for y in (80, 50, 20):
         pr.axhline(y, color="#9ca3af", lw=0.7, ls="--")
-    pr.set_ylim(0, 100); pr.set_ylabel("RSI"); pr.legend(loc="upper left", fontsize=9, ncol=3); pr.grid(alpha=0.25)
+    pr.set_ylim(0, 100); pr.set_ylabel("RSI"); pr.legend(loc="upper left", fontsize=12, ncol=3); pr.grid(alpha=0.25)
 
     ticks = [i for i in range(len(B)) if i == 0 or B[i]["date"].month != B[i - 1]["date"].month]
     pr.set_xticks(ticks)
