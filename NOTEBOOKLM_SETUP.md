@@ -45,7 +45,7 @@
 | `.claude/hooks/session-start.sh` | セッション開始時に自動でGo環境からnlm CLI (tmc/nlm) と、チャート描画用のmatplotlibをインストールするスクリプト。実行権限(+x)が必須。 |
 | `tools/market_data.py` | Yahoo Finance v8 / CNN APIから日足・指標値・株価指数・Fear & Greed Indexを取得し、チャート画像を生成する。 |
 | `tools/データ収集指示.md` | WebSearchが必要な項目だけを集めるサブエージェントへの定型指示。 |
-| `ウォッチリスト.md` | 毎朝自動分析する監視銘柄の一覧と、自動分析時の手順0の回答。 |
+| `ウォッチリスト.md` | 毎朝自動分析する監視銘柄の一覧と、自動分析の設定。 |
 | `監視銘柄の自動分析.txt` | ウォッチリストの銘柄を毎朝Routineで分析する手順。 |
 
 ### 使っているツール: tmc/nlm
