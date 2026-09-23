@@ -161,7 +161,7 @@ def rsi(c, n):
 
 def indicators(bars):
     c = [b["c"] for b in bars]
-    ind = {"MA20": sma(c, 20), "MA50": sma(c, 50), "MA200": sma(c, 200)}
+    ind = {"MA5": sma(c, 5), "MA20": sma(c, 20), "MA25": sma(c, 25), "MA50": sma(c, 50), "MA75": sma(c, 75), "MA200": sma(c, 200)}
     for k in ("+3σ", "+2σ", "-2σ", "-3σ"):
         ind[k] = []
     for i in range(len(c)):
@@ -344,6 +344,8 @@ def ticker(symbol, outdir, asof=None):
                + (f"（50日平均の{last['v'] / vma:.2f}倍）" if vma else ""))
     ma = "／".join(f"{k} {fmt(ind[k][L])}" + (f"（終値の乖離率 {pct(last['c'], ind[k][L]):+.1f}%）" if ind[k][L] else "") for k in ("MA20", "MA50", "MA200"))
     out.append(f"- 移動平均（単純）: {ma}")
+    # 5日・25日・75日線を使う著者（テクニカル分析 最強の組み合わせ術）がいるため、チャートには描かず値だけ渡す
+    out.append("- 移動平均（単純、チャート画像には非表示）: " + "／".join(f"{k} {fmt(ind[k][L])}" for k in ("MA5", "MA25", "MA75")))
     out.append("- ボリンジャーバンド(20日): " + "／".join(f"{k} {fmt(ind[k][L])}" for k in ("+3σ", "+2σ", "-2σ", "-3σ")))
     out.append(f"- MACD(12,26,9): DIF {ind['DIF'][L]:,.2f}／DEA {ind['DEA'][L]:,.2f}／ヒストグラム {ind['HIST'][L]:,.2f}"
                f"（前日 DIF {ind['DIF'][L - 1]:,.2f}／DEA {ind['DEA'][L - 1]:,.2f}）")
