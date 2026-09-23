@@ -42,6 +42,12 @@ if [ ! -f "$NLM_PATCHED_MARKER" ]; then
   rm -rf "$NLM_BUILD_DIR"
 fi
 
+# tools/market_data.py のチャート画像生成に必要
+if ! python3 -c "import matplotlib" 2>/dev/null; then
+  pip install --quiet matplotlib >/dev/null 2>&1 \
+    || echo "[session-start] 警告: matplotlibのインストールに失敗しました。チャート画像を生成できません。" >&2
+fi
+
 if [ -z "${NLM_AUTH_TOKEN:-}" ] || [ -z "${NLM_COOKIES:-}" ]; then
   echo "[session-start] 警告: NLM_AUTH_TOKEN / NLM_COOKIES が未設定です。" >&2
 fi
