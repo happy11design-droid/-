@@ -118,10 +118,12 @@ tools/run_notebooks.sh --phase images --image "$D/<ティッカー>_chart.png" -
 ```bash
 cat "$D/<ティッカー>_data.txt" "$D/fund_search.txt" > "$D/fundamentals.txt"
 cat "$D/macro.txt" "$D/econ_search.txt" > "$D/economic.txt"
-tools/build_prompt.sh "$D/fundamentals.txt" "$D/economic.txt" "$D/prompt.txt"
+tools/build_prompt.sh "$D/fundamentals.txt" "$D/economic.txt" "$D/prompt.txt"   # 12,000文字を超えるとエラーで止まる
 tools/run_notebooks.sh --phase chat --prompt "$D/prompt.txt" --out "$D/out" [--exclude '<除外する正規表現>']
 ```
 `--exclude` には 5-1・5-2 と同じ値を渡すこと。
+
+**NotebookLMのチャット入力は約12,000〜14,000文字を超えると、エラーではなく空応答になる**（2026-09-23実測。MUのプロンプト15,947文字で5冊すべてが失敗した）。`build_prompt.sh` が12,000文字超でエラー終了した場合は、Claudeが書き写して縮めるのではなく、サブエージェントにSendMessageで「出典と経緯説明を削った短縮版を書き直す」よう依頼し、その短縮版で組み立て直すこと。
 
 所要時間の目安: 全件並列のため、6冊でも1分前後で完了する。
 

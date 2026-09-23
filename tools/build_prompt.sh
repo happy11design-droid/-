@@ -40,6 +40,13 @@ for marker, path in (("{{FUNDAMENTALS}}", os.environ["FUNDAMENTALS"]),
 
 with open(os.environ["OUT"], "w", encoding="utf-8") as f:
     f.write(template + "\n")
+
+# NotebookLMのチャット入力は約12,000〜14,000文字を超えると空応答になる（2026-09-23に実測。12,000は成功、14,000は失敗）
+LIMIT = 12000
+if len(template) > LIMIT:
+    raise SystemExit(f"プロンプトが{len(template)}文字で、上限{LIMIT}文字を超えています。"
+                     f"差し込みデータを{len(template) - LIMIT}文字以上減らしてください（出典URLや経緯説明を削る）。")
+print(f"文字数: {len(template)} / 上限{LIMIT}")
 PY
 
 echo "プロンプトを生成しました: $OUT"
