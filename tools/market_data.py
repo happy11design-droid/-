@@ -33,11 +33,37 @@ def fetch(url, headers=()):
     return r.stdout if r.returncode == 0 else ""
 
 
-def chart_json(symbol, rng):
+def chart_json(symbol, rng, interval="1d"):
     try:
-        return json.loads(fetch(f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval=1d&range={rng}"))["chart"]["result"][0]
+        return json.loads(fetch(f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval={interval}&range={rng}"))["chart"]["result"][0]
     except Exception:
         return None
+
+
+def intraday_bars(symbol):
+    """5分足（通常取引時間のみ、Yahooの上限は直近60日）を日付ごとに返す。取得できなければ空の辞書。"""
+    r = chart_json(symbol, "60d", "5m")
+    days = {}
+    if not r or "timestamp" not in r:
+        return days
+    q, off = r["indicators"]["quote"][0], r["meta"].get("gmtoffset", 0)
+    for i, t in enumerate(r["timestamp"]):
+        o, h, l, c, v = q["open"][i], q["high"][i], q["low"][i], q["close"][i], q["volume"][i]
+        if None in (o, h, l, c) or not v:
+            continue
+        ts = dt.datetime.utcfromtimestamp(t + off)
+        days.setdefault(ts.date(), []).append({"t": ts, "o": o, "h": h, "l": l, "c": c, "v": v})
+    return days
+
+
+def running_vwap(bars5):
+    pv = vol = 0.0
+    out = []
+    for b in bars5:
+        pv += (b["h"] + b["l"] + b["c"]) / 3 * b["v"]
+        vol += b["v"]
+        out.append(pv / vol)
+    return out
 
 
 def fmt(x, d=2):
@@ -152,7 +178,48 @@ def indicators(bars):
     return ind
 
 
-def draw_chart(bars, ind, symbol, path, label):
+def draw_intraday(days, symbol, path, n_days=2):
+    """直近n_days営業日の5分足と日中VWAP（日ごとにリセット）。"""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    keys = sorted(days)[-n_days:]
+    B, V, starts = [], [], []
+    for k in keys:
+        starts.append(len(B))
+        B += days[k]
+        V += running_vwap(days[k])
+    x = list(range(len(B)))
+    up, dn = "#e0294a", "#10a37f"
+    col = [up if b["c"] >= b["o"] else dn for b in B]
+
+    fig, (p, pv) = plt.subplots(2, 1, figsize=(15, 7), dpi=100, sharex=True,
+                                gridspec_kw={"height_ratios": [4, 1.3], "hspace": 0.06})
+    fig.subplots_adjust(top=0.9)
+    fig.suptitle(f"{symbol}  5-min  |  last {len(keys)} sessions ({keys[0]} to {keys[-1]}, US Eastern time, regular hours)\n"
+                 f"VWAP = intraday volume-weighted average price, resets each session. Last session VWAP {V[-1]:,.2f}",
+                 fontsize=12, x=0.01, ha="left")
+    p.vlines(x, [b["l"] for b in B], [b["h"] for b in B], colors=col, linewidth=1)
+    p.bar(x, [abs(b["c"] - b["o"]) or 0.0005 * b["c"] for b in B], bottom=[min(b["o"], b["c"]) for b in B], color=col, width=0.7)
+    for j, s0 in enumerate(starts):
+        e = starts[j + 1] if j + 1 < len(starts) else len(B)
+        p.plot(x[s0:e], V[s0:e], color="#7c3aed", lw=1.6, label="VWAP (intraday)" if j == 0 else None)
+        if s0:
+            for a in (p, pv):
+                a.axvline(s0 - 0.5, color="#9ca3af", lw=0.8, ls="--")
+    p.legend(loc="upper left", fontsize=9); p.grid(alpha=0.25)
+    pv.bar(x, [b["v"] / 1e3 for b in B], color=col, width=0.7)
+    pv.set_ylabel("Vol (K)"); pv.grid(alpha=0.25)
+    ticks = [i for i in x if (B[i]["t"].minute == 0 and B[i]["t"].hour in (11, 13)) or i in starts]
+    pv.set_xticks(ticks)
+    pv.set_xticklabels([B[i]["t"].strftime("%m-%d %H:%M" if i in starts else "%H:%M") for i in ticks])
+    pv.set_xlim(-1, len(B))
+    fig.savefig(path, bbox_inches="tight")
+    plt.close(fig)
+
+
+def draw_chart(bars, ind, symbol, path, label, vwap):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -183,6 +250,10 @@ def draw_chart(bars, ind, symbol, path, label):
         if any(y is not None for y in v):
             name = k if k.startswith("MA") else f"BOLL(20) {k}"
             p.plot(x, [y if y is not None else float("nan") for y in v], color=cl, lw=1.1, ls=ls, label=f"{name} {fmt(ind[k][L])}")
+    vx = [i for i, b in enumerate(B) if b["date"] in vwap]
+    if vx:
+        p.scatter(vx, [vwap[B[i]["date"]] for i in vx], marker="_", s=60, color="#7c3aed", zorder=5,
+                  label=f"Daily VWAP (from 5-min) {fmt(vwap.get(last['date']))}")
     p.legend(loc="upper left", fontsize=9, ncol=4, framealpha=0.85)
     p.grid(alpha=0.25)
 
@@ -241,8 +312,13 @@ def ticker(symbol, outdir):
     L = len(bars) - 1
     last, prev = bars[L], bars[L - 1]
     label = "INTRADAY (provisional)" if intraday else "Close"
+    days5 = intraday_bars(symbol)
+    vwap = {d: running_vwap(b)[-1] for d, b in days5.items()}
     png = os.path.join(outdir, f"{symbol}_chart.png")
-    draw_chart(bars, ind, symbol, png, label)
+    draw_chart(bars, ind, symbol, png, label, vwap)
+    png5 = os.path.join(outdir, f"{symbol}_intraday.png")
+    if days5:
+        draw_intraday(days5, symbol, png5)
 
     pct = lambda a, b: (a - b) / b * 100
     basis = "取引時間中の暫定値" if intraday else "終値"
@@ -258,15 +334,21 @@ def ticker(symbol, outdir):
     out.append(f"- MACD(12,26,9): DIF {ind['DIF'][L]:,.2f}／DEA {ind['DEA'][L]:,.2f}／ヒストグラム {ind['HIST'][L]:,.2f}"
                f"（前日 DIF {ind['DIF'][L - 1]:,.2f}／DEA {ind['DEA'][L - 1]:,.2f}）")
     out.append(f"- RSI: RSI(6) {ind['RSI6'][L]:.1f}／RSI(12) {ind['RSI12'][L]:.1f}／RSI(24) {ind['RSI24'][L]:.1f}")
+    if last["date"] in vwap:
+        v = vwap[last["date"]]
+        out.append(f"- VWAP（{last['date']}の日中VWAP。通常取引時間の5分足から算出、日ごとにリセット）: {v:,.2f}"
+                   f"（終値のVWAP乖離率 {pct(last['c'], v):+.2f}%）。当日の値動きは5分足チャート画像を参照")
+    else:
+        out.append("- VWAP（日中VWAP）: 取得不可")
     yr = bars[-252:]
     hi, lo = max(yr, key=lambda b: b["h"]), min(yr, key=lambda b: b["l"])
     out.append(f"- 52週高値 {hi['h']:,.2f}（{hi['date']}）／52週安値 {lo['l']:,.2f}（{lo['date']}）")
 
-    out.append(f"\n【直近{RECENT_BARS}営業日の日足】（日付｜始値｜高値｜安値｜終値｜前日比｜出来高）")
+    out.append(f"\n【直近{RECENT_BARS}営業日の日足】（日付｜始値｜高値｜安値｜終値｜前日比｜出来高｜陽線/陰線｜日中VWAP）")
     for i in range(len(bars) - RECENT_BARS, len(bars)):
         b = bars[i]
         out.append(f"- {b['date']}｜{b['o']:,.2f}｜{b['h']:,.2f}｜{b['l']:,.2f}｜{b['c']:,.2f}｜{pct(b['c'], bars[i - 1]['c']):+.2f}%｜{b['v'] / 1e4:,.1f}万"
-                   f"｜{'陽線' if b['c'] >= b['o'] else '陰線'}")
+                   f"｜{'陽線' if b['c'] >= b['o'] else '陰線'}｜{fmt(vwap.get(b['date']))}")
 
     # チャート表示期間内の大きな値動き（手順3(a)の調査対象日）。閾値は銘柄のボラティリティに合わせる。
     s = max(1, len(bars) - CHART_BARS)
@@ -291,7 +373,8 @@ def ticker(symbol, outdir):
     text = "\n".join(out)
     with open(os.path.join(outdir, f"{symbol}_data.txt"), "w", encoding="utf-8") as f:
         f.write(text + "\n")
-    print(f"チャート画像: {png}\n")
+    print(f"チャート画像: {png}")
+    print(f"5分足チャート画像: {png5 if days5 else '取得不可（5分足データなし）'}\n")
     print(text)
 
 
