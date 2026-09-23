@@ -15,10 +15,10 @@
 ```
 ユーザー（携帯 or PC）
   └─ claude.ai/code を開き、環境「分析」でセッションを開始
-       └─ チャート画像をチャットに直接貼り付け + "SNDKで分析して" と入力
+       └─ "SNDKを分析して" と入力（チャート画像の添付は不要。2026-09-23〜）
             └─ CLAUDE.md の指示により、チャート分析.txt の手順を実行
-                 ├─ 手順1: 添付画像のパスを取得（Google Drive不要）
-                 ├─ 手順2/3: 経済指標・銘柄ファンダメンタルズを並行Web検索
+                 ├─ 手順1: tools/market_data.py で日足・指標値・チャート画像を生成
+                 ├─ 手順2/3: 経済指標・決算履歴・ニュースをサブエージェントでWeb検索
                  ├─ 手順4: nlm notebook list で対象ノートブック特定
                  ├─ 手順5: 各ノートブックへ並行して画像を送り nlm generate-chat
                  │        （NotebookLM専用サブアカウントで認証）
@@ -42,7 +42,9 @@
 | `CLAUDE.md` | チャート分析依頼が来たら必ず`チャート分析.txt`の手順に従うよう指示。これがないとClaudeが自分で分析してしまう。 |
 | `チャート分析.txt` | 分析の具体的な手順とNotebookLMへの送信プロンプト本体。 |
 | `.claude/settings.json` | SessionStartフックの登録。 |
-| `.claude/hooks/session-start.sh` | セッション開始時に自動でGo環境からnlm CLI (tmc/nlm) をインストールするスクリプト。実行権限(+x)が必須。 |
+| `.claude/hooks/session-start.sh` | セッション開始時に自動でGo環境からnlm CLI (tmc/nlm) と、チャート描画用のmatplotlibをインストールするスクリプト。実行権限(+x)が必須。 |
+| `tools/market_data.py` | Yahoo Finance v8 / CNN APIから日足・指標値・株価指数・Fear & Greed Indexを取得し、チャート画像を生成する。 |
+| `tools/データ収集指示.md` | WebSearchが必要な項目だけを集めるサブエージェントへの定型指示。 |
 
 ### 使っているツール: tmc/nlm
 
@@ -52,7 +54,7 @@ NotebookLMには公式APIが存在しないため、非公式のGo製CLI [tmc/nl
 
 nlmの認証情報（`NLM_AUTH_TOKEN` / `NLM_COOKIES`）は、GoogleアカウントのSID/HSID/SSID系Cookieを含み、これは本来Gmail・Driveなどアカウント全体に及ぶ強い権限を持つ。そのため、**メインアカウント(happy11design@gmail.com)ではなく、NotebookLM専用に作成した別のGoogleアカウント（サブアカウント: notebookbunseki@gmail.com）**でNotebookLMを運用している。万一クラウド環境の環境変数が漏洩しても、被害範囲はサブアカウント（チャート分析用ノートブックのみ）に限定される。
 
-チャート画像自体はメインアカウントのGoogle Drive等ではなく、**チャットへの直接添付**で渡す運用のため、Drive連携やサブアカウントとメインアカウントの混在は発生しない。
+チャート画像自体はメインアカウントのGoogle Drive等を経由せず、**セッション内で `tools/market_data.py` が生成**してNotebookLMへ直接追加するため、Drive連携やサブアカウントとメインアカウントの混在は発生しない。
 
 現在、サブアカウントのノートブックは5件（すべて「Claude_」で始まるタイトル）:
 - Claude_新高値ブレイク投資術
