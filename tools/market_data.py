@@ -4,7 +4,8 @@
 使い方:
   tools/market_data.py macro  <出力ファイル>
       株価指数・為替・金利（逆イールド計算込み）と CNN Fear & Greed Index を取得する。
-  tools/market_data.py ticker <ティッカー> <出力ディレクトリ>
+  tools/market_data.py ticker <ティッカー> <出力ディレクトリ> [--asof YYYY-MM-DD]
+      --asof を付けると、その日の終値時点で見えていたチャートとデータを再現する（過去の判定の検証用。ファイル名に日付が付く）。
       日足2年分を取得し、<出力ディレクトリ>/<ティッカー>_chart.png（チャート画像）と
       <出力ディレクトリ>/<ティッカー>_data.txt（指標値・直近日足・大きな値動き・銘柄ページの数値）を書き出す。
 
@@ -305,18 +306,26 @@ def quote_page(symbol):
     ]
 
 
-def ticker(symbol, outdir):
+def ticker(symbol, outdir, asof=None):
+    """asof（datetime.date）を指定すると、その日の終値時点で見えていたチャートとデータを再現する（過去の判定の検証用）。"""
     os.makedirs(outdir, exist_ok=True)
     bars, meta, intraday = load_bars(symbol)
+    days5 = intraday_bars(symbol)
+    if asof:
+        bars = [b for b in bars if b["date"] <= asof]
+        days5 = {d: v for d, v in days5.items() if d <= asof}
+        intraday = False
+        if not bars or bars[-1]["date"] != asof:
+            sys.exit(f"{symbol}: {asof} は取引日ではないか、データがありません")
     ind = indicators(bars)
     L = len(bars) - 1
     last, prev = bars[L], bars[L - 1]
     label = "INTRADAY (provisional)" if intraday else "Close"
-    days5 = intraday_bars(symbol)
     vwap = {d: running_vwap(b)[-1] for d, b in days5.items()}
-    png = os.path.join(outdir, f"{symbol}_chart.png")
+    name = f"{symbol}_{asof}" if asof else symbol
+    png = os.path.join(outdir, f"{name}_chart.png")
     draw_chart(bars, ind, symbol, png, label, vwap)
-    png5 = os.path.join(outdir, f"{symbol}_intraday.png")
+    png5 = os.path.join(outdir, f"{name}_intraday.png")
     if days5:
         draw_intraday(days5, symbol, png5)
 
@@ -324,7 +333,8 @@ def ticker(symbol, outdir):
     basis = "取引時間中の暫定値" if intraday else "終値"
     start = bars[max(0, len(bars) - CHART_BARS)]["date"]
     vma = ind["VMA50"][L]
-    out = [f"【チャート画像・テクニカル指標】（{last['date']} {basis}時点。チャート画像は同じ日足データから生成、表示期間 {start}〜{last['date']}）"]
+    out = [f"【チャート画像・テクニカル指標】（{last['date']} {basis}時点。チャート画像は同じ日足データから生成、表示期間 {start}〜{last['date']}）"
+           + ("\n※過去時点の再現: この日の終値時点で見えていたデータのみ。これより後の値動きは含まない" if asof else "")]
     out.append(f"- 現在値: {last['c']:,.2f}（{last['date']} {basis}、前日比 {last['c'] - prev['c']:+,.2f}／{pct(last['c'], prev['c']):+.2f}%）"
                f"／始値 {last['o']:,.2f}／高値 {last['h']:,.2f}／安値 {last['l']:,.2f}／出来高 {last['v'] / 1e4:,.1f}万株"
                + (f"（50日平均の{last['v'] / vma:.2f}倍）" if vma else ""))
@@ -366,12 +376,13 @@ def ticker(symbol, outdir):
     for i, r, vr in moves:
         out.append(f"- {bars[i]['date']}: 前日比 {r:+.2f}%、終値 {bars[i]['c']:,.2f}、出来高 50日平均の{vr:.1f}倍")
 
-    now = dt.datetime.now(dt.timezone(dt.timedelta(hours=9))).strftime("%Y-%m-%d %H:%M JST")
-    out.append(f"\n【Yahoo Finance 銘柄ページ】（取得: {now}）")
-    out += quote_page(symbol)
+    if not asof:  # 銘柄ページの値（時価総額・PER・目標株価）は現在値しか取れないため、過去時点の再現では出さない
+        now = dt.datetime.now(dt.timezone(dt.timedelta(hours=9))).strftime("%Y-%m-%d %H:%M JST")
+        out.append(f"\n【Yahoo Finance 銘柄ページ】（取得: {now}）")
+        out += quote_page(symbol)
 
     text = "\n".join(out)
-    with open(os.path.join(outdir, f"{symbol}_data.txt"), "w", encoding="utf-8") as f:
+    with open(os.path.join(outdir, f"{name}_data.txt"), "w", encoding="utf-8") as f:
         f.write(text + "\n")
     print(f"チャート画像: {png}")
     print(f"5分足チャート画像: {png5 if days5 else '取得不可（5分足データなし）'}\n")
@@ -383,5 +394,7 @@ if __name__ == "__main__":
         macro(sys.argv[2])
     elif len(sys.argv) == 4 and sys.argv[1] == "ticker":
         ticker(sys.argv[2].upper(), sys.argv[3])
+    elif len(sys.argv) == 6 and sys.argv[1] == "ticker" and sys.argv[4] == "--asof":
+        ticker(sys.argv[2].upper(), sys.argv[3], dt.date.fromisoformat(sys.argv[5]))
     else:
         sys.exit(__doc__)
