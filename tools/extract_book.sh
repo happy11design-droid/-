@@ -11,6 +11,7 @@
 #   chapters  手順1: 章ごとに抽出し、「抽出_〈章ファイル名〉」としてソースに登録する（--only 01,05 で章を限定）
 #   rulebook  手順2: 抽出結果を統合し、「判定用ルールブック」としてソースに登録する
 #   verify    手順3: 章ごとに原本とルールブックを照合し、最後に根拠のない記述を1冊全体で確認して <作業ディレクトリ>/照合結果.md に出す
+#   revise    手順3の続き: 照合結果に従ってルールブックを修正・差し替えし、指摘が解消されたかを確認する
 #   table     手順4: 数値ルールの表を <作業ディレクトリ>/ルール表.md に出力する
 #
 # 長い章（CHUNK_PAGES ページ超）はページ範囲で分割して依頼する。回答の最終行に「未出力の節」があれば続きを依頼し、
@@ -200,6 +201,31 @@ case "$PHASE" in
     echo "完了: $OUT/照合結果.md"
     exit $fail
     ;;
+  revise)
+    # 手順3の続き: 照合結果を一時ソースとして登録し、ルールブックを修正して差し替え、解消されたかを確認する
+    [[ -s "$OUT/照合結果.md" ]] || { echo "$OUT/照合結果.md がありません。先に verify を実行してください" >&2; exit 1; }
+    rb=$(ids_matching '^判定用ルールブック$')
+    [[ -n "$rb" ]] || { echo "判定用ルールブックがありません" >&2; exit 1; }
+    cp "$OUT/判定用ルールブック.md" "$OUT/判定用ルールブック_修正前.md" 2>/dev/null
+    add_source "照合結果" "$OUT/照合結果.md" || exit 1
+    ids="$rb,$(ids_matching '^照合結果$')"
+    fill "$PROMPTS/3c_修正.txt" "PART=前半（項目1〜6）" "ITEMS=項目1〜6" >"$OUT/revise1.prompt"
+    fill "$PROMPTS/3c_修正.txt" "PART=後半（項目7〜12）" "ITEMS=項目7〜12" >"$OUT/revise2.prompt"
+    chat "$OUT/revise1.txt" "$ids" "$OUT/revise1.prompt" || exit 1
+    chat "$OUT/revise2.txt" "$ids" "$OUT/revise2.prompt" || exit 1
+    for f in revise1 revise2; do
+      l=$(last_line "$OUT/$f.txt")
+      [[ "$l" == *"未出力の項目: なし"* ]] || echo "警告: $f の最終行: $l" >&2
+    done
+    { echo "# 判定用ルールブック（$BOOK）"; echo; cat "$OUT/revise1.txt"; echo; cat "$OUT/revise2.txt"; } >"$OUT/判定用ルールブック.md"
+    add_source "判定用ルールブック" "$OUT/判定用ルールブック.md" || exit 1
+    ids="$(ids_matching '^判定用ルールブック$'),$(ids_matching '^照合結果$')"
+    chat "$OUT/修正確認.md" "$ids" "$PROMPTS/3d_修正確認.txt" || exit 1
+    # 照合結果はルールブックへの批判を含むため、判定時に混ざらないようソースから外す
+    nlm source delete -y "$NB" "$(ids_matching '^照合結果$')" >/dev/null
+    echo "完了: 判定用ルールブックを差し替えました（$(wc -m <"$OUT/判定用ルールブック_修正前.md")→$(wc -m <"$OUT/判定用ルールブック.md")文字）"
+    cat "$OUT/修正確認.md"
+    ;;
   table)
     ids=$(ids_matching '^判定用ルールブック$')
     [[ -n "$ids" ]] || { echo "判定用ルールブックがありません。先に rulebook を実行してください" >&2; exit 1; }
@@ -208,5 +234,5 @@ case "$PHASE" in
     echo "完了: $OUT/ルール表.md（$(grep -c '^|' "$OUT/ルール表.md")行）"
     ;;
   *)
-    echo "フェーズは chapters / rulebook / verify / table のいずれかを指定してください" >&2; exit 2 ;;
+    echo "フェーズは chapters / rulebook / verify / revise / table のいずれかを指定してください" >&2; exit 2 ;;
 esac
