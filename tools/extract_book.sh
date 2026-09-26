@@ -177,7 +177,7 @@ case "$PHASE" in
     done
     { echo "# 判定用ルールブック（$BOOK）"; echo; cat "$OUT/rulebook1.txt"; echo; cat "$OUT/rulebook2.txt"; } >"$OUT/判定用ルールブック.md"
     add_source "判定用ルールブック" "$OUT/判定用ルールブック.md" || exit 1
-    echo "完了: 判定用ルールブック（$OUT/判定用ルールブック.md、$(wc -m <"$OUT/判定用ルールブック.md")文字）"
+    echo "完了: 判定用ルールブック（$OUT/判定用ルールブック.md、$(LC_ALL=C.UTF-8 wc -m <"$OUT/判定用ルールブック.md")文字）"
     ;;
   verify)
     rb=$(ids_matching '^判定用ルールブック$')
@@ -223,7 +223,7 @@ case "$PHASE" in
     chat "$OUT/修正確認.md" "$ids" "$PROMPTS/3d_修正確認.txt" || exit 1
     # 照合結果はルールブックへの批判を含むため、判定時に混ざらないようソースから外す
     nlm source delete -y "$NB" "$(ids_matching '^照合結果$')" >/dev/null
-    echo "完了: 判定用ルールブックを差し替えました（$(wc -m <"$OUT/判定用ルールブック_修正前.md")→$(wc -m <"$OUT/判定用ルールブック.md")文字）"
+    echo "完了: 判定用ルールブックを差し替えました（$(LC_ALL=C.UTF-8 wc -m <"$OUT/判定用ルールブック_修正前.md")→$(LC_ALL=C.UTF-8 wc -m <"$OUT/判定用ルールブック.md")文字）"
     cat "$OUT/修正確認.md"
     ;;
   table)
