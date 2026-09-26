@@ -3,7 +3,7 @@
  *
  * 【初回の設定】
  *  1. Googleドライブに画像用のフォルダを作り、画像を入れる（001.png, 002.png … の連番にすると並び順が崩れない）
- *  2. フォルダを開いたときのURL末尾（https://drive.google.com/drive/folders/XXXX の XXXX）を下の FOLDER_ID に貼る
+ *  2. フォルダを開いたときのURL（https://drive.google.com/drive/folders/XXXX）を下の FOLDER_ID に貼る（URL丸ごとでも XXXX だけでもよい）
  *  3. https://script.google.com →「新しいプロジェクト」→ このファイルの中身を全部貼り付けて保存
  *  4. 左の「サービス」の「＋」→「Drive API」を選んで「追加」
  *  5. 上の関数選択で runOcr を選び「実行」→ 初回だけGoogleアカウントの許可を求められるので許可する
@@ -26,7 +26,9 @@ const OUT_NAME = 'OCR結果';
 function runOcr() {
   const start = Date.now();
   deleteTriggers_();
-  const folder = DriveApp.getFolderById(FOLDER_ID);
+  // フォルダのURLを丸ごと貼った場合も、IDの部分だけを取り出して使う
+  const folderId = FOLDER_ID.replace(/.*\/folders\//, '').replace(/[?#].*$/, '').trim();
+  const folder = DriveApp.getFolderById(folderId);
   const out = getOrCreateFolder_(folder, OUT_NAME);
 
   const existing = new Set();
