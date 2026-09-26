@@ -83,7 +83,8 @@ chat() {
 }
 
 # 回答の最終行（空行を除く）
-last_line() { awk 'NF {l = $0} END {print l}' "$1"; }
+# NotebookLMが簡体字で「未出力の节」と書くことがあるので「節」にそろえる
+last_line() { awk 'NF {l = $0} END {print l}' "$1" | sed 's/节/節/g'; }
 
 # add_source <ソース名> <ファイル>: 同名のソースがあれば差し替える
 add_source() {
