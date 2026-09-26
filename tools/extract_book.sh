@@ -10,7 +10,7 @@
 # フェーズ:
 #   chapters  手順1: 章ごとに抽出し、「抽出_〈章ファイル名〉」としてソースに登録する（--only 01,05 で章を限定）
 #   rulebook  手順2: 抽出結果を統合し、「判定用ルールブック」としてソースに登録する
-#   verify    手順3: 原本とルールブックを照合し、食い違い・漏れの一覧を標準出力に出す
+#   verify    手順3: 章ごとに原本とルールブックを照合し、最後に根拠のない記述を1冊全体で確認して <作業ディレクトリ>/照合結果.md に出す
 #   table     手順4: 数値ルールの表を <作業ディレクトリ>/ルール表.md に出力する
 #
 # 長い章（CHUNK_PAGES ページ超）はページ範囲で分割して依頼する。回答の最終行に「未出力の節」があれば続きを依頼し、
@@ -179,9 +179,26 @@ case "$PHASE" in
     echo "完了: 判定用ルールブック（$OUT/判定用ルールブック.md、$(wc -m <"$OUT/判定用ルールブック.md")文字）"
     ;;
   verify)
-    ids=$(ids_matching '^([0-9][0-9]_|判定用ルールブック$)')
-    chat "$OUT/照合結果.md" "$ids" "$PROMPTS/3_照合.txt" || exit 1
-    cat "$OUT/照合結果.md"
+    rb=$(ids_matching '^判定用ルールブック$')
+    [[ -n "$rb" ]] || { echo "判定用ルールブックがありません。先に rulebook を実行してください" >&2; exit 1; }
+    dir="$OUT/verify"; mkdir -p "$dir"
+    mapfile -t rows < <(sources | awk -F'\t' '$2 ~ /^[0-9][0-9]_/')
+    running=0; fail=0
+    for row in "${rows[@]}"; do
+      id="${row%%$'\t'*}"; name="${row#*$'\t'}"
+      ( fill "$PROMPTS/3_照合.txt" "SOURCE=$name" >"$dir/${name%.md}.prompt" &&
+        chat "$dir/${name%.md}.txt" "$id,$rb" "$dir/${name%.md}.prompt" ) &
+      running=$((running + 1))
+      if (( running >= JOBS )); then wait -n || fail=1; running=$((running - 1)); fi
+    done
+    while (( running > 0 )); do wait -n || fail=1; running=$((running - 1)); done
+    chat "$dir/根拠確認.txt" "$(ids_matching '^([0-9][0-9]_|判定用ルールブック$)')" "$PROMPTS/3b_根拠確認.txt" || fail=1
+    {
+      for row in "${rows[@]}"; do name="${row#*$'\t'}"; echo "## ${name%.md}"; echo; cat "$dir/${name%.md}.txt"; echo; done
+      echo "## 原本に根拠が見つからない記述（1冊全体）"; echo; cat "$dir/根拠確認.txt"
+    } >"$OUT/照合結果.md"
+    echo "完了: $OUT/照合結果.md"
+    exit $fail
     ;;
   table)
     ids=$(ids_matching '^判定用ルールブック$')
