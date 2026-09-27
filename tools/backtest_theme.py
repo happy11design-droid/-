@@ -1,145 +1,251 @@
 #!/usr/bin/env python3
-"""「今旬のテーマ・銘柄だけに絞る」と成績が上がるかの検証（直近3年、個別株のみ）
+"""テーマ監視銘柄（`新分析ツール/テーマ監視銘柄.md`）での直近3年のバックテスト（個別株のスイングのみ）
 
 使い方:
-  tools/theme_universe.py fetch          # 対象銘柄（時価総額10億ドル以上の米国株）と業種・日足の取得
+  tools/backtest_lib.py fetch            # S&P500の構成銘柄・日足の取得（共通）
+  tools/theme_universe.py fetch          # 業種と、S&P500に入っていない銘柄の日足の取得
   tools/backtest_theme.py run [--cache DIR] [--out FILE] [--start YYYY-MM-DD] [--end YYYY-MM-DD]
 
-「今から見て勝った銘柄（NVDA・MU・SNDKなど）」を選んで過去を検証すると必ず良い結果になる（後知恵）。
-そのため「旬」は各時点で分かっていた情報だけで機械的に決める:
-  - 旬の銘柄: その日のRSランキング（直近3カ月40%・6/9/12カ月各20%の加重リターンの百分位）が90以上
-  - 旬の業種: その日の業種ごとの騰落率の中央値（6カ月）が上位10業種に入る業種の銘柄（ヒートマップの代わり）
-売買のルールは tools/backtest_trend.py（ミネルヴィニ）・tools/backtest_swing.py（ボリンジャー）・tools/backtest_connors.py（コナーズ）と同じ。
+監視銘柄は `テーマ監視銘柄.md` の表の1列目を読む（ユーザーが編集した一覧がそのまま使われる）。
+売買のルールは各スクリプトと同じ（ミネルヴィニ・ワインスタイン: backtest_trend.py、ラシュキ・ボリンジャー: backtest_swing.py、コナーズ: backtest_connors.py）。
+**監視銘柄は今の時点で「伸びたテーマ」から選んでいるため、過去3年の成績は実際より良く出る（後知恵）。手法どうしの比較に使う。**
 """
 import argparse
+import bisect
+import csv
 import datetime as dt
-import operator
 import os
+import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import backtest_connors as bc
 import backtest_swing as bs
 import backtest_trend as bt
-import theme_universe as tu
-from backtest_lib import (COSTS, DEFAULT_CACHE, Reporter, gen_trades, load_prices, market_regime, pct, rsi_wilder, sliding, sma,
-                          spy_benchmark, stats)
+from backtest_lib import COSTS, DEFAULT_CACHE, Reporter, gen_trades, load_prices, market_regime, pct, stats
 
 RISK, STOP, COST = 0.02, 0.15, COSTS[2]
+WATCHLIST = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "新分析ツール", "テーマ監視銘柄.md")
 
 
-def prepare(d, since):
-    """この検証で使う指標だけを計算する（約2,700銘柄を扱うため、各スクリプトの prepare より軽くしている。計算式は同じ）"""
-    k0 = next((k for k, x in enumerate(d["date"]) if x >= since), len(d["date"]))
-    for key in ("date", "o", "h", "l", "c", "v"):
-        d[key] = d[key][k0:]
-    c, h, l, v = d["c"], d["h"], d["l"], d["v"]
-    n = len(c)
-    d["ma5"], d["ma50"], d["ma150"], d["ma200"] = sma(c, 5), sma(c, 50), sma(c, 150), sma(c, 200)
-    d["vol50"], d["vol100"] = [None] + sma(v, 50)[:-1], sma(v, 100)
-    d["hi252"], d["lo252"] = sliding(h, 252, operator.ge, True), sliding(l, 252, operator.le, True)
-    d["hi"], d["lo"] = {50: sliding(h, 50, operator.ge, False)}, {50: sliding(l, 50, operator.le, False)}
-    ret = lambda k: [c[i] / c[i - k] - 1 if i >= k else None for i in range(n)]
-    r63, r126, r189, r252 = ret(63), ret(126), ret(189), ret(252)
-    d["rs_raw"] = [0.4 * r63[i] + 0.2 * r126[i] + 0.2 * r189[i] + 0.2 * r252[i] if r252[i] is not None else None for i in range(n)]
-    d["rs"] = [None] * n
-    d["rsi2"] = rsi_wilder(c, 2)
-    mid, sd = sma(c, 20), bs.stdev(c, 20)
-    up = [m + 2 * x if m is not None else None for m, x in zip(mid, sd)]
-    dn = [m - 2 * x if m is not None else None for m, x in zip(mid, sd)]
-    d["pctb"] = [(c[i] - dn[i]) / (up[i] - dn[i]) if mid[i] is not None and up[i] > dn[i] else None for i in range(n)]
-    ii = [((2 * c[i] - h[i] - l[i]) / (h[i] - l[i]) * v[i]) if h[i] > l[i] else 0.0 for i in range(n)]
-    d["ii21"] = [None] * n
-    si = sv = 0.0
-    for i in range(n):
-        si, sv = si + ii[i], sv + v[i]
-        if i >= 21:
-            si, sv = si - ii[i - 21], sv - v[i - 21]
-        if i >= 20 and sv:
-            d["ii21"][i] = si / sv
+def load_watchlist(path=WATCHLIST):
+    """{ティッカー: グループ名}。見出し「## グループ名（件数）」の下の表の1列目を読む"""
+    out, group = {}, None
+    for line in open(path, encoding="utf-8"):
+        m = re.match(r"^## (.+?)（\d+）", line)
+        if m:
+            group = m.group(1)
+            continue
+        if line.startswith("## "):
+            group = None
+        m = re.match(r"^\| ([A-Z][A-Z.]*) \|", line)
+        if m and group:
+            out[m.group(1)] = group
+    return out
+
+
+def rs_ranks(cache, syms_base, data):
+    """RSランキング（1〜99）は、S&P500の構成銘柄＋監視銘柄の中での百分位（backtest_trend.add_rs_rank と同じ計算）"""
+    raw_by_day = {}
+    for sym in syms_base:
+        d = data.get(sym) or load_prices(cache, sym)
+        if not d or len(d["c"]) < 260:
+            continue
+        c = d["c"]
+        for i in range(252, len(c)):
+            r = 0.4 * (c[i] / c[i - 63] - 1) + 0.2 * (c[i] / c[i - 126] - 1) + 0.2 * (c[i] / c[i - 189] - 1) + 0.2 * (c[i] / c[i - 252] - 1)
+            raw_by_day.setdefault(d["date"][i], []).append(r)
+    for v in raw_by_day.values():
+        v.sort()
+    for s in data.values():
+        for i, d in enumerate(s["date"]):
+            r, pool = s["rs_raw"][i], raw_by_day.get(d)
+            if r is not None and pool and len(pool) > 50:
+                s["rs"][i] = 99 * bisect.bisect_left(pool, r) / (len(pool) - 1)
+
+
+def theme_index(data, dates):
+    """監視銘柄の等金額平均の指数（毎日の騰落率の平均を積み上げる）"""
+    pos = {s: {d: k for k, d in enumerate(v["date"])} for s, v in data.items()}
+    lvl, c = 1.0, []
+    for k, d in enumerate(dates):
+        if k:
+            rets = []
+            for s, v in data.items():
+                j = pos[s].get(d)
+                if j and v["date"][j - 1] == dates[k - 1]:
+                    rets.append(v["c"][j] / v["c"][j - 1] - 1)
+            if rets:
+                lvl *= 1 + sum(rets) / len(rets)
+        c.append(lvl)
+    return {"date": dates, "c": c}
 
 
 def cmd_run(a):
-    uni, data = tu.load_universe_theme(a.cache)
-    since = (dt.date.fromisoformat(a.start) - dt.timedelta(days=int(365.25 * 2))).isoformat()
-    strength = tu.industry_strength(data)       # 業種の強さは全期間の日足で先に計算する
+    wl = load_watchlist()
+    data = {}
+    for s in wl:
+        d = load_prices(a.cache, s)
+        if d and len(d["c"]) > 260:
+            data[s] = d
+    missing = sorted(set(wl) - set(data))
     members = {s: [("0000-00-00", "9999-12-31")] for s in data}
     for s in data.values():
-        prepare(s, since)
-    data = {k: s for k, s in data.items() if len(s["c"]) > 260}
-    members = {k: members[k] for k in data}
-    bt.add_rs_rank(data, members)
-    lead = {d: tu.leading(strength, d, 10, key=126) for d in strength}
+        bt.prepare(s)
+        bs.prepare(s)
+        bc.prepare(s)
+    sp_now = [r["ticker"] for r in csv.DictReader(open(os.path.join(a.cache, "members.csv"))) if not r["end_date"]]
+    rs_ranks(a.cache, sorted(set(sp_now) | set(data)), data)
+
     spy = load_prices(a.cache, "SPY")
-    regime = market_regime(spy)
     days = [d for d in spy["date"] if a.start <= d <= a.end]
     years = len(days) / 252
-    mid = "2025-01-01"
-    halves = [("前半", a.start, "2024-12-31"), ("後半", mid, a.end)]
-    spy_cagr, spy_mdd = spy_benchmark(spy, days)
+    halves = [("前半", a.start, "2024-12-31"), ("後半", "2025-01-01", a.end)]
+    market = market_regime(spy)
+    tidx = theme_index(data, [d for d in spy["date"] if d >= "2021-01-01"])
+    theme = market_regime(tidx)       # テーマ指数の30週線の位置と傾き（ワインスタインのステージの近似）
+    ti = dict(zip(tidx["date"], tidx["c"]))
+    t_cagr = (ti[days[-1]] / ti[days[0]]) ** (365.25 / (dt.date.fromisoformat(days[-1]) - dt.date.fromisoformat(days[0])).days) - 1
+    peak = t_mdd = 0
+    for d in days:
+        peak = max(peak, ti[d])
+        t_mdd = max(t_mdd, 1 - ti[d] / peak)
+    theme_ok = lambda d: theme.get(d) != "下落"
 
-    base_ok = bt.liquid
-    filters = [
-        ("全銘柄", lambda s, i, sp: base_ok(s, i, sp)),
-        ("旬の銘柄（RS≧90）", lambda s, i, sp: base_ok(s, i, sp) and s["rs"][i] is not None and s["rs"][i] >= 90),
-        ("旬の業種（6カ月の上位10業種）", lambda s, i, sp: base_ok(s, i, sp) and s["industry"] in lead.get(s["date"][i], ())),
-        ("旬の業種かつ旬の銘柄", lambda s, i, sp: base_ok(s, i, sp) and s["industry"] in lead.get(s["date"][i], ())
-         and s["rs"][i] is not None and s["rs"][i] >= 90),
-    ]
+    ok = bt.liquid
+    def G(entry, exit_fn, stop=STOP, allow=None, **kw):
+        return gen_trades(data, members, entry, exit_fn, a.start, a.end, ok=ok, fill="open", allow=allow,
+                          max_hold=kw.pop("max_hold", 500), stop_pct=stop, **kw)
 
-    def connors_ok(f):
-        # コナーズの銘柄選定（株価≧5ドル、100日平均出来高≧25万株、終値>200日線）に旬の条件を重ねる
-        return lambda s, i, sp: bc.signal_ok(s, i, sp) and f(s, i, sp)
+    def S(order, exit_fn=bs.X_NONE, trail=None, allow=None):
+        return bs.simulate(data, members, order, exit_fn, a.start, a.end, allow=allow, trail=trail)
 
-    strategies = [
-        ("順張り: ミネルヴィニ（トレンドテンプレート＋出来高を伴う上抜け、損切り15%・利確20%）",
-         lambda ok: gen_trades(data, members, bt.E_minervini(50), bt.X_NONE, a.start, a.end, ok=ok, fill="open",
-                               max_hold=500, stop_pct=STOP, target=0.20)),
-        ("逆張り: ボリンジャー メソッドIII（%b<0.05かつ21日II%>0、上部バンドで手じまい）",
-         lambda ok: bs.simulate(data, members, bs.O_method3, bs.X_upper_band, a.start, a.end, ok=ok)),
-        ("逆張り: コナーズ 個別株2日累積RSI≦10（200日線より上、5日線上抜けで手じまい、損切り15%）",
-         lambda ok: gen_trades(data, members, bc.E_cum2(10), lambda j, s, k, px: s["c"][j] > s["ma5"][j], a.start, a.end,
-                               ok=connors_ok(ok), fill="open", max_hold=30, stop_pct=STOP)),
+    def C(entry, exit_name, allow=None):
+        return bc.gen_trades(data, members, entry, exit_name, (None, STOP, None), a.start, a.end, fill="open", allow=allow)
+
+    rows = [
+        ("順張り", [
+            ("ミネルヴィニ: トレンドテンプレート＋ベース50日の上抜け＋出来高2倍・損切り15%・利確20%", lambda f=None: G(bt.E_minervini(50), bt.X_NONE, target=0.20, allow=f)),
+            ("ミネルヴィニ: 同じ仕掛け・損切り15%・50日線割れで手じまい", lambda f=None: G(bt.E_minervini(50), bt.X_BELOW50, allow=f)),
+            ("ミネルヴィニ: 同じ仕掛け・（本の数値）損切り7%・利確20%", lambda f=None: G(bt.E_minervini(50), bt.X_NONE, stop=0.07, target=0.20, allow=f)),
+            ("ミネルヴィニ: ベース15日（約3週）・損切り15%・利確20%", lambda f=None: G(bt.E_minervini(15), bt.X_NONE, target=0.20, allow=f)),
+            ("ワインスタイン: 週足26週の高値を出来高2倍で上抜け・30週線割れで手じまい・損切り15%", lambda f=None: G(bt.E_weinstein(26), bt.X_weekly_below("30"), allow=f)),
+            ("ワインスタイン（トレーダー）: 10週の高値上抜け・10週線割れで手じまい", lambda f=None: G(bt.E_weinstein(10, ma="10"), bt.X_weekly_below("10"), allow=f)),
+            ("ボリンジャー: ドンチャン4週ルール（20日高値上抜け・20日安値割れで手じまい）", lambda f=None: S(bs.O_donchian, bs.X_donchian_low, allow=f)),
+            ("ボリンジャー: メソッドI スクイーズ・パラボリックSAR", lambda f=None: S(bs.O_squeeze, trail=bs.trail_sar, allow=f)),
+            ("ボリンジャー: メソッドII（%b>0.8かつMFI>80の後の最初の押し）・パラボリックSAR", lambda f=None: S(bs.O_method2, trail=bs.trail_sar, allow=f)),
+            ("ラシュキ: 聖杯（ADX≧30・20EMAへの押し）・2日チャネル", lambda f=None: S(bs.O_holy_grail, trail=bs.trail_2day, allow=f)),
+            ("ラシュキ: NR7（翌日高値に逆指値買い）・2日チャネル", lambda f=None: S(bs.O_nr7, trail=bs.trail_2day, allow=f)),
+        ]),
+        ("逆張り", [
+            ("ボリンジャー: メソッドIII 反転（%b<0.05かつ21日II%>0）・上部バンドで手じまい", lambda f=None: S(bs.O_method3, bs.X_upper_band, allow=f)),
+            ("コナーズ: RSI(2)≦5（200日線より上）・5日線上抜けで手じまい", lambda f=None: C(bc.E_rsi2(5), "5日線上抜け", allow=f)),
+            ("コナーズ: 個別株2日累積RSI≦10・5日線上抜けで手じまい", lambda f=None: C(bc.E_cum2(10), "5日線上抜け", allow=f)),
+            ("コナーズ: ダブル7（7日最安値で引け）・7日最高値で手じまい", lambda f=None: C(bc.E_double7, "7日最高値で引け", allow=f)),
+            ("ラシュキ: タートルスープ（20日安値割れからの戻り）", lambda f=None: S(bs.O_turtle_soup, trail=bs.trail_turtle, allow=f)),
+            ("ラシュキ: アンチ（%D上向き・%Kが3日下落）・2日チャネル", lambda f=None: S(bs.O_anti, trail=bs.trail_2day, allow=f)),
+        ]),
     ]
 
     L = []
     w = L.append
     rep = Reporter(w, data, days, halves, years, cost=COST, risk=RISK)
-    w("---\ntype: backtest\ntitle: 旬のテーマ・銘柄に絞った場合の検証（直近3年）\n"
+    w("---\ntype: backtest\ntitle: テーマ監視銘柄での直近3年のバックテスト\n"
       f"created: {dt.date.today()}\nscript: tools/backtest_theme.py\n---\n")
-    w("# 旬のテーマ・銘柄に絞った場合の検証（直近3年）\n")
+    w("# テーマ監視銘柄での直近3年のバックテスト\n")
     w(f"- 期間: {days[0]} 〜 {days[-1]}（{len(days)}取引日）。前半＝〜2024年、後半＝2025年〜。")
-    w(f"- 対象: いま米国に上場している時価総額10億ドル以上の普通株 {len(data)} 銘柄（NASDAQのスクリーナー、業種はYahoo Finance）。ETFは含めない。"
-      "**いま上場していて時価総額が大きい＝この3年を生き残った・値上がりした銘柄なので、どの手法も実際より良く出る（生存者バイアス）**。手法どうし・絞り方どうしの比較に使うこと。")
-    w("- 「旬」は各時点で分かっていた情報だけで決める（今から見て勝った銘柄を選ぶと後知恵になるため）: "
-      "旬の銘柄＝その日のRSランキング≧90、旬の業種＝その日の6カ月騰落率の中央値が上位10の業種（ヒートマップの代わり）。")
-    w("- 売買: 翌日の寄り付き、またはパターンB（予約注文）を日足で再現。片道0.1%、損切り15%、リスク2%で建玉（13.3%×7銘柄）。価格は配当・分割調整済み。")
-    w(f"- 参考（採用はしない。相場全体の強さの目安）: 同期間のSPY買い持ち 年率 {pct(spy_cagr)}、最大下落率 {pct(spy_mdd)}\n")
+    w(f"- 対象: `新分析ツール/テーマ監視銘柄.md` の {len(wl)} 銘柄のうち、1年分以上の日足がある {len(data)} 銘柄"
+      + (f"（日足が足りない: {', '.join(missing)}）" if missing else "") + "。ETFは含めない。")
+    w("- **監視銘柄は、今の時点で「この3年に伸びたテーマ」から選んでいる。どの手法も実際より良く出る（後知恵）ため、手法どうし・条件どうしの比較に使うこと。**")
+    w("- 売買: 翌日の寄り付き、またはパターンB（引け後に出す翌日の予約注文）を日足で再現。片道0.1%、損切り15%（本の数値の比較を除く）、リスク2%で建玉（1銘柄に資金の13.3%、7銘柄まで）。価格は配当・分割調整済み。")
+    w("- RSランキングは、S&P500の構成銘柄＋監視銘柄の中での百分位。")
+    w(f"- **比較の基準（テーマ銘柄を全部持ち続けた場合）**: 監視銘柄の等金額平均の指数 年率 {pct(t_cagr)}、最大下落率 {pct(t_mdd)}。"
+      "手法がこれを下回るなら、その手法でタイミングを計るより、テーマ銘柄を持ち続けた方が良かったことになる。\n")
 
     results = {}
-    for k, (sname, fn) in enumerate(strategies, 1):
-        w(f"## {k}. {sname}\n")
+    k = 0
+    for kind, strategies in rows:
+        k += 1
+        w(f"## {k}. {kind}\n")
         rep.header("ルールの強さの順")
-        for fname, f in filters:
-            tr = fn(f)
-            results[(sname, fname)] = tr
-            rep.line(fname, tr, STOP)
+        for name, fn in strategies:
+            tr = fn()
+            results[name] = tr
+            rep.line(name, tr, 0.07 if "損切り7%" in name else STOP)
         w("")
 
-    w("## 4. 局面別（1トレード＝1件、旬の業種かつ旬の銘柄、片道0.1%）\n")
-    w("| 手法 | 上昇: 件数 / 平均 / PF | 横ばい: 件数 / 平均 / PF | 下落: 件数 / 平均 / PF |")
-    w("|---|---|---|---|")
-    for sname, _ in strategies:
-        tr = results[(sname, filters[3][0])]
-        cells = []
-        for r in ("上昇", "横ばい", "下落"):
-            st = stats([t for t in tr if regime.get(t["in"]) == r], COST)
-            cells.append(f"{st['n']} / {pct(st['mean'], 2)} / {st['pf']:.2f}" if st else "0")
-        w(f"| {sname.split('（')[0]} | " + " | ".join(cells) + " |")
+    # 上位の手法に、テーマ指数のステージの条件を足す
+    k += 1
+    w(f"## {k}. テーマ指数が「下落」のステージでは買わない場合\n")
+    w("テーマ指数（監視銘柄の等金額平均）の週足30週線の位置と傾きで、ワインスタインのステージを近似する"
+      "（上昇＝線より上かつ上向き、下落＝線より下かつ下向き、それ以外＝横ばい）。テーマの崩れを避けられるかを見る。\n")
+    days_by = {r: sum(1 for d in days if theme.get(d) == r) for r in ("上昇", "横ばい", "下落")}
+    w(f"期間中のテーマ指数のステージ: 上昇 {days_by['上昇']}日、横ばい {days_by['横ばい']}日、下落 {days_by['下落']}日。\n")
+    rep.header("ルールの強さの順")
+    for name, fn in [x for _, s in rows for x in s]:
+        st = stats(results[name], COST)
+        if st and st["pf"] >= 1.2 and st["n"] >= 30:
+            tr = fn(theme_ok)
+            rep.line(name + "（テーマが下落のときは買わない）", tr, 0.07 if "損切り7%" in name else STOP)
+    w("")
 
-    w("\n## 5. 注意\n")
-    w("- 3年は短く、AI・半導体の上昇相場が大半を占める。件数が少ない条件は信頼区間が広い。")
-    w("- 生存者バイアス（上の対象の説明）に加え、寄り付きの気配値のすべりを入れていないことも、現実より良く見せる方向に働く。")
+    k += 1
+    w(f"## {k}. 局面別（1トレード＝1件、片道0.1%）\n")
+    w("仕掛けた日の、テーマ指数のステージと、相場全体（SPYの30週線）のステージで分ける。\n")
+    w("| 手法 | テーマ上昇 | テーマ横ばい | テーマ下落 | 相場全体 上昇 | 相場全体 横ばい | 相場全体 下落 |")
+    w("|---|---|---|---|---|---|---|")
+    for name, tr in results.items():
+        cells = []
+        for reg in (theme, market):
+            for r in ("上昇", "横ばい", "下落"):
+                st = stats([t for t in tr if reg.get(t["in"]) == r], COST)
+                cells.append(f"{st['n']}件 / {pct(st['mean'], 2)} / PF{st['pf']:.2f}" if st else "0件")
+        w(f"| {name.split('・')[0]} | " + " | ".join(cells) + " |")
+
+    k += 1
+    w(f"\n## {k}. グループ別（1トレード＝1件、片道0.1%）\n")
+    w("| 手法 | " + " | ".join(dict.fromkeys(wl.values())) + " |")
+    w("|---|" + "---|" * len(set(wl.values())))
+    for name, tr in results.items():
+        cells = []
+        for g in dict.fromkeys(wl.values()):
+            st = stats([t for t in tr if wl.get(t["sym"]) == g], COST)
+            cells.append(f"{st['n']}件 / {pct(st['mean'], 2)} / PF{st['pf']:.2f}" if st else "0件")
+        w(f"| {name.split('・')[0]} | " + " | ".join(cells) + " |")
+
+    # テーマの崩れにどれだけ早く気づけたか（過去10年のテーマ指数）
+    k += 1
+    w(f"\n## {k}. テーマ指数のステージの切り替わり（過去10年、テーマの崩れにどれだけ早く気づけたか）\n")
+    w("監視銘柄の等金額平均の指数に、ワインスタインのステージの近似（週足30週線の位置と傾き、日々判定）を当てた。"
+      "「下落」に変わった日が、指数の高値からどれだけ下がった後だったか、その後さらにどれだけ下がったかを見る。"
+      "監視銘柄は今の銘柄なので、古い期間ほど当時のテーマとずれる（例: 2016年ごろはAIが主役ではない）。\n")
+    lidx = theme_index(data, [d for d in spy["date"] if d >= "2015-01-01"])
+    lst = market_regime(lidx)
+    lc = dict(zip(lidx["date"], lidx["c"]))
+    w("| 「下落」に変わった日 | 「下落」が終わった日 | 直前の高値の日 | 高値から変わった日までの下落 | 変わった日からその後の安値までの下落 | 「下落」の期間中の騰落 |")
+    w("|---|---|---|---|---|---|")
+    ds = [d for d in lidx["date"] if d in lst]
+    k2 = 0
+    while k2 < len(ds):
+        if lst[ds[k2]] == "下落" and (k2 == 0 or lst[ds[k2 - 1]] != "下落"):
+            st_d = ds[k2]
+            e = k2
+            while e + 1 < len(ds) and lst[ds[e + 1]] == "下落":
+                e += 1
+            if e - k2 + 1 >= 5:   # 5日未満の一時的な切り替わりは省く
+                end_d = ds[e]
+                pk_d = max((d for d in ds[:k2] if d >= ds[max(0, k2 - 260)]), key=lambda d: lc[d])
+                after = [lc[d] for d in ds[k2:min(len(ds), e + 60)]]
+                w(f"| {st_d} | {end_d} | {pk_d} | {pct(lc[st_d] / lc[pk_d] - 1)} | {pct(min(after) / lc[st_d] - 1)} | {pct(lc[end_d] / lc[st_d] - 1)} |")
+            k2 = e + 1
+        else:
+            k2 += 1
+    w("")
+
+    k += 1
+    w(f"\n## {k}. 注意\n")
+    w("- 監視銘柄を今の時点で選んでいる（後知恵）ため、どの手法も実際より良く出る。3年は短く、件数が少ない手法は信頼区間が広い。")
+    w("- 寄り付きの気配値のすべりを入れていない。日足だけで逆指値の約定を再現しているため、同じ日の値動きの順番は分からない（不利な側に倒している）。")
     w("- この結果はルールの条件どおりに機械的に計算したもので、Claudeによる個別銘柄の売買判断ではない。")
     os.makedirs(os.path.dirname(a.out), exist_ok=True)
     open(a.out, "w").write("\n".join(L) + "\n")
@@ -151,10 +257,10 @@ def main():
     sub = ap.add_subparsers(dest="cmd", required=True)
     r = sub.add_parser("run")
     r.add_argument("--cache", default=DEFAULT_CACHE)
-    r.add_argument("--out", default="新分析ツール/バックテスト結果/旬のテーマ・直近3年.md")
-    three = dt.date.today().replace(year=dt.date.today().year - 3).isoformat()
-    r.add_argument("--start", default=three)
-    r.add_argument("--end", default=dt.date.today().isoformat())
+    r.add_argument("--out", default="新分析ツール/バックテスト結果/テーマ監視銘柄・直近3年.md")
+    today = dt.date.today()
+    r.add_argument("--start", default=today.replace(year=today.year - 3).isoformat())
+    r.add_argument("--end", default=today.isoformat())
     cmd_run(ap.parse_args())
 
 
