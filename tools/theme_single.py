@@ -22,7 +22,7 @@ import backtest_trend as bt
 from backtest_regime import up
 from backtest_minervini2 import add_pivot
 from backtest_lib import MEMBERS_URL, curl
-from theme_scan import earnings_date, fetch_daily, pct
+from theme_scan import cut, earnings_date, fetch_daily, pct
 
 STOP = 0.15
 
@@ -31,35 +31,55 @@ def mark(ok):
     return "満たす" if ok else "満たさない"
 
 
+RAW = lambda c: 0.4 * (c[-1] / c[-64] - 1) + 0.2 * (c[-1] / c[-127] - 1) + 0.2 * (c[-1] / c[-190] - 1) + 0.2 * (c[-1] / c[-253] - 1)
+
+
+def load_pool():
+    """RSランキングの母集団: S&P500の今の構成銘柄の日足（直近2年）"""
+    txt = curl(MEMBERS_URL)
+    sp = [r["ticker"] for r in csv.DictReader(txt.splitlines()) if not r["end_date"]] if txt.startswith("ticker,") else []
+    with ThreadPoolExecutor(8) as ex:
+        return [x for x in ex.map(fetch_daily, sp) if x]
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("ticker")
     ap.add_argument("out")
     ap.add_argument("--hold", nargs=3, metavar=("買値", "買った日", "ルール"))
+    ap.add_argument("--asof", help="その日の引け時点で見えていたデータだけで当てはめる（過去の判定の再現用）")
     a = ap.parse_args()
     sym = a.ticker.upper()
     d = fetch_daily(sym)
     if not d or len(d["c"]) < 260:
         sys.exit(f"{sym} の日足を取得できませんでした（1年分以上が必要）")
-    # RSランキング: S&P500の構成銘柄の中での百分位
-    txt = curl(MEMBERS_URL)
-    sp = [r["ticker"] for r in csv.DictReader(txt.splitlines()) if not r["end_date"]] if txt.startswith("ticker,") else []
-    raw = lambda c: 0.4 * (c[-1] / c[-64] - 1) + 0.2 * (c[-1] / c[-127] - 1) + 0.2 * (c[-1] / c[-190] - 1) + 0.2 * (c[-1] / c[-253] - 1)
-    with ThreadPoolExecutor(8) as ex:
-        pool = sorted(raw(x["c"]) for x in ex.map(fetch_daily, sp) if x and len(x["c"]) > 253)
+    text = report(sym, d, load_pool(), asof=a.asof, hold=a.hold)
+    open(a.out, "w", encoding="utf-8").write(text)
+    print(text)
+
+
+def report(sym, d, pool_series, asof=None, hold=None, earn=None):
+    """d（日足）を asof の引けまでに切って3つのルールに当てはめた文章を返す。RSは pool_series（S&P500の日足）の中での百分位"""
+    if asof:
+        d = cut(d, asof)
+        if not d["date"] or d["date"][-1] != asof:
+            raise ValueError(f"{sym}: {asof} は取引日ではないか、データがありません")
+    pool = sorted(RAW(x["c"]) for x in (cut(y, asof) for y in pool_series) if len(x["c"]) > 253 and (not asof or x["date"][-1] == asof))
+    d = {k: list(v) for k, v in d.items()}
     bt.prepare(d)
     bs.prepare(d)
     add_pivot(d)
     i = len(d["c"]) - 1
     if len(pool) > 50:
-        d["rs"][i] = 99 * bisect.bisect_left(pool, raw(d["c"])) / (len(pool) - 1)
+        d["rs"][i] = 99 * bisect.bisect_left(pool, RAW(d["c"])) / (len(pool) - 1)
     c, day = d["c"][i], d["date"][i]
     rs = d["rs"][i]
+    earn = earn or ("取得不可（過去時点の再現のため）" if asof else earnings_date(sym))
 
     L = []
     w = L.append
     w(f"# {sym} を採用ルールに当てはめた結果（{day}の引け時点）\n")
-    w(f"- 終値 {c:.2f}（前日比 {pct(c / d['c'][i - 1] - 1)}）、RSランキング {'取得不可' if rs is None else f'{rs:.0f}'}（S&P500の中での百分位）、次回決算予定日 {earnings_date(sym)}")
+    w(f"- 終値 {c:.2f}（前日比 {pct(c / d['c'][i - 1] - 1)}）、RSランキング {'取得不可' if rs is None else f'{rs:.0f}'}（S&P500の中での百分位）、次回決算予定日 {earn}")
     w(f"- 50日平均出来高 {d['vol50'][i] / 1e4:,.0f}万株、流動性の条件（株価5ドル以上・50日平均出来高25万株以上）: {mark(bt.liquid(d, i, [('0000', '9999')]))}")
     w(f"- 銘柄の局面（判定式: 終値 > 50日線 > 200日線、50日線が20取引日前より2%以上高い、ADX(14) ≧ 20 をすべて満たせば上昇相場、それ以外はレンジ）: "
       f"**{'上昇相場' if up(i, d) else 'レンジ'}**（50日線 {d['ma50'][i]:.2f}、200日線 {d['ma200'][i]:.2f}、50日線の20日前比 {pct(d['ma50'][i] / d['ma50'][i - 20] - 1)}、ADX(14) {d['adx14'][i]:.1f}）\n")
@@ -132,8 +152,8 @@ def main():
     w("")
     w(f"## まとめ（スクリプトのパターン判定）\n\n- ボリンジャーIII: {pat_b}／ミネルヴィニ: {pat_m}／ワインスタイン10週: {pat_w}（A=条件成立、B=成立が目前で予約注文の候補）\n")
 
-    if a.hold:
-        px, bd, rule = float(a.hold[0]), a.hold[1], a.hold[2]
+    if hold:
+        px, bd, rule = float(hold[0]), hold[1], hold[2]
         stop = px * (1 - STOP)
         w("## 4. 保有中の確認\n")
         w(f"- ルール: {rule}／買った日: {bd}／買値: {px:.2f}／損益: {pct(c / px - 1)}／損切り価格（買値の15%下）: {stop:.2f}" + ("（**下回っている**）" if c <= stop else ""))
@@ -144,9 +164,7 @@ def main():
         elif "ワインスタイン" in rule:
             w(f"- 手じまい条件（週足の終値が10週線割れ、週の最終取引日に判定）: {mark(wk and d['w_c'][i] < d['w_ma10'][i])}（10週線 {d['w_ma10'][i]:.2f}）")
         w("")
-    text = "\n".join(L) + "\n"
-    open(a.out, "w", encoding="utf-8").write(text)
-    print(text)
+    return "\n".join(L) + "\n"
 
 
 if __name__ == "__main__":

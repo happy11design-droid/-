@@ -1,0 +1,3 @@
+送信に失敗: 本日の発注: 成行では発注しない（追随買いの回避）` と `押し目監視価格: ○○○（現在値比 ±○○.○%）／再エントリー条件: 〈数語〉`。押し目に指値をそのまま置けると本が認める場合のみ、判断を（予約）とし予約注文の行も書く
+4. **注意点**: 1〜2行（なければ「特になし」）
+nlm: nlm generate-chat: empty response from API; check 'nlm sources 3dc5edc5-7808-438c-abf0-9c0e5ca6cef9' for source state, re-run with -debug for details
