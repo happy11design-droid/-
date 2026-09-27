@@ -188,14 +188,14 @@ def prepare(d):
 #   t は保有中の状態（px, stop など）。trail(j, s, t) があれば毎日引け後に損切り価格を更新する
 
 
-def simulate(data, members, order, exit_fn, start, end, allow=None, trail=None, max_hold=MAX_HOLD):
+def simulate(data, members, order, exit_fn, start, end, allow=None, trail=None, max_hold=MAX_HOLD, ok=None):
     trades = []
     for sym, s in data.items():
         o, h, l, c, dates = s["o"], s["h"], s["l"], s["c"], s["date"]
         n, i = len(c), 200
         while i < n - 1:
             d = dates[i]
-            if d < start or d > end or not liquid(s, i, members[sym]) or (allow and not allow(d)):
+            if d < start or d > end or not (ok or liquid)(s, i, members[sym]) or (allow and not allow(d)):
                 i += 1
                 continue
             od = order(i, s)
