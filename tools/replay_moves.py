@@ -15,7 +15,9 @@
   - ニュースは、既存ツールの銘柄メモ（データ用ブランチの 銘柄メモ/<ティッカー>.md）のうち、その日以前の日付の項目だけを渡す。
   - 決算日は --earnings で渡した過去の決算日から、その日以降の最初の日を「次回決算予定日」として渡す。
   - NotebookLMへは --web を付けずに1回ずつ独立して送る（同じ会話に続けて送ると、後の日付の情報が前の判定に混ざるため）。
-著者ノートブックへの質問は 日数×3回（1日の上限は約175回）。
+著者ノートブックへの質問は、採用ルールの合図（A・B）が出ている日の、そのルールの著者にだけ送る（合図がない日・著者は方式Bでは必ず【様子見】なので送らない）。
+質問が10回を超えるときは、plan で回数を示してユーザーの確認を取り、了承後に run --yes で実行する（ユーザーの指示 2026-09-27）。
+NotebookLMの1日の上限は、2026-09-27に約80回で空の応答になった（毎朝のRoutineの分を残すこと）。
 """
 import argparse
 import datetime as dt
@@ -36,6 +38,25 @@ MEMO_BRANCH = "origin/claude/ecstatic-tesla-660dhs"
 NB = {"ボリンジャー": "3dc5edc5-7808-438c-abf0-9c0e5ca6cef9", "ミネルヴィニ": "e09b765e-4f20-496a-ae2f-6d991c488d0d",
       "ワインスタイン": "69875bdb-8d0d-474e-9b1a-c6c1b7bc82a1"}
 OFFSETS = (-2, -1, 0, 1, 2)
+RULE_AUTHOR = {"ボリンジャーIII": "ボリンジャー", "ミネルヴィニ": "ミネルヴィニ", "ワインスタイン10週": "ワインスタイン"}
+CONFIRM_MAX = 10   # これを超える回数を送るときは、事前にユーザーの確認を取る（ユーザーの指示 2026-09-27）。確認後に --yes を付けて実行する
+SKIP = "送信せず"
+
+
+def targets(rules):
+    """rules.md のまとめ行から、合図（A=条件成立、B=成立が目前）が出ているルールの著者だけを返す。
+    合図がないルールの著者は、方式Bでは必ず【様子見】になる（SNDKの再現で66回中すべて）ので、質問しない"""
+    m = re.search(r"ボリンジャーIII: (\S+)／ミネルヴィニ: (\S+)／ワインスタイン10週: (\S+?)（", rules)
+    if not m:
+        return list(NB)
+    return [RULE_AUTHOR[r] for r, p in zip(RULE_AUTHOR, m.groups()) if p in ("A", "B")]
+
+
+def answered(f):
+    if not os.path.exists(f):
+        return False
+    t = open(f, encoding="utf-8").read()
+    return not t.startswith("送信に失敗")
 
 
 def events(d, months, top, extra=()):
@@ -125,7 +146,7 @@ def prepare_day(sym, d, pool, memo, earn, day, outdir):
              + news_asof(memo, day))
     p = open(TEMPLATE, encoding="utf-8").read().replace("{{RULES}}", rules.strip()).replace("{{DATA}}", data)
     open(os.path.join(dd, "prompt.txt"), "w", encoding="utf-8").write(p[:12000])
-    return dd, [f for f in (os.path.join(dd, f"{sym}_{day}_chart.png"), os.path.join(dd, f"{sym}_{day}_intraday.png")) if os.path.exists(f)]
+    return dd, [f for f in (os.path.join(dd, f"{sym}_{day}_chart.png"), os.path.join(dd, f"{sym}_{day}_intraday.png")) if os.path.exists(f)], rules
 
 
 # ---------- 集計 ----------
@@ -199,6 +220,9 @@ def write_report(sym, d, ev, plan, outdir):
                 raw = open(f, encoding="utf-8").read()
                 if raw.startswith("送信に失敗"):
                     cells.append("取得できず（NotebookLMの応答が空。1日の使用量の上限と思われる）")
+                    continue
+                if raw.startswith(SKIP):
+                    cells.append("【様子見】（ルールの合図なし。送信せず）")
                     continue
                 a = parse(raw)
                 txt, r5 = outcome(d, j, a)
@@ -276,29 +300,52 @@ def main():
     ap.add_argument("--top", type=int, default=3)
     ap.add_argument("--earnings", default="")
     ap.add_argument("--extra", default="", help="加える日（カンマ区切り）")
+    ap.add_argument("--yes", action="store_true", help=f"質問が{CONFIRM_MAX}回を超えることをユーザーが了承済み")
     a = ap.parse_args()
     sym = a.ticker.upper()
     d = fetch_daily(sym)
     ev, plan = events(d, a.months, a.top, [x for x in a.extra.split(",") if x])
     earn = sorted(x for x in a.earnings.split(",") if x)
     os.makedirs(a.outdir, exist_ok=True)
+    pool = load_pool()
+    todo = {}   # 日付 → 送る著者
+    for day in plan:
+        rules = report(sym, d, pool, asof=day, earn=next_earnings(earn, day))
+        need = [au for au in targets(rules) if not answered(os.path.join(a.outdir, day, f"{au}.txt"))]
+        if need:
+            todo[day] = need
+    n_q = sum(len(v) for v in todo.values())
     if a.cmd == "plan":
         for kind, r, i in ev:
             print(f"{d['date'][i]} {kind} {r * 100:+.1f}%")
-        print(f"判定する日: {len(plan)}日（著者への質問 {len(plan) * 3}回）: {', '.join(plan)}")
+        print(f"判定する日: {len(plan)}日。うち採用ルールの合図（A・B）が出ていて、まだ回答がない日: {len(todo)}日")
+        for day, au in todo.items():
+            print(f"  {day}: {'・'.join(au)}")
+        print(f"著者への質問: {n_q}回（合図が出ていない日・著者には送らない）")
         return
     if a.cmd == "run":
-        pool = load_pool()
+        if n_q > CONFIRM_MAX and not a.yes:
+            sys.exit(f"著者への質問が{n_q}回になります（{CONFIRM_MAX}回超）。先にユーザーに回数を示して確認を取り、了承後に --yes を付けて実行してください。")
         memo = memo_lines(sym)
         env = nlm_env()
         for k, day in enumerate(plan, 1):
-            done = [os.path.join(a.outdir, day, f"{au}.txt") for au in NB]
-            if all(os.path.exists(f) and not open(f, encoding="utf-8").read().startswith("送信に失敗") for f in done):
+            dd = os.path.join(a.outdir, day)
+            os.makedirs(dd, exist_ok=True)
+            if day not in todo:
+                if not os.path.exists(os.path.join(dd, "rules.md")):
+                    open(os.path.join(dd, "rules.md"), "w", encoding="utf-8").write(report(sym, d, pool, asof=day, earn=next_earnings(earn, day)))
+                for au in NB:
+                    f = os.path.join(dd, f"{au}.txt")
+                    if not answered(f):
+                        open(f, "w", encoding="utf-8").write(f"{SKIP}: 採用ルールの合図（A・B）がないため質問していない（方式Bでは【様子見】と同じ）")
                 continue
-            dd, images = prepare_day(sym, d, pool, memo, earn, day, a.outdir)
+            dd, images, rules = prepare_day(sym, d, pool, memo, earn, day, a.outdir)
+            for au in NB:
+                if au not in todo[day] and not answered(os.path.join(dd, f"{au}.txt")):
+                    open(os.path.join(dd, f"{au}.txt"), "w", encoding="utf-8").write(f"{SKIP}: この著者のルールに合図がないため質問していない（方式Bでは【様子見】と同じ）")
             with ThreadPoolExecutor(3) as ex:
-                list(ex.map(lambda au: ask(env, au, images, os.path.join(dd, "prompt.txt"), os.path.join(dd, f"{au}.txt")), NB))
-            print(f"[{k}/{len(plan)}] {day} 送信済み", file=sys.stderr, flush=True)
+                list(ex.map(lambda au: ask(env, au, images, os.path.join(dd, "prompt.txt"), os.path.join(dd, f"{au}.txt")), todo[day]))
+            print(f"[{k}/{len(plan)}] {day} 送信済み（{'・'.join(todo[day])}）", file=sys.stderr, flush=True)
     write_report(sym, d, ev, plan, a.outdir)
     print("チャート:", draw(sym, d, ev, plan, a.outdir), file=sys.stderr)
 
