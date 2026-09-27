@@ -14,7 +14,10 @@ GOBIN="$(go env GOPATH)/bin"
 export PATH="$GOBIN:$PATH"
 echo "export PATH=\"$GOBIN:\$PATH\"" >> "$CLAUDE_ENV_FILE"
 
-NLM_PATCHED_MARKER="$GOBIN/nlm-vps-patched.marker"
+# v2（2026-09-28）: chromedpを新しいChromeに合わせて更新した版。古い版は認証（nlm auth -cdp-url）で固まるため、印の名前を変えて作り直させる。
+# パッチは NLM_COMMIT の版に対して作ったもの（最新版に当てると失敗することがあるため固定する）。
+NLM_PATCHED_MARKER="$GOBIN/nlm-vps-patched-v2.marker"
+NLM_COMMIT=7a173b4de23d50221fbc5895df3f201880ccb9d1
 
 if [ ! -f "$NLM_PATCHED_MARKER" ] && ! command -v nlm >/dev/null 2>&1; then
   go install github.com/tmc/nlm/cmd/nlm@latest
@@ -25,8 +28,9 @@ fi
 # パッチ版nlmが必要（Basic認証や独自ドメインTLS証明書と両立させるため）。
 if [ ! -f "$NLM_PATCHED_MARKER" ]; then
   NLM_BUILD_DIR="$(mktemp -d)"
-  if git clone --depth 1 https://github.com/tmc/nlm.git "$NLM_BUILD_DIR" >/dev/null 2>&1; then
-    if git -C "$NLM_BUILD_DIR" apply "$(dirname "${BASH_SOURCE[0]}")/../../tools/nlm-nomodifyurl.patch" 2>/dev/null; then
+  if git -C "$NLM_BUILD_DIR" init -q && git -C "$NLM_BUILD_DIR" fetch -q --depth 1 https://github.com/tmc/nlm.git "$NLM_COMMIT" >/dev/null 2>&1 \
+     && git -C "$NLM_BUILD_DIR" checkout -q FETCH_HEAD; then
+    if git -C "$NLM_BUILD_DIR" apply "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/tools/nlm-nomodifyurl.patch" 2>/dev/null; then
       if (cd "$NLM_BUILD_DIR" && go build -o "$(go env GOPATH)/bin/nlm" ./cmd/nlm) 2>/dev/null; then
         touch "$NLM_PATCHED_MARKER"
         echo "[session-start] パッチ版nlm（VPS対応）をビルドしました。" >&2
