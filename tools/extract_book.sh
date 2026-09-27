@@ -67,11 +67,41 @@ sys.stdout.write(text)
 PY
 }
 
+# 認証の再取得（チャート分析.txt 手順A）。並行して動く他のジョブと重ならないようロックする
+reauth() {
+  [[ -n "${NLM_VPS_CDP_BASE:-}" ]] || return 1
+  (
+    flock -w 300 9 || exit 1
+    # ロックを待つ間に別のジョブが更新していれば、それを使う
+    if [[ -n "${1:-}" && /root/.nlm/env -nt "$1" ]]; then exit 0; fi
+    local http="${NLM_VPS_CDP_BASE/wss:/https:}" uuid
+    uuid=$(curl -sS -m 30 "$http/json/version" | grep -oE '/devtools/browser/[a-f0-9-]+' | head -1 | sed 's#/devtools/browser/##')
+    [[ -n "$uuid" ]] && timeout 150 nlm auth -cdp-url "${NLM_VPS_CDP_BASE}/devtools/browser/${uuid}" >/dev/null 2>&1
+  ) 9>/tmp/nlm-reauth.lock
+  while IFS='=' read -r key value; do
+    [[ "$key" == NLM_* ]] || continue
+    value="${value#\"}"; value="${value%\"}"
+    export "$key=$value"
+  done < /root/.nlm/env
+}
+
 # chat <出力ファイル> <ソースID(カンマ区切り)> <プロンプトファイル>
 chat() {
   local out="$1" ids="$2" prompt="$3" try
   for try in 1 2 3; do
-    if nlm generate-chat --citations off --source-ids "$ids" --prompt-file "$prompt" "$NB" >"$out" 2>"$out.err" && [[ -s "$out" ]]; then
+    local rc=0
+    nlm generate-chat --citations off --source-ids "$ids" --prompt-file "$prompt" "$NB" >"$out" 2>"$out.err" || rc=$?
+    # 新しいnlm（2026-09-28〜）は、回答が流れている途中で書き直されると exit 8（stale-output）を返し、正しい回答を会話に保存する。
+    # その場合は保存された回答（[ASSISTANT] 以降）を取り出して使う
+    if [[ $rc -eq 8 ]]; then
+      local conv
+      conv=$(grep -oE "chat show $NB [0-9a-f-]+" "$out.err" | tail -1 | awk '{print $4}')
+      [[ -n "$conv" ]] && nlm chat show --citations off "$NB" "$conv" 2>/dev/null | awk 'f; /^\[ASSISTANT\]$/ {f = 1}' >"$out.show" \
+        && [[ -s "$out.show" ]] && mv "$out.show" "$out" && rc=0
+    fi
+    # 認証切れ（exit 3）は再認証してから送り直す
+    if [[ $rc -eq 3 ]]; then touch "$out.authmark"; reauth "$out.authmark"; fi
+    if [[ $rc -eq 0 && -s "$out" ]]; then
       # 回答中の引用番号（[2] や [1-8]、[1, 3, 4]）は、ソースとして登録すると意味を失うので取り除く
       sed -i -E 's/ ?\[[0-9]+([-–, ]+[0-9]+)*\]//g' "$out"
       return 0
