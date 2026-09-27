@@ -1,0 +1,151 @@
+{
+ "trade_date": "2026-09-25",
+ "run_date": "2026-09-28",
+ "theme_stage": "【ステージ2】（テーマ指数が30週移動平均線より上かつ線が上向きであるため、第2章・第3章）",
+ "candidates": [
+  {
+   "sym": "SNDK",
+   "kind": "予約: ワインスタイン（10週の高値の手前）",
+   "pattern": "B",
+   "close": 1777.8,
+   "limit": null,
+   "stop_buy": 1827.99,
+   "limit_buy": null,
+   "verdict": "買い（予約）",
+   "author": "ワインスタイン"
+  },
+  {
+   "sym": "STX",
+   "kind": "予約: 新高値（V2、担当: ミネルヴィニ）",
+   "pattern": "B",
+   "close": 916.83,
+   "limit": null,
+   "stop_buy": 923.12,
+   "limit_buy": null,
+   "verdict": "買い（予約）",
+   "author": "ミネルヴィニ"
+  },
+  {
+   "sym": "MRVL",
+   "kind": "予約: 新高値（V2、担当: ミネルヴィニ）",
+   "pattern": "B",
+   "close": 261.94,
+   "limit": null,
+   "stop_buy": 262.36,
+   "limit_buy": null,
+   "verdict": "買い（予約）",
+   "author": "ミネルヴィニ"
+  },
+  {
+   "sym": "HPE",
+   "kind": "予約: 新高値（V2、担当: ミネルヴィニ）",
+   "pattern": "B",
+   "close": 62.94,
+   "limit": null,
+   "stop_buy": 63.52,
+   "limit_buy": null,
+   "verdict": "買い（予約）",
+   "author": "ミネルヴィニ"
+  },
+  {
+   "sym": "HPE",
+   "kind": "予約: ワインスタイン（10週の高値の手前）",
+   "pattern": "B",
+   "close": 62.94,
+   "limit": null,
+   "stop_buy": 63.28,
+   "limit_buy": null,
+   "verdict": "買い（予約）",
+   "author": "ミネルヴィニ"
+  },
+  {
+   "sym": "ARM",
+   "kind": "予約: ワインスタイン（10週の高値の手前）",
+   "pattern": "B",
+   "close": 310.32,
+   "limit": null,
+   "stop_buy": 311.43,
+   "limit_buy": null,
+   "verdict": "買い（予約）",
+   "author": "ワインスタイン"
+  },
+  {
+   "sym": "FTNT",
+   "kind": "予約: ワインスタイン（10週の高値の手前）",
+   "pattern": "B",
+   "close": 173.46,
+   "limit": null,
+   "stop_buy": 176.1,
+   "limit_buy": null,
+   "verdict": "買い（予約）",
+   "author": "ワインスタイン"
+  },
+  {
+   "sym": "NTAP",
+   "kind": "予約: ミネルヴィニ（ピボットの手前）",
+   "pattern": "B",
+   "close": 201.15,
+   "limit": 215.33,
+   "stop_buy": 209.06,
+   "limit_buy": null,
+   "verdict": "買い（予約）",
+   "author": "ミネルヴィニ"
+  },
+  {
+   "sym": "NTAP",
+   "kind": "予約: ワインスタイン（10週の高値の手前）",
+   "pattern": "B",
+   "close": 201.15,
+   "limit": null,
+   "stop_buy": 209.06,
+   "limit_buy": null,
+   "verdict": "買い（予約）",
+   "author": "ミネルヴィニ"
+  },
+  {
+   "sym": "KEYS",
+   "kind": "予約: ミネルヴィニ（ピボットの手前）",
+   "pattern": "B",
+   "close": 362.15,
+   "limit": 386.21,
+   "stop_buy": 374.96,
+   "limit_buy": null,
+   "verdict": "買い（予約）",
+   "author": "ミネルヴィニ"
+  },
+  {
+   "sym": "ANET",
+   "kind": "予約: ミネルヴィニ（ピボットの手前）",
+   "pattern": "B",
+   "close": 206.55,
+   "limit": 221.34,
+   "stop_buy": 214.89,
+   "limit_buy": null,
+   "verdict": "買い（予約）",
+   "author": "ミネルヴィニ"
+  },
+  {
+   "sym": "NVDA",
+   "kind": "予約: ミネルヴィニ（ピボットの手前）",
+   "pattern": "B",
+   "close": 225.07,
+   "limit": 243.08,
+   "stop_buy": 236.0,
+   "limit_buy": null,
+   "verdict": "買い（予約）",
+   "author": "ミネルヴィニ"
+  },
+  {
+   "sym": "JCI",
+   "kind": "予約: ミネルヴィニ（ピボットの手前）",
+   "pattern": "B",
+   "close": 150.2,
+   "limit": 161.32,
+   "stop_buy": 156.62,
+   "limit_buy": null,
+   "verdict": "買い（予約）",
+   "author": "ミネルヴィニ"
+  }
+ ],
+ "holdings": []
+}
