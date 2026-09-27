@@ -118,7 +118,6 @@ def main():
                 rep.line(("【緩めた条件】" if loose else "") + f"{en}・{xn}", tr, STOP)
     LOOSE = False
     sc, sm = spy_benchmark(spy, days)
-    w(f"\n（参考）SPY買い持ち 年率 {sc * 100:.1f}%、最大下落率 {sm * 100:.1f}%\n")
 
     # --- テーマ監視銘柄（直近3年） ---
     wl = bth.load_watchlist()

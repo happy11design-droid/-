@@ -40,7 +40,15 @@ PY
 }
 
 if [[ "$CMD" == prepare ]]; then
-  python3 "$ROOT/tools/theme_scan.py" "$D/scan.md" > /dev/null
+  # 前日の記録（Routine用ブランチの テーマ監視/<日付>/record.json の最新）: 前日の【買い（予約）】が約定したかを確認し、していなければ改めて判定する
+  PREV=()
+  if git -C "$ROOT" fetch -q origin claude/ecstatic-tesla-660dhs 2>/dev/null; then
+    last=$(git -C "$ROOT" -c core.quotepath=false ls-tree --name-only origin/claude/ecstatic-tesla-660dhs "テーマ監視/" | grep -E '/[0-9]{4}-[0-9]{2}-[0-9]{2}$' | grep -v "/$(TZ=Asia/Tokyo date +%F)$" | sort | tail -1)
+    if [[ -n "$last" ]] && git -C "$ROOT" show "origin/claude/ecstatic-tesla-660dhs:$last/record.json" > "$D/prev_record.json" 2>/dev/null; then
+      PREV=(--prev "$D/prev_record.json")
+    fi
+  fi
+  python3 "$ROOT/tools/theme_scan.py" "$D/scan.md" "${PREV[@]}" > /dev/null
   { tickers "## 4."; tickers "## 5."; tickers "## 6."; } | sort -u > "$D/news_targets.txt"
   { tickers "## 5."; tickers "## 6."; } | sort -u > "$D/data_targets.txt"
   while read -r t; do

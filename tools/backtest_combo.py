@@ -97,7 +97,6 @@ def cmd_run(a):
     for _, lo, hi in halves:
         dd = [d for d in days if lo <= d <= hi]
         h.append(spy_benchmark(spy, dd)[0])
-    w(f"| （参考）SPY買い持ち | | {pct(spy_cagr)} | {pct(spy_mdd)} | {pct(h[0])} / {pct(h[1])} | | 100% | |")
 
     w("\n## 3. 局面別（1トレード＝1件、片道0.1%）\n")
     w("| 手法 | 上昇: 件数 / 平均 / PF | 横ばい: 件数 / 平均 / PF | 下落: 件数 / 平均 / PF |")

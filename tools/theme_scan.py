@@ -98,6 +98,17 @@ def load_holdings(path=os.path.join(os.path.dirname(os.path.abspath(__file__)), 
     return out
 
 
+def load_trades(path=os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "新分析ツール", "売買記録.md")):
+    """売買記録.md（売った銘柄）と保有銘柄.md（保有中）から、実際に買った記録 [{sym, date, price}] を返す"""
+    out = [{"sym": h["sym"], "date": h["date"], "price": h["price"]} for h in load_holdings()]
+    if os.path.exists(path):
+        for line in open(path, encoding="utf-8"):
+            m = re.match(r"^\| ([A-Z][A-Z.]*) \| (\d{4}-\d{2}-\d{2}) \| ([0-9.]+) \|", line)
+            if m:
+                out.append({"sym": m.group(1), "date": m.group(2), "price": float(m.group(3))})
+    return out
+
+
 def pct(x, d=1):
     return "取得不可" if x is None else f"{x * 100:+.{d}f}%"
 
@@ -105,6 +116,7 @@ def pct(x, d=1):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("out")
+    ap.add_argument("--prev", help="前回の record.json（前日の予約注文が約定したかを確認し、約定していなければ改めて判定する）")
     ap.add_argument("--asof", help="この日の引けまでのデータで判定する（検証用）")
     a = ap.parse_args()
 
@@ -251,6 +263,33 @@ def main():
             w(f"| {h['sym']} | {h['rule']} | {h['date']} | {h['price']:.2f} | {c:.2f} | {pct(c / h['price'] - 1)} | {stop:.2f} | {ex} | {earnings_date(h['sym'])} |")
         w("")
 
+    # ---- 前日の予約注文 ----
+    if a.prev and os.path.exists(a.prev):
+        prev = json.load(open(a.prev, encoding="utf-8"))
+        res = [c for c in prev.get("candidates", []) if c.get("verdict", "").startswith("買い（予約")]
+        w(f"## 5-2. 前日（{prev.get('trade_date', '?')}の引け）の【買い（予約）】の確認\n")
+        if not res:
+            w("前日の【買い（予約）】はなし。\n")
+        else:
+            bought = load_trades()
+            w("約定したかどうかは、ユーザーの `保有銘柄.md`・`売買記録.md` に記録があるかで判断する（価格が届いても、記録がなければ約定していないものとして扱う）。"
+              "約定していない銘柄は、今日の条件で改めてエントリーを探す（節6）。\n")
+            w("| 銘柄 | 種類 | 予約の価格 | 今日の高値／安値 | 価格は届いたか | ユーザーの約定の記録 | 扱い |")
+            w("|---|---|---|---|---|---|---|")
+            for c in res:
+                d = data.get(c["sym"])
+                p = c.get("stop_buy") or c.get("limit_buy")
+                rec = [b for b in bought if b["sym"] == c["sym"] and b["date"] > prev.get("trade_date", "")]
+                if d:
+                    hi, lo = d["h"][-1], d["l"][-1]
+                    touch = ("届いた" if (c.get("stop_buy") and hi >= p) or (c.get("limit_buy") and lo <= p) else "届かず") if p else "価格不明"
+                    hl = f"{hi:.2f}／{lo:.2f}"
+                else:
+                    touch, hl = "株価なし", ""
+                how = f"約定（{rec[0]['date']} {rec[0]['price']:.2f}）→ 節5で保有として確認" if rec else f"約定の記録なし → {{{{今日:{c['sym']}}}}}"
+                w(f"| {c['sym']} | {c['kind']} | {'' if p is None else f'{p:.2f}'} | {hl} | {touch} | {'あり' if rec else 'なし'} | {how} |")
+            w("")
+
     # ---- 候補 ----
     w("## 6. 候補（採用したルールの条件が成立＝A、成立が目前＝B）\n")
     w(f"建玉の目安: 1トレードのリスク2%・損切り15% → 1銘柄に資金の{RISK / STOP * 100:.1f}%、同時保有{int(STOP / RISK)}銘柄まで（ユーザー決定）。\n")
@@ -328,6 +367,11 @@ def main():
             w(f"\n- パターンBは各ルールでRSの高い順に{B_MAX}件までとし、{dropped}件を省いた。")
         w("\n- RS≧80の押し目（ボリンジャーIII）は、バックテストで成績がより安定していた（PF3.27、最大下落20%）。")
     text = "\n".join(L) + "\n"
+    today_pat = {}
+    for x in cands:
+        today_pat.setdefault(x["sym"], []).append(f"{x['pat']}（{x['kind']}）")
+    text = re.sub(r"\{\{今日:([A-Z.]+)\}\}", lambda m: ("今日の条件で改めて判定: 節6の候補 " + "・".join(today_pat[m.group(1)]))
+                  if m.group(1) in today_pat else "今日の条件では候補なし（新しいエントリーの条件がそろうまで待つ）", text)
     os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
     open(a.out, "w").write(text)
     print(text)

@@ -156,7 +156,6 @@ def main():
     rep = Reporter(w, data, days, [("前半", start, "2020-12-31"), ("後半", "2021-01-01", end)], y, cost=COST, risk=RISK)
     section(w, rep, data, members, start, end, days, y, "\n## 2. S&P500全体（その日の構成銘柄、2015年〜。後知恵なし）\n")
     sc, sm = spy_benchmark(spy, days)
-    w(f"\n（参考）SPY買い持ち 年率 {sc * 100:.1f}%、最大下落率 {sm * 100:.1f}%\n")
     w("## 3. 注意\n")
     w("- この結果はルールの条件どおりに機械的に計算したもので、Claudeによる個別銘柄の売買判断ではない。")
     os.makedirs(os.path.dirname(a.out), exist_ok=True)

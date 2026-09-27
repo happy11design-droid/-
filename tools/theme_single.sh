@@ -5,12 +5,14 @@
 #   tools/theme_single.sh prepare <ティッカー> <作業ディレクトリ> [--hold <買値> <買った日> <ルール>]
 #       採用ルールへの当てはめ（rules.md）と数値データ（<ティッカー>_data.txt）を作る。
 #   （ここでメインが、`新分析ツール/ニュース調査指示.md` を読ませた単一のサブエージェントに <作業ディレクトリ>/news.md を書かせる）
-#   tools/theme_single.sh send <ティッカー> <作業ディレクトリ>
-#       チャート画像（日足・分足）を3冊のノートブックに差し替えてから3人の著者へ並列に送り（回答後に画像は外す）、回答を <作業ディレクトリ>/answers/ に書き出して全文を表示する。
+#   tools/theme_single.sh send <ティッカー> <作業ディレクトリ> [--all]
+#       採用ルールの合図（A=条件成立、B=成立が目前）が出ているルールの著者と、保有中ならそのルールの著者にだけ送る
+#       （合図がない著者は方式Bでは必ず【様子見】になるため。--all で3人全員に送る）。
+#       チャート画像（日足・分足）をノートブックに差し替えてから並列に送り（回答後に画像は外す）、回答を <作業ディレクトリ>/answers/ に書き出して全文を表示する。
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CMD="${1:-}"; T="${2:-}"; D="${3:-}"
-[[ -n "$CMD" && -n "$T" && -n "$D" ]] || { sed -n '2,10p' "$0"; exit 2; }
+[[ -n "$CMD" && -n "$T" && -n "$D" ]] || { sed -n '2,12p' "$0"; exit 2; }
 T="${T^^}"
 mkdir -p "$D"
 
@@ -60,8 +62,24 @@ del_images() {   # $1 = ノートブックID。画像拡張子で終わるソー
   [[ -z "$ids" ]] || nlm source delete -y "$1" "$ids" > /dev/null 2>&1
 }
 
+# 送る著者: 合図（A・B）が出ているルールの著者と、保有中のルールの著者（--all なら3人全員）
+if [[ "${4:-}" == --all ]]; then
+  WHO=(ボリンジャー ミネルヴィニ ワインスタイン)
+else
+  mapfile -t WHO < <(python3 "$ROOT/tools/theme_single.py" --who "$D/rules.md")
+fi
+if [[ ${#WHO[@]} -eq 0 ]]; then
+  echo "===== 著者への送信なし ====="
+  echo "3つの採用ルールのどれも、合図（A=条件成立、B=成立が目前）が出ていません。方式Bでは著者の判定は【様子見】になるため、NotebookLMには送っていません。"
+  echo "次に条件がそろう目安（スクリプトの計算）:"
+  grep -E "目安|パターン判定" "$D/rules.md" || true
+  echo "（3人の見方を聞きたい場合は、send の最後に --all を付けて送る。質問3回）"
+  exit 0
+fi
+echo "送る著者: ${WHO[*]}（質問${#WHO[@]}回）"
+
 PIDS=()
-for k in ボリンジャー ミネルヴィニ ワインスタイン; do
+for k in "${WHO[@]}"; do
   ( del_images "${NB[$k]}" || true
     if [[ ${#IMAGES[@]} -gt 0 ]] && ! nlm source add "${NB[$k]}" "${IMAGES[@]}" > "$D/answers/$k.img" 2>&1; then
       echo "（チャート画像を追加できませんでした: $(tail -1 "$D/answers/$k.img")）" > "$D/answers/$k.imgerr"
@@ -74,7 +92,7 @@ for k in ボリンジャー ミネルヴィニ ワインスタイン; do
   PIDS+=($!)
 done
 for p in "${PIDS[@]}"; do wait "$p" || true; done
-for k in ボリンジャー ミネルヴィニ ワインスタイン; do
+for k in "${WHO[@]}"; do
   echo "===== $k ====="
   [[ -f "$D/answers/$k.imgerr" ]] && cat "$D/answers/$k.imgerr"
   cat "$D/answers/$k.txt"

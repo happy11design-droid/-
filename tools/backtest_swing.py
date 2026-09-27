@@ -492,7 +492,6 @@ def cmd_run(a):
       f"手じまい条件が{MAX_HOLD}取引日出なければ打ち切り。建玉はリスク2%・損切り15%から逆算（資金の13.3%、7銘柄まで）。")
     w("- 同じ日の候補の選び方はルール表にないため、「ルールの強さの順（ADXの高い順など。タートルスープ・ドンチャンは強さの基準がないので銘柄名の順）」と「ランダムな順（10通りの中央値と幅）」の両方を出す。")
     w("- 対象外: 寄り付き1時間の値動きを使うルール（モメンタムピンボール）、デイトレード（80-20's）、先物・債券・通貨・ティック・TRIN・ブレドス指標のルール、売り（空売り）のルール。")
-    w(f"- 比較: 同期間のSPY買い持ち 年率 {pct(spy_cagr)}、最大下落率 {pct(spy_mdd)}（配当込み）\n")
 
     def run(order, exit_fn=X_NONE, trail=None, allow=None, max_hold=MAX_HOLD):
         return simulate(data, members, order, exit_fn, a.start, a.end, allow=allow, trail=trail, max_hold=max_hold)

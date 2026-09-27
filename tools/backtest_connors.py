@@ -134,7 +134,6 @@ def cmd_run(a):
     w(f"- 手じまい条件が{MAX_HOLD}取引日出ない場合はその日の引けで打ち切り。同じ銘柄の保有中は新しいシグナルを数えない。")
     w("- 局面: SPYの30週線（150日線）の位置と4週前からの傾きでワインスタインのステージを近似（上昇＝線より上かつ上向き、下落＝線より下かつ下向き、それ以外＝横ばい）。")
     w("- 平均リターンの信頼区間は、同じ日のシグナル同士が独立でないため、月単位のブロック・ブートストラップ（1000回）。")
-    w(f"- 比較: 同期間のSPY買い持ち 年率 {pct(spy_cagr)}、最大下落率 {pct(mdd)}（配当込み）\n")
 
     w("## 1. 戦略ごとの成績（ストップなし）\n")
     w("1シグナル＝1トレード（資金の制約なし）。コストは片道。\n")
@@ -192,7 +191,6 @@ def cmd_run(a):
         for slots in (5, 10, 20):
             p = portfolio(results[name], COSTS[2], slots, days, data)
             w(f"| {name} | {slots} | {pct(p['cagr'])} | {pct(p['mdd'])} | {p['taken']} | {(1 + p['cagr']) ** 10:.2f} |")
-    w(f"| （参考）SPY買い持ち | | {pct(spy_cagr)} | {pct(mdd)} | | {(1 + spy_cagr) ** 10:.2f} |")
 
     # ---- 5〜7: 引け後に判定して翌日の寄り付きで売買する運用（実際にできる方法）----
     vlo_d = lambda d: vix10.get(d) and vixc[d] <= vix10[d] * 0.95
@@ -255,7 +253,6 @@ def cmd_run(a):
             w(f"| {name} | {fl} | {len(tr) / years:.0f} | {cells[0]} | {cells[1]} | "
               + " | ".join(f"{pct(p['cagr'])} / {pct(p['mdd'])}" for p in ports) + " |")
         print("filters", name, file=sys.stderr)
-    w(f"| （参考）SPY買い持ち | | | | | | | {pct(spy_cagr)} / {pct(mdd)} |")
 
     w("\n## 7. 1トレードのリスクを資金の2%にした場合（翌日の寄り付きで売買、片道0.1%）\n")
     w("コナーズの手法にはストップがないため、リスク2%を決めるには非常時の損切り幅が必要になる。"
@@ -310,7 +307,6 @@ def cmd_run(a):
             p = portfolio(tr, COSTS[2], 2, days, etf)
             held = sum(t["days"] for t in tr) / (2 * len(days))
             w(f"| {name} | {src} | {lab} | {st['n']} | {st['n'] / years:.1f} | {pct(st['win'])} | {pf_line(tr)} | {st['days']:.1f} | {pct(p['cagr'])} | {pct(p['mdd'])} | {pct(held, 0)} |")
-    w(f"| （参考）SPY買い持ち | | | | | | | | {pct(spy_cagr)} | {pct(mdd)} | 100% |")
 
     w("\n## 9. 注意\n")
     w("- 過去の成績は将来を保証しない。特に上場廃止銘柄の欠落（生存者バイアスの残り）、引け値ちょうどで約定できる前提（1〜4）、寄り付きの気配値のすべりを入れていないこと（5〜7）は、いずれも現実より良く見せる方向に働きうる。")

@@ -33,7 +33,6 @@ for th in (95,98,99):
     for filt in (False,True):
         tr=gen_trades(data,members,E(th,trend,filt),X,start,end,ok=bt.liquid,fill="open",max_hold=40,stop_pct=None)
         rep.line(f"RS≧{th}{'・200日線より上' if trend else ''}{'・SPYが200日線より上' if filt else ''}（月末に上位を買い、翌月末に入れ替え）",tr,0.15)
-sc,sm=spy_benchmark(spy,days); w(f"SPY {sc*100:.1f}% / {sm*100:.1f}%")
 print("\n".join(L))
 
 # ---- 使っていない資金をSPYで持つ ----

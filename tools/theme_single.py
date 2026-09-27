@@ -13,6 +13,7 @@ import bisect
 import csv
 import datetime as dt
 import os
+import re
 import sys
 from concurrent.futures import ThreadPoolExecutor
 
@@ -42,7 +43,22 @@ def load_pool():
         return [x for x in ex.map(fetch_daily, sp) if x]
 
 
+def who(rules):
+    """rules.md から、送る著者（合図 A・B が出ているルールの著者＋保有中のルールの著者）を返す"""
+    authors = ("ボリンジャー", "ミネルヴィニ", "ワインスタイン")
+    m = re.search(r"ボリンジャーIII: (\S+)／ミネルヴィニ: (\S+)／ワインスタイン10週: (\S+?)（", rules)
+    out = [a for a, p in zip(authors, m.groups()) if p in ("A", "B")] if m else list(authors)
+    h = re.search(r"## 4. 保有中の確認\n\n- ルール: ([^／]+)", rules)
+    if h:
+        out += [a for a in authors if a in h.group(1) and a not in out]
+    return out
+
+
 def main():
+    if len(sys.argv) == 3 and sys.argv[1] == "--who":
+        for x in who(open(sys.argv[2], encoding="utf-8").read()):
+            print(x)
+        return
     ap = argparse.ArgumentParser()
     ap.add_argument("ticker")
     ap.add_argument("out")

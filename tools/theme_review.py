@@ -7,7 +7,7 @@
   tools/theme_review.py review <record.json を置いたディレクトリ> [--since YYYY-MM-DD] [--out FILE]
       記録した候補を、採用したルールどおりに売買していたらどうなったか（翌日の寄り付きで買い、損切り15%の逆指値、ルールの手じまい条件）を
       最新の株価で計算し、著者の結論（【買い】【買い（予約）】【様子見】、2026-09-27以前は【注文する】【見送る】）ごとに集計する。
-      予約注文（パターンB）は、翌日の高値・安値が逆指値・指値に届いたときだけ約定したとみなす。保有銘柄の【売り】は、ルールどおり持ち続けた場合と比べる。
+      予約注文（パターンB）は、ユーザーが実際に約定した記録（保有銘柄.md・売買記録.md）があるときだけ数える（価格が届いただけでは数えない）。保有銘柄の【売り】は、ルールどおり持ち続けた場合と比べる。
 計算は数値の事実だけで、Claudeの売買判断は含まない。
 """
 import argparse
@@ -21,7 +21,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import backtest_swing as bs
 import backtest_trend as bt
-from theme_scan import fetch_daily
+from theme_scan import fetch_daily, load_trades
 
 STOP, COST = 0.15, 0.001
 
@@ -143,7 +143,8 @@ def cmd_review(a):
     last = max((d["date"][-1] for d in data.values()), default=max((r["trade_date"] for r in recs), default="記録なし"))
     w(f"# テーマ監視 週次レビュー（{last}の引けまで）\n")
     w(f"- 対象の記録: {len(recs)}日分（{recs[0]['trade_date'] if recs else '-'} 〜 {recs[-1]['trade_date'] if recs else '-'}）")
-    w("- 候補は、採用したルールどおり（翌日の寄り付きで買い、買値の15%下に損切りの逆指値、ルールの手じまい条件で翌日の寄り付きに売り）に売買した場合の計算。片道0.1%のコスト込み。")
+    w("- 【買い（予約）】は、あなたが実際に約定した記録（保有銘柄.md・売買記録.md）があるものだけを数える。記録がなければ「約定の記録なし」とし、成績に入れない。")
+    w("- 【買い】などの成行の候補は、採用したルールどおり（翌日の寄り付きで買い、買値の15%下に損切りの逆指値、ルールの手じまい条件で翌日の寄り付きに売り）に売買した場合の計算。片道0.1%のコスト込み。")
     w("- 実際に注文したかどうかではなく、著者の結論ごとに「その結論に従っていたら」を比べる。数値の事実だけで、Claudeの売買判断は含まない。\n")
 
     w("## 1. テーマの局面（ワインスタインの回答）\n")
@@ -151,6 +152,7 @@ def cmd_review(a):
         w(f"- {r['trade_date']}: {r['theme_stage'] or '記録なし'}")
     w("")
 
+    trades = load_trades()
     rows = []
     for r in recs:
         for c in r["candidates"]:
@@ -162,18 +164,21 @@ def cmd_review(a):
             if i + 1 >= len(s["c"]):
                 rows.append({**c, "date": r["trade_date"], "status": "まだ寄り付き前"})
                 continue
-            o1, h1, l1 = s["o"][i + 1], s["h"][i + 1], s["l"][i + 1]
-            px = o1
-            if c.get("stop_buy"):          # パターンB: 逆指値買い（高値が届いたら max(始値, 逆指値) で約定）
-                if h1 < c["stop_buy"]:
-                    rows.append({**c, "date": r["trade_date"], "status": f"逆指値{c['stop_buy']:.2f}に届かず約定せず"})
+            px = s["o"][i + 1]
+            if c.get("stop_buy") or c.get("limit_buy"):
+                # パターンB（予約注文）: 価格が届いたかどうかではなく、ユーザーが実際に約定した記録（保有銘柄.md・売買記録.md）があるときだけ数える
+                # （ユーザーの指示 2026-09-27。約定していなければ、翌日以降のスキャンで改めてエントリーを探す）
+                rec = [b for b in trades if b["sym"] == c["sym"] and r["trade_date"] < b["date"] <= s["date"][min(i + 3, len(s["date"]) - 1)]]
+                if not rec:
+                    rows.append({**c, "date": r["trade_date"], "status": "約定の記録なし（翌日以降の条件で改めてエントリーを探す）"})
                     continue
-                px = max(o1, c["stop_buy"])
-            elif c.get("limit_buy"):       # パターンB: 指値買い（安値が届いたら min(始値, 指値) で約定）
-                if l1 > c["limit_buy"]:
-                    rows.append({**c, "date": r["trade_date"], "status": f"指値{c['limit_buy']:.2f}に届かず約定せず"})
-                    continue
-                px = min(o1, c["limit_buy"])
+                k = s["date"].index(rec[0]["date"]) if rec[0]["date"] in s["date"] else i + 1
+                rule = "ボリンジャー" if "ボリンジャー" in c["kind"] else "ミネルヴィニ" if "ミネルヴィニ" in c["kind"] else "ワインスタイン"
+                px = rec[0]["price"]
+                od, op, why = follow(rule, s, k, px, px * (1 - STOP))
+                rows.append({**c, "date": r["trade_date"], "entry": px, "exit_date": od, "exit": op, "status": why + "（実際の約定）",
+                             "ret": op / px - 1 - 2 * COST})
+                continue
             if c.get("limit") and px > c["limit"]:
                 rows.append({**c, "date": r["trade_date"], "status": f"買値{px:.2f}が上限{c['limit']:.2f}を超えたため買わない"})
                 continue
