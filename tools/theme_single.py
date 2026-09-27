@@ -19,6 +19,7 @@ from concurrent.futures import ThreadPoolExecutor
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import backtest_swing as bs
 import backtest_trend as bt
+from backtest_regime import up
 from backtest_lib import MEMBERS_URL, curl
 from theme_scan import earnings_date, fetch_daily, pct
 
@@ -57,7 +58,9 @@ def main():
     w = L.append
     w(f"# {sym} を採用ルールに当てはめた結果（{day}の引け時点）\n")
     w(f"- 終値 {c:.2f}（前日比 {pct(c / d['c'][i - 1] - 1)}）、RSランキング {'取得不可' if rs is None else f'{rs:.0f}'}（S&P500の中での百分位）、次回決算予定日 {earnings_date(sym)}")
-    w(f"- 50日平均出来高 {d['vol50'][i] / 1e4:,.0f}万株、流動性の条件（株価5ドル以上・50日平均出来高25万株以上）: {mark(bt.liquid(d, i, [('0000', '9999')]))}\n")
+    w(f"- 50日平均出来高 {d['vol50'][i] / 1e4:,.0f}万株、流動性の条件（株価5ドル以上・50日平均出来高25万株以上）: {mark(bt.liquid(d, i, [('0000', '9999')]))}")
+    w(f"- 銘柄の局面（判定式: 終値 > 50日線 > 200日線、50日線が20取引日前より2%以上高い、ADX(14) ≧ 20 をすべて満たせば上昇相場、それ以外はレンジ）: "
+      f"**{'上昇相場' if up(i, d) else 'レンジ'}**（50日線 {d['ma50'][i]:.2f}、200日線 {d['ma200'][i]:.2f}、50日線の20日前比 {pct(d['ma50'][i] / d['ma50'][i - 20] - 1)}、ADX(14) {d['adx14'][i]:.1f}）\n")
 
     # ボリンジャーIII
     pb, ii = d["pctb"][i], d["ii21"][i]

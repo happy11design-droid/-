@@ -322,22 +322,24 @@ def portfolio(trades, cost, slots, days, data, weight=None, seed=None, cash_asse
         by_in.setdefault(t["in"], []).append(t)
     cash, held, eq_curve = 1.0, [], []
     peak, mdd, taken, worst_hit, exposure = 1.0, 0.0, 0, 0.0, 0.0
-    prev = None
+    prev, buy_days, busy_days, act_days = None, 0, 0, 0
     for d in days:
         if cash_asset and prev is not None and cash > 0:
             cash *= cash_asset[d] / cash_asset[prev]
         prev = d
-        still = []
+        still, sold = [], False
         for h in held:
             if h["out"] == d:
                 cash += h["size"] * (1 + h["ret"] - cost)
                 worst_hit = max(worst_hit, -h["size"] * (h["ret"] - cost) / h["eq0"])
+                sold = True
             else:
                 still.append(h)
         held = still
         for h in held:
             h["last"] = value(h, d)
         equity = cash + sum(h["last"] for h in held)
+        taken0 = taken
         for t in sorted(by_in.get(d, []), key=order):
             if len(held) >= slots:
                 break
@@ -357,6 +359,9 @@ def portfolio(trades, cost, slots, days, data, weight=None, seed=None, cash_asse
                 continue
             h["last"] = value(h, d)
             held.append(h)
+        buy_days += taken > taken0
+        busy_days += bool(held) or taken > taken0
+        act_days += sold or taken > taken0
         eq = cash + sum(h["last"] for h in held)
         eq_curve.append(eq)
         exposure += 1 - cash / eq
@@ -365,7 +370,8 @@ def portfolio(trades, cost, slots, days, data, weight=None, seed=None, cash_asse
     years = (dt.date.fromisoformat(days[-1]) - dt.date.fromisoformat(days[0])).days / 365.25
     final = eq_curve[-1]
     return {"cagr": final ** (1 / years) - 1, "mdd": mdd, "taken": taken, "final": final, "worst_hit": worst_hit,
-            "exposure": exposure / len(days)}
+            "exposure": exposure / len(days), "buy_days": buy_days / len(days), "busy_days": busy_days / len(days),
+            "act_days": act_days / len(days)}
 
 
 def pct(x, d=1):

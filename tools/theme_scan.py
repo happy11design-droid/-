@@ -28,6 +28,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import backtest_swing as bs
 import backtest_theme as bth
 import backtest_trend as bt
+from backtest_regime import up as regime_up
 from backtest_lib import DEFAULT_CACHE, MEMBERS_URL, curl, market_regime, sma
 
 RISK, STOP = 0.02, 0.15
@@ -205,12 +206,13 @@ def main():
         if abs(ch) >= 0.05 or (vr and vr >= 2):
             mv.append((s_, ch, vr))
     if mv:
-        w("| 銘柄 | グループ | 前日比 | 出来高（50日平均の倍） | 終値 | 50日線 | RS |")
-        w("|---|---|---|---|---|---|---|")
+        w("| 銘柄 | グループ | 前日比 | 出来高（50日平均の倍） | 終値 | 50日線 | RS | 局面 |")
+        w("|---|---|---|---|---|---|---|---|")
         for s_, ch, vr in sorted(mv, key=lambda x: -abs(x[1])):
             d = data[s_]
             rs = d["rs"][-1]
-            w(f"| {s_} | {wl[s_]} | {pct(ch)} | {vr:.1f}倍 | {d['c'][-1]:.2f} | {'上' if d['ma50'][-1] and d['c'][-1] > d['ma50'][-1] else '下'} | {'取得不可' if rs is None else f'{rs:.0f}'} |")
+            w(f"| {s_} | {wl[s_]} | {pct(ch)} | {vr:.1f}倍 | {d['c'][-1]:.2f} | {'上' if d['ma50'][-1] and d['c'][-1] > d['ma50'][-1] else '下'} | {'取得不可' if rs is None else f'{rs:.0f}'} | {'上昇相場' if regime_up(len(d['c']) - 1, d) else 'レンジ'} |")
+        w("\n- 局面: 終値 > 50日線 > 200日線、50日線が20取引日前より2%以上高い、ADX(14) ≧ 20 をすべて満たせば上昇相場、それ以外はレンジ（判定式はClaudeが置いたもの）。")
     else:
         w("該当なし")
     w("")
@@ -255,7 +257,8 @@ def main():
         if not bt.liquid(d, i, [("0000", "9999")]):
             continue
         rs = d["rs"][i]
-        base = {"sym": s, "group": wl[s], "close": d["c"][i], "rs": rs, "chg": d["c"][i] / d["c"][i - 1] - 1}
+        base = {"sym": s, "group": wl[s], "close": d["c"][i], "rs": rs, "chg": d["c"][i] / d["c"][i - 1] - 1,
+                "regime": "上昇相場" if regime_up(i, d) else "レンジ"}
         if bs.O_method3(i, d):
             cands.append({**base, "kind": "逆張り: ボリンジャー メソッドIII",
                           "why": f"%b={d['pctb'][i]:.3f}（<0.05）、21日II%={d['ii21'][i]:+.3f}（>0）",
@@ -279,12 +282,11 @@ def main():
             if re.fullmatch(r"\d{4}-\d{2}-\d{2}", v):
                 n = (dt.date.fromisoformat(v) - dt.date.fromisoformat(day)).days
                 eds[k_] = f"{v}（{n}日後）" + ("**決算が近い**" if 0 <= n <= 14 else "")
-        w("| 銘柄 | グループ | 種類 | 終値 | 前日比 | RS | 当てはまった条件 | 次回決算予定日 | 注文の目安 |")
-        w("|---|---|---|---|---|---|---|---|---|")
+        w("| 銘柄 | グループ | 種類 | 終値 | 前日比 | RS | 局面 | 当てはまった条件 | 次回決算予定日 | 注文の目安 |")
+        w("|---|---|---|---|---|---|---|---|---|---|")
         for x in cands:
-            w(f"| {x['sym']} | {x['group']} | {x['kind']} | {x['close']:.2f} | {pct(x['chg'])} | {x['rs']:.0f} | {x['why']} | {eds[x['sym']]} | {x['order']} |"
-              if x["rs"] is not None else
-              f"| {x['sym']} | {x['group']} | {x['kind']} | {x['close']:.2f} | {pct(x['chg'])} | 取得不可 | {x['why']} | {eds[x['sym']]} | {x['order']} |")
+            rs_ = "取得不可" if x["rs"] is None else f"{x['rs']:.0f}"
+            w(f"| {x['sym']} | {x['group']} | {x['kind']} | {x['close']:.2f} | {pct(x['chg'])} | {rs_} | {x['regime']} | {x['why']} | {eds[x['sym']]} | {x['order']} |")
         w("\n- RS≧80の押し目（ボリンジャーIII）は、バックテストで成績がより安定していた（PF3.27、最大下落20%）。")
     text = "\n".join(L) + "\n"
     os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
