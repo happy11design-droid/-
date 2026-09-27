@@ -134,7 +134,7 @@ def cmd_review(a):
             data[s] = d
     L = []
     w = L.append
-    last = max((d["date"][-1] for d in data.values()), default="")
+    last = max((d["date"][-1] for d in data.values()), default=max((r["trade_date"] for r in recs), default="記録なし"))
     w(f"# テーマ監視 週次レビュー（{last}の引けまで）\n")
     w(f"- 対象の記録: {len(recs)}日分（{recs[0]['trade_date'] if recs else '-'} 〜 {recs[-1]['trade_date'] if recs else '-'}）")
     w("- 候補は、採用したルールどおり（翌日の寄り付きで買い、買値の15%下に損切りの逆指値、ルールの手じまい条件で翌日の寄り付きに売り）に売買した場合の計算。片道0.1%のコスト込み。")
@@ -171,6 +171,8 @@ def cmd_review(a):
         g = [x for x in rows if x["verdict"] == vd and "ret" in x]
         if g:
             w(f"| {vd} | {len(g)} | {sum(1 for x in g if x['ret'] > 0)} | {sum(x['ret'] for x in g) / len(g) * 100:+.2f}% | {sum(x['ret'] for x in g) * 100:+.1f}% |")
+    if not rows:
+        w("| 候補なし | 0 | | | |")
     w("\n| シグナルの日 | 銘柄 | 種類 | 著者の結論 | 買値（翌日の寄り付き） | 手じまい | 損益 | 状態 |")
     w("|---|---|---|---|---|---|---|---|")
     for x in rows:
