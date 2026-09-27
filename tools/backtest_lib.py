@@ -296,13 +296,14 @@ def stats(trades, cost):
 _IDX = {}
 
 
-def portfolio(trades, cost, slots, days, data, weight=None, seed=None, cash_asset=None):
+def portfolio(trades, cost, slots, days, data, weight=None, seed=None, cash_asset=None, group_of=None, group_cap=None):
     """同時保有数の上限つきの資金推移。資金を slots 等分し、その日のシグナルは rank の小さい順に空き枠へ入れる。
     手じまいで戻った資金はその日の引けから次に使える（複利）。保有中はその日の終値で時価評価する。
     weight を指定すると1銘柄の建玉を資金×weight にする（リスク2%・損切り幅X%なら weight=0.02/X）。
     seed を指定すると、同じ日の候補を rank ではなくランダムな順で選ぶ（並べ替えの選び方に結果が左右されていないかを見るため）。
     cash_asset（{日付: 終値}）を指定すると、使っていない資金をその銘柄（SPYなど）で持っているものとして毎日の値動きを反映する
-    （入れ替えの売買コストは入れていない）。"""
+    （入れ替えの売買コストは入れていない）。
+    group_of（{銘柄: グループ}）と group_cap を指定すると、同じグループの同時保有を group_cap 銘柄までにする。"""
     weight = weight or 1 / slots
     for sym in {t["sym"] for t in trades}:
         key = id(data[sym]["date"])
@@ -341,6 +342,8 @@ def portfolio(trades, cost, slots, days, data, weight=None, seed=None, cash_asse
             if len(held) >= slots:
                 break
             if any(h["sym"] == t["sym"] for h in held):
+                continue
+            if group_cap and sum(1 for h in held if group_of.get(h["sym"]) == group_of.get(t["sym"])) >= group_cap:
                 continue
             size = min(equity * weight, cash)
             if size <= 0:

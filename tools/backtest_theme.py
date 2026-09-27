@@ -22,7 +22,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import backtest_connors as bc
 import backtest_swing as bs
 import backtest_trend as bt
-from backtest_lib import COSTS, DEFAULT_CACHE, Reporter, gen_trades, load_prices, market_regime, pct, stats
+from backtest_lib import COSTS, DEFAULT_CACHE, Reporter, gen_trades, load_prices, market_regime, pct, portfolio, sma, stats
 
 RISK, STOP, COST = 0.02, 0.15, COSTS[2]
 WATCHLIST = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "新分析ツール", "テーマ監視銘柄.md")
@@ -79,6 +79,110 @@ def theme_index(data, dates):
                 lvl *= 1 + sum(rets) / len(rets)
         c.append(lvl)
     return {"date": dates, "c": c}
+
+
+def group_strength(data, wl, lookback=63):
+    """{日付: [グループ名, ...]}（直近 lookback 日の騰落率の中央値が高い順）"""
+    by = {}
+    for sym, v in data.items():
+        c = v["c"]
+        for i in range(lookback, len(c)):
+            by.setdefault(v["date"][i], {}).setdefault(wl[sym], []).append(c[i] / c[i - lookback] - 1)
+    out = {}
+    for d, g in by.items():
+        med = {k: sorted(x)[len(x) // 2] for k, x in g.items() if len(x) >= 3}
+        out[d] = sorted(med, key=lambda k: -med[k])
+    return out
+
+
+def warn_table(w, data, spy, theme_index, market_regime, pct, start="2016-01-01"):
+    dates = [d for d in spy["date"] if d >= "2015-01-01"]
+    idx = theme_index(data, dates)
+    c = idx["c"]
+    ma50 = sma(c, 50)
+    spy_c = dict(zip(spy["date"], spy["c"]))
+    ratio = [x / spy_c[d] for x, d in zip(c, dates)]
+    rma = sma(ratio, 50)
+    stage = market_regime(idx)
+    # 監視銘柄のうち50日線より上の割合
+    above = {}
+    for v in data.values():
+        m = sma(v["c"], 50)
+        for i, d in enumerate(v["date"]):
+            if m[i] is not None and d >= "2015-01-01":
+                a_ = above.setdefault(d, [0, 0])
+                a_[0] += v["c"][i] > m[i]
+                a_[1] += 1
+    br = {d: x[0] / x[1] for d, x in above.items() if x[1] >= 20}
+    inds = {
+        "テーマ指数が30週線で「下落」ステージ（ワインスタイン）": lambda i, d: stage.get(d) == "下落",
+        "テーマ指数が50日線（10週線）より下": lambda i, d: ma50[i] is not None and c[i] < ma50[i],
+        "テーマ指数のS&P500に対する相対的な強さが50日平均より下": lambda i, d: rma[i] is not None and ratio[i] < rma[i],
+        "監視銘柄のうち50日線より上の割合が50%未満": lambda i, d: d in br and br[d] < 0.5,
+        "上の割合が40%未満かつテーマ指数が50日線より下": lambda i, d: d in br and br[d] < 0.4 and ma50[i] is not None and c[i] < ma50[i],
+    }
+    s0 = next(k for k, d in enumerate(dates) if d >= start)
+    # テーマ指数が高値から20%以上下げた局面
+    eps, pk, k = [], s0, s0
+    while k < len(c):
+        if c[k] > c[pk]:
+            pk = k
+        if c[k] <= c[pk] * 0.8:
+            r = k
+            while r < len(c) and c[r] < c[pk]:   # 高値を取り戻すまでを1つの局面とする
+                r += 1
+            lo = min(range(pk, r), key=lambda j: c[j])
+            eps.append((pk, lo))
+            k = pk = min(r, len(c) - 1)
+            if r >= len(c):
+                break
+        k += 1
+    years = (len(c) - s0) / 252
+    bh = (c[-1] / c[s0]) ** (1 / years) - 1
+    peak = mdd = 0
+    for x in c[s0:]:
+        peak = max(peak, x)
+        mdd = max(mdd, 1 - x / peak)
+    w("| 警告の条件 | 年率（警告中は持たない） | 最大下落率 | 持っていた日の割合 | 切り替えの回数（年平均） | "
+      + " | ".join(f"{dates[p]}の高値→安値{pct(c[l] / c[p] - 1, 0)}: 警告が出た時点の下落" for p, l in eps) + " |")
+    w("|---|---|---|---|---|" + "---|" * len(eps))
+    w(f"| （参考）テーマ指数を持ち続けた場合 | {pct(bh)} | {pct(mdd)} | 100% | 0 | " + " | ".join("-" for _ in eps) + " |")
+    for name, f in inds.items():
+        lvl, held, sw, peak, mdd2, prev = 1.0, 0, 0, 1.0, 0.0, None
+        for k in range(s0 + 1, len(c)):
+            on = not f(k - 1, dates[k - 1])      # 前日の引けの判定で今日を持つか
+            if prev is not None and on != prev:
+                sw += 1
+                lvl *= 1 - 0.001
+            if on:
+                lvl *= c[k] / c[k - 1]
+                held += 1
+            prev = on
+            peak = max(peak, lvl)
+            mdd2 = max(mdd2, 1 - lvl / peak)
+        cells = []
+        for p, l in eps:
+            hit = next((j for j in range(p, l + 1) if f(j, dates[j])), None)
+            cells.append(f"{dates[hit]}（{pct(c[hit] / c[p] - 1, 0)}）" if hit is not None else "出ず")
+        w(f"| {name} | {pct(lvl ** (1 / years) - 1)} | {pct(mdd2)} | {pct(held / (len(c) - s0 - 1), 0)} | {sw / years:.1f} | " + " | ".join(cells) + " |")
+    w("")
+
+
+def warn_dates(data, spy, theme_index):
+    """警告の日の集合: 監視銘柄のうち50日線より上の割合が40%未満、かつテーマ指数が50日線より下"""
+    dates = [d for d in spy["date"] if d >= "2015-01-01"]
+    idx = theme_index(data, dates)
+    ma50 = sma(idx["c"], 50)
+    above = {}
+    for v in data.values():
+        m = sma(v["c"], 50)
+        for i, d in enumerate(v["date"]):
+            if m[i] is not None and d >= "2015-01-01":
+                x = above.setdefault(d, [0, 0])
+                x[0] += v["c"][i] > m[i]
+                x[1] += 1
+    return {d for i, d in enumerate(dates) if ma50[i] is not None and idx["c"][i] < ma50[i]
+            and d in above and above[d][1] >= 20 and above[d][0] / above[d][1] < 0.4}
 
 
 def cmd_run(a):
@@ -139,6 +243,7 @@ def cmd_run(a):
         ]),
         ("逆張り", [
             ("ボリンジャー: メソッドIII 反転（%b<0.05かつ21日II%>0）・上部バンドで手じまい", lambda f=None: S(bs.O_method3, bs.X_upper_band, allow=f)),
+            ("ボリンジャー: メソッドIII・シグナル後の最初の反発の陽線を待って買う（著者の確認シグナルの近似）・上部バンドで手じまい", lambda f=None: S(bs.O_method3_confirm, bs.X_upper_band, allow=f)),
             ("コナーズ: RSI(2)≦5（200日線より上）・5日線上抜けで手じまい", lambda f=None: C(bc.E_rsi2(5), "5日線上抜け", allow=f)),
             ("コナーズ: 個別株2日累積RSI≦10・5日線上抜けで手じまい", lambda f=None: C(bc.E_cum2(10), "5日線上抜け", allow=f)),
             ("コナーズ: ダブル7（7日最安値で引け）・7日最高値で手じまい", lambda f=None: C(bc.E_double7, "7日最高値で引け", allow=f)),
@@ -241,6 +346,115 @@ def cmd_run(a):
         else:
             k2 += 1
     w("")
+
+    # ---- 見落としの確認: 監視銘柄の中での絞り込み・グループの上限・組み合わせ・コスト ----
+    for sym, v in data.items():
+        v["sym"] = sym
+    grp_rank = group_strength(data, wl)
+    top3 = lambda d: grp_rank.get(d, ())[:3]
+    f_all = lambda s_, i, sp: True
+    f_rs = lambda s_, i, sp: s_["rs"][i] is not None and s_["rs"][i] >= 80
+    f_grp = lambda s_, i, sp: wl[s_["sym"]] in top3(s_["date"][i])
+    f_both = lambda s_, i, sp: f_rs(s_, i, sp) and f_grp(s_, i, sp)
+    lib_ok = lambda f: (lambda s_, i, sp: bt.liquid(s_, i, sp) and f(s_, i, sp))
+    X7 = bc.X["7日最高値で引け"]
+    cands = {
+        "ボリンジャーIII（押し目）": lambda f: bs.simulate(data, members, bs.O_method3, bs.X_upper_band, a.start, a.end, ok=lib_ok(f)),
+        "コナーズ ダブル7（押し目）": lambda f: gen_trades(data, members, bc.E_double7, lambda j, s_, k_, px: X7(j, s_, k_), a.start, a.end,
+                                                   ok=lambda s_, i, sp: bc.signal_ok(s_, i, sp) and f(s_, i, sp), fill="open", max_hold=30, stop_pct=STOP),
+        "ワインスタイン10週（上抜け）": lambda f: gen_trades(data, members, bt.E_weinstein(10, ma="10"), bt.X_weekly_below("10"), a.start, a.end,
+                                                   ok=lib_ok(f), fill="open", max_hold=500, stop_pct=STOP),
+        "ドンチャン4週（上抜け）": lambda f: bs.simulate(data, members, bs.O_donchian, bs.X_donchian_low, a.start, a.end, ok=lib_ok(f)),
+        "ミネルヴィニ・50日線割れで手じまい（上抜け）": lambda f: gen_trades(data, members, bt.E_minervini(50), bt.X_BELOW50, a.start, a.end,
+                                                   ok=lib_ok(f), fill="open", max_hold=500, stop_pct=STOP),
+    }
+    slots = int(round(STOP / RISK, 6))
+
+    def pr(tr, cost=COST, cap=None, lo=None, hi=None, seed=0):
+        lo, hi = lo or a.start, hi or a.end
+        dd = [d for d in days if lo <= d <= hi]
+        return portfolio([t for t in tr if lo <= t["in"] and t["out"] <= hi], cost, slots, dd, data, weight=RISK / STOP,
+                         seed=seed, group_of=wl, group_cap=cap)
+
+    def row(label, tr, cost=COST, cap=None):
+        st = stats(tr, cost)
+        if not st:
+            w(f"| {label} | 0 | | | | | |")
+            return
+        rnd = [pr(tr, cost, cap, seed=k_) for k_ in range(10)]
+        cg = sorted(p["cagr"] for p in rnd)
+        md = sorted(p["mdd"] for p in rnd)[5]
+        h = [sorted(pr(tr, cost, cap, lo, hi, seed=k_)["cagr"] for k_ in range(10))[5] for _, lo, hi in halves]
+        w(f"| {label} | {st['n'] / years:.0f} | {st['pf']:.2f} | {pct(cg[5])}（{pct(cg[0])}〜{pct(cg[-1])}） | {pct(md)} | {pct(h[0])} / {pct(h[1])} | {pct(st['mean'], 2)} |")
+
+    hdr = ("| 条件 | 年平均件数 | PF | 年率 ランダム順 中央値（幅） | 最大下落率 中央値 | 前半 / 後半 年率 | 1トレード平均 |",
+           "|---|---|---|---|---|---|---|")
+    base = {}
+    k += 1
+    w(f"## {k}. 監視銘柄の中で、その時点で強い銘柄・強いグループだけに絞る（旬の中の旬）\n")
+    w("RS≧80＝その日のRSランキングが80以上の銘柄だけ。上位3グループ＝その日の直近3カ月の騰落率（中央値）で7グループ中の上位3グループの銘柄だけ（ヒートマップで今の主役を追う考え方を、その時点の情報だけで再現）。\n")
+    for name, fn in cands.items():
+        w(f"**{name}**\n")
+        w(hdr[0]); w(hdr[1])
+        for lab, f in (("絞り込みなし", f_all), ("RS≧80", f_rs), ("上位3グループ", f_grp), ("RS≧80かつ上位3グループ", f_both)):
+            tr = fn(f)
+            if lab == "絞り込みなし":
+                base[name] = tr
+            row(lab, tr)
+        w("")
+        print("filter", name, file=sys.stderr)
+
+    k += 1
+    w(f"## {k}. 同じグループの同時保有に上限を置く（集中の回避）\n")
+    w("7銘柄の枠のうち、同じグループ（半導体、光・通信など）は2銘柄まで・3銘柄までにした場合。\n")
+    w(hdr[0]); w(hdr[1])
+    for name, tr in base.items():
+        for cap in (None, 3, 2):
+            row(f"{name}・" + ("上限なし" if cap is None else f"同じグループ{cap}銘柄まで"), tr, cap=cap)
+
+    k += 1
+    w(f"\n## {k}. 逆張りと順張りを組み合わせる（7銘柄の枠を共有）\n")
+    w("同じ日の候補はランダムな順で選ぶ（手法の優先順位はルール表にないため）。\n")
+    w(hdr[0]); w(hdr[1])
+    B3, D7, W10, DC, M50 = (base[n] for n in cands)
+    for lab, tr in (("ボリンジャーIII＋ワインスタイン10週", B3 + W10), ("ボリンジャーIII＋ドンチャン4週", B3 + DC),
+                    ("ボリンジャーIII＋ミネルヴィニ", B3 + M50), ("ボリンジャーIII＋ダブル7＋ワインスタイン10週", B3 + D7 + W10),
+                    ("ボリンジャーIII＋ミネルヴィニ・同じグループ2銘柄まで", B3 + M50),
+                    ("ボリンジャーIII（RS≧80）＋ミネルヴィニ", cands["ボリンジャーIII（押し目）"](f_rs) + M50),
+                    ("ボリンジャーIII（RS≧80）＋ワインスタイン10週", cands["ボリンジャーIII（押し目）"](f_rs) + W10)):
+        tr = sorted(tr, key=lambda t: (t["out"], t["sym"]))
+        row(lab, tr, cap=2 if "2銘柄まで" in lab else None)
+
+    k += 1
+    w(f"\n## {k}. 売買コストを片道0.3%にした場合（値動きの大きい銘柄の寄り付きのすべりを厳しめに見る）\n")
+    w(hdr[0]); w(hdr[1])
+    for name, tr in base.items():
+        row(name, tr, cost=0.003)
+
+    # ---- 早めの警告の指標（過去10年） ----
+    k += 1
+    w(f"\n## {k}. テーマの崩れの早めの警告（過去10年、テーマ指数で検証）\n")
+    w("警告が出ている間はテーマ指数を持たず、消えたら持つ（翌日に切り替え、片道0.1%）とした場合の成績と、"
+      "テーマ指数が高値から20%以上下げた局面で、警告が高値から何%下げた時点で出たか。警告が少ないほど・遅いほど下落を避けられず、"
+      "多いほど・早いほど上昇を取り逃がす（誤報）。\n")
+    warn_table(w, data, spy, theme_index, market_regime, pct)
+
+    k += 1
+    wd = warn_dates(data, spy, theme_index)
+    no_warn = lambda d: d not in wd
+    w(f"## {k}. 警告中は新しい買いだけを止める（保有は各手法の手じまいに任せる）\n")
+    w("警告＝監視銘柄のうち50日線より上の割合が40%未満、かつテーマ指数が50日線より下。"
+      f"直近3年のうち警告が出ていた日: {sum(1 for d in days if d in wd)}日／{len(days)}日。\n")
+    w(hdr[0]); w(hdr[1])
+    M50w = gen_trades(data, members, bt.E_minervini(50), bt.X_BELOW50, a.start, a.end, ok=bt.liquid, fill="open", max_hold=500,
+                      stop_pct=STOP, allow=no_warn)
+    B3w = bs.simulate(data, members, bs.O_method3, bs.X_upper_band, a.start, a.end, allow=no_warn)
+    W10w = gen_trades(data, members, bt.E_weinstein(10, ma="10"), bt.X_weekly_below("10"), a.start, a.end, ok=bt.liquid,
+                      fill="open", max_hold=500, stop_pct=STOP, allow=no_warn)
+    for lab, tr in (("ボリンジャーIII", B3w), ("ミネルヴィニ・50日線割れで手じまい", M50w), ("ワインスタイン10週", W10w),
+                    ("ボリンジャーIII＋ミネルヴィニ", sorted(B3w + M50w, key=lambda t: (t["out"], t["sym"]))),
+                    ("ボリンジャーIII＋ワインスタイン10週", sorted(B3w + W10w, key=lambda t: (t["out"], t["sym"])))):
+        row(lab + "（警告中は買わない）", tr)
 
     k += 1
     w(f"\n## {k}. 注意\n")

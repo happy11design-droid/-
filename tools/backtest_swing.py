@@ -440,6 +440,21 @@ def O_method3(i, s):
     return {"rank": pb, "kind": "open", "stop": None}
 
 
+def O_method3_confirm(i, s, within=5):
+    """メソッドIIIのシグナル（%b<0.05かつ21日II%>0）の後、within日以内に最初の反発の陽線（終値が前日より高く、始値より高い）が
+    出た日の翌日の寄り付きで買う。著者（ボリンジャー）が求める「確認シグナル（反発上昇日の出現）」（p.1476, p.1518）を数値で近似したもの"""
+    c, o = s["c"], s["o"]
+    if i < 2 or not (c[i] > c[i - 1] and c[i] > o[i]):
+        return None
+    for k in range(i - 1, max(i - 1 - within, 0), -1):
+        pb, ii = s["pctb"][k], s["ii21"][k]
+        if pb is not None and ii is not None and pb < 0.05 and ii > 0:
+            return {"rank": pb, "kind": "open", "stop": None}
+        if c[k] > c[k - 1] and c[k] > o[k]:
+            return None          # シグナルの後、すでに反発の陽線が出ていた（最初の反発ではない）
+    return None
+
+
 def O_donchian(i, s):
     """ドンチャンの4週ルール（p.1450）: 終値が過去4週（20日）の高値を上抜けたら翌日の寄り付きで買い、4週安値割れで手じまい"""
     hi = s["hi20"][i]
