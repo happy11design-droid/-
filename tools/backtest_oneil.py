@@ -4,7 +4,7 @@
 使い方:
   tools/backtest_oneil.py run [--out FILE]
 
-数値は `書籍ルール/オニール_ルール表.md` の値（P の各項目の出典を参照）。本にない値はClaudeが置いたもので、その旨を注記する。
+数値は `書籍ルール/オニール_ルール表.md` と章ごとの抽出の値（P の各項目の出典を参照）。本にない値はClaudeが置いたもので、その旨を注記する。
   買い（O）: ベース（直前65週の最高値＝ピボットの日から前日まで）の長さ ≧ P["base_min"] 日、調整幅 ≦ P["depth"]、
             終値がピボットを上回り、出来高 ≧ 50日平均 × P["vol"]、RS ≧ P["rs"]、翌日の寄り付き ≦ ピボット ×（1 ＋ P["chase"]）
   M（市場の方向）: 指数の売り抜けの日（前日比 −P["dist_drop"] 以下の下げで出来高が前日より多い日）が直近 P["dist_win"] 日に
@@ -216,6 +216,10 @@ def main():
         rep.header("RSの高い順")
         res = {}
         res["O 本のとおり"] = g(E_oneil, X_oneil(), ok_rot, P["stop"], allow_m)
+        for rs in (80, 90):
+            P["rs"] = rs
+            res[f"O RS≧{rs}（ルール表 p.122-123。本のとおりは85）"] = g(E_oneil, X_oneil(), ok_rot, P["stop"], allow_m)
+        P["rs"] = 85
         res["O 市場の方向をS&P500だけで見る"] = g(E_oneil, X_oneil(), ok_rot, P["stop"], allow_sp)
         res["O 市場の方向なし"] = g(E_oneil, X_oneil(), ok_rot, P["stop"])
         res["O 8週持った後は50日線割れまで持つ"] = g(E_oneil, X_oneil(X_BELOW50), ok_rot, P["stop"], allow_m)
