@@ -76,12 +76,24 @@ def main():
     d = fetch_daily(sym)
     if not d or len(d["c"]) < 260:
         sys.exit(f"{sym} の日足を取得できませんでした（1年分以上が必要）")
-    text = report(sym, d, load_pool(), asof=a.asof, hold=a.hold)
+    pool = load_pool()
+    text = report(sym, d, pool, asof=a.asof, hold=a.hold, wl_rs10=None if a.asof else watchlist_rs10(pool))
     open(a.out, "w", encoding="utf-8").write(text)
     print(text)
 
 
-def report(sym, d, pool_series, asof=None, hold=None, earn=None):
+def watchlist_rs10(pool):
+    """監視銘柄のうち、今日のRSが10番目に高い銘柄のRS（新高値V2は、この値以上＝上位10以内の銘柄だけに当てる）"""
+    import backtest_theme as bth
+    raws = sorted(RAW(x["c"]) for x in pool if len(x["c"]) > 253)
+    wl = bth.load_watchlist()
+    with ThreadPoolExecutor(8) as ex:
+        ws = [x for x in ex.map(fetch_daily, wl) if x and len(x["c"]) > 253]
+    rs = sorted((99 * bisect.bisect_left(raws, RAW(x["c"])) / (len(raws) - 1) for x in ws), reverse=True)
+    return rs[9] if len(rs) >= 10 else None
+
+
+def report(sym, d, pool_series, asof=None, hold=None, earn=None, wl_rs10=None):
     """d（日足）を asof の引けまでに切って3つのルールに当てはめた文章を返す。RSは pool_series（S&P500の日足）の中での百分位"""
     if asof:
         d = cut(d, asof)
@@ -194,12 +206,14 @@ def report(sym, d, pool_series, asof=None, hold=None, earn=None):
     # 新高値（V2、担当: ミネルヴィニ）。2026-09-27 採用
     c2.add_udvr(d)
     uv, h20 = d["udvr"][i], d["hi20c"][i]
-    v2 = c2.V2(i, d) is not None
-    pre = bool(h20 and uv and uv >= 1.3 and (rs or 0) >= 90 and tt and h20 * 0.97 <= c <= h20)
+    top10 = wl_rs10 is None or (rs is not None and rs >= wl_rs10)
+    v2 = top10 and c2.V2(i, d) is not None
+    pre = top10 and bool(h20 and uv and uv >= 1.3 and (rs or 0) >= 90 and tt and h20 * 0.97 <= c <= h20)
     pat_n = "A" if v2 else ("B" if pre else "該当なし")
     w("## 5. 順張り: 新高値（V2、担当: ミネルヴィニ）\n")
     w(f"- 条件: トレンドテンプレート8条件、RS≧90、終値が直前20日の最高値（終値）を上回る、上げ下げの出来高比（直近50日、上げた日の出来高÷下げた日の出来高）≧1.3 → **{mark(v2)}**"
       f"（テンプレート {mark(tt)}、RS {'取得不可' if rs is None else f'{rs:.0f}'}、直前20日の最高値 {h20:.2f}、出来高比 {'取得不可' if uv is None else f'{uv:.2f}'}）")
+    w("- 追加の条件: 監視銘柄のうち、その日のRSが上位10銘柄に入ること（" + ("過去の日付での再現では確認していない" if wl_rs10 is None else f"10位の銘柄のRS {wl_rs10:.0f}、この銘柄のRS {'取得不可' if rs is None else f'{rs:.0f}'} → **{mark(top10)}**") + "）")
     w(f"- スクリプトのパターン判定: **{pat_n}**（A=条件成立、B=ほかの条件を満たし、終値が直前20日の最高値の−3%以内）")
     if v2:
         w("- 注文の目安（A）: 翌日の寄り付きで買い、損切りは買値の15%下、引けで50日線割れの翌日の寄り付きで手じまい")

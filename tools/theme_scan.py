@@ -37,6 +37,7 @@ import backtest_compare2 as c2
 RISK, STOP = 0.02, 0.15
 NDX_URL = "https://api.nasdaq.com/api/quote/list-type/nasdaq100"
 OUT_MAX = 5   # 監視外の注目銘柄（ニュースを調べる）はRSの高い順にこの件数まで
+V2_TOP = 10   # 新高値V2を当てる銘柄: 監視銘柄のうちその日のRSが上位この数まで
 B_MAX = 5   # パターンB（予約注文の候補）は各ルールでこの件数まで
 CRASH_MAX = 7   # 急落の底の候補（市場全体の急落の日は20件を超えることがある）はRSの高い順にこの件数まで
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
@@ -345,6 +346,10 @@ def main():
     w("## 6. 候補（採用したルールの条件が成立＝A、成立が目前＝B）\n")
     w(f"建玉の目安: 1トレードのリスク2%・損切り15% → 1銘柄に資金の{RISK / STOP * 100:.1f}%、同時保有{int(STOP / RISK)}銘柄まで（ユーザー決定）。\n")
     cands = []
+    # 新高値V2は、監視銘柄のうちその日のRSが上位10銘柄だけに当てる（後知恵なしの検証で、絞らないと効かなかった。2026-09-27 ユーザー決定）
+    rs_sorted = sorted(((d["rs"][-1] or 0), s) for s, d in data.items())[::-1]
+    v2_top = {s for _, s in rs_sorted[:V2_TOP]}
+    v2_rank = {s: k + 1 for k, (_, s) in enumerate(rs_sorted)}
     for s, d in data.items():
         i = len(d["c"]) - 1
         if not bt.liquid(d, i, [("0000", "9999")]):
@@ -378,13 +383,13 @@ def main():
                               "order": f"逆指値買い {piv:.2f}（指値の上限 {piv * 1.03:.2f}＝ピボット+3%）。本は上抜けの日の出来高が50日平均の2倍以上（{2 * d['vol50'][i] / 1e4:,.0f}万株）を求める。損切り: 買値の15%下。手じまい: 引けで50日線割れ"})
         # 新高値（V2、担当: ミネルヴィニ）。2026-09-27 採用
         uv, h20 = d["udvr"][i], d["hi20c"][i]
-        if c2.V2(i, d) is not None:
+        if s in v2_top and c2.V2(i, d) is not None:
             cands.append({**base, "pat": "A", "kind": "順張り: 新高値（V2、担当: ミネルヴィニ）",
-                          "why": f"トレンドテンプレート8条件、RS {rs:.0f}（≧90）、終値が直前20日の最高値（終値）{h20:.2f}を上回る、上げ下げの出来高比（50日）{uv:.2f}（≧1.3）",
+                          "why": f"監視銘柄のRS上位{V2_TOP}以内（{v2_rank[s]}位）、トレンドテンプレート8条件、RS {rs:.0f}（≧90）、終値が直前20日の最高値（終値）{h20:.2f}を上回る、上げ下げの出来高比（50日）{uv:.2f}（≧1.3）",
                           "order": "翌日の寄り付きで買い。損切り: 買値の15%下。手じまい: 引けで50日線を割った翌日の寄り付き"})
-        elif h20 and uv and uv >= 1.3 and (rs or 0) >= 90 and bt.trend_template(d, i) and h20 * 0.97 <= d["c"][i] <= h20:
+        elif s in v2_top and h20 and uv and uv >= 1.3 and (rs or 0) >= 90 and bt.trend_template(d, i) and h20 * 0.97 <= d["c"][i] <= h20:
             cands.append({**base, "pat": "B", "kind": "予約: 新高値（V2、担当: ミネルヴィニ）",
-                          "why": f"トレンドテンプレート8条件、RS {rs:.0f}、上げ下げの出来高比 {uv:.2f}、直前20日の最高値（終値）{h20:.2f}まで{(h20 / d['c'][i] - 1) * 100:.1f}%",
+                          "why": f"監視銘柄のRS上位{V2_TOP}以内（{v2_rank[s]}位）、トレンドテンプレート8条件、RS {rs:.0f}、上げ下げの出来高比 {uv:.2f}、直前20日の最高値（終値）{h20:.2f}まで{(h20 / d['c'][i] - 1) * 100:.1f}%",
                           "order": f"逆指値買い {h20:.2f}（本来は終値で判定するルールなので近似）。損切り: 買値の15%下。手じまい: 引けで50日線割れ"})
         if bcr.C3(i, d) is not None:
             cands.append({**base, "pat": "A", "kind": "逆張り: 急落の底（担当: コナーズ）",
