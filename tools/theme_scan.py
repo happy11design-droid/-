@@ -29,9 +29,11 @@ import backtest_swing as bs
 import backtest_theme as bth
 import backtest_trend as bt
 from backtest_regime import up as regime_up
+from backtest_minervini2 import add_pivot
 from backtest_lib import DEFAULT_CACHE, MEMBERS_URL, curl, market_regime, sma
 
 RISK, STOP = 0.02, 0.15
+B_MAX = 5   # パターンB（予約注文の候補）は各ルールでこの件数まで
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
 
 
@@ -128,6 +130,7 @@ def main():
     for s, d in data.items():
         bt.prepare(d)
         bs.prepare(d)
+        add_pivot(d)
         d["sym"] = s
         if len(pool) > 50:
             d["rs"][-1] = 99 * bisect.bisect_left(pool, rs_raw(d["c"])) / (len(pool) - 1)
@@ -249,7 +252,7 @@ def main():
         w("")
 
     # ---- 候補 ----
-    w("## 6. 候補（採用したルールに当てはまった銘柄）\n")
+    w("## 6. 候補（採用したルールの条件が成立＝A、成立が目前＝B）\n")
     w(f"建玉の目安: 1トレードのリスク2%・損切り15% → 1銘柄に資金の{RISK / STOP * 100:.1f}%、同時保有{int(STOP / RISK)}銘柄まで（ユーザー決定）。\n")
     cands = []
     for s, d in data.items():
@@ -259,34 +262,70 @@ def main():
         rs = d["rs"][i]
         base = {"sym": s, "group": wl[s], "close": d["c"][i], "rs": rs, "chg": d["c"][i] / d["c"][i - 1] - 1,
                 "regime": "上昇相場" if regime_up(i, d) else "レンジ"}
+        pb, ii = d["pctb"][i], d["ii21"][i]
+        lvl05 = d["bb_dn"][i] + 0.05 * (d["bb_up"][i] - d["bb_dn"][i])
         if bs.O_method3(i, d):
-            cands.append({**base, "kind": "逆張り: ボリンジャー メソッドIII",
-                          "why": f"%b={d['pctb'][i]:.3f}（<0.05）、21日II%={d['ii21'][i]:+.3f}（>0）",
+            cands.append({**base, "pat": "A", "kind": "逆張り: ボリンジャー メソッドIII",
+                          "why": f"%b={pb:.3f}（<0.05）、21日II%={ii:+.3f}（>0）",
                           "order": f"翌日の寄り付きで買い。損切り: 買値の15%下。手じまい: 引けで上部バンド（今日 {d['bb_up'][i]:.2f}）以上になった翌日の寄り付き"})
-        hi, lo = d["hi"][50][i], d["lo"][50][i]
-        if bt.trend_template(d, i) and hi and d["c"][i] > hi and (hi - lo) / hi <= 0.35 and d["v"][i] >= 2 * d["vol50"][i]:
-            cands.append({**base, "kind": "順張り: ミネルヴィニ（トレンドテンプレート＋上抜け）",
-                          "why": f"ピボット（直前50日の高値）{hi:.2f}を出来高{d['v'][i] / d['vol50'][i]:.1f}倍で上抜け、ベースの幅{(hi - lo) / hi * 100:.0f}%",
-                          "order": f"翌日の寄り付きで買い。ただし寄り付きが{hi * 1.03:.2f}（ピボット+3%）を超えたら見送り。損切り: 買値の15%下。手じまい: 引けで50日線を割った翌日の寄り付き"})
-        if dt.date.fromisoformat(day).weekday() == 4 and bt.E_weinstein(10, ma="10")(i, d) is not None:
-            cands.append({**base, "kind": "順張り: ワインスタイン（10週の高値上抜け）",
-                          "why": f"週足の終値が直前10週の高値{d['w_hi_prev'][10][i]:.2f}を出来高{d['w_vol'][i] / d['w_vol4'][i]:.1f}倍で上抜け、10週線が上向き",
-                          "order": "翌日の寄り付きで買い。損切り: 買値の15%下。手じまい: 週足の終値が10週線を割った翌取引日の寄り付き"})
+        elif pb is not None and ii is not None and ii > 0 and pb < 0.2:
+            cands.append({**base, "pat": "B", "kind": "予約: ボリンジャー メソッドIII（%bが0.05未満に近い）",
+                          "why": f"%b={pb:.3f}（0.05まであと少し）、21日II%={ii:+.3f}（>0）",
+                          "order": f"指値買い {lvl05:.2f}（今日のバンドで%b=0.05になる価格。本のルールは引け値で判定するので近似）。損切り: 買値の15%下。手じまい: 引けで上部バンド以上"})
+        kh = d["piv_i"][i]
+        tt = bt.trend_template(d, i)
+        if kh is not None and i - kh >= 15 and tt:
+            piv = d["h"][kh]
+            depth = (piv - min(d["l"][kh:i + 1])) / piv
+            vr = d["v"][i] / d["vol50"][i]
+            if depth <= 0.35 and d["c"][i] > piv and vr >= 2:
+                cands.append({**base, "pat": "A", "kind": "順張り: ミネルヴィニ（トレンドテンプレート＋ベースの上抜け）",
+                              "why": f"ピボット（ベースの高値、{d['date'][kh]}）{piv:.2f}を出来高{vr:.1f}倍で上抜け、ベース{i - kh}日・調整幅{depth * 100:.0f}%",
+                              "order": f"翌日の寄り付きで買い。ただし寄り付きが{piv * 1.03:.2f}（ピボット+3%）を超えたら見送り。損切り: 買値の15%下。手じまい: 引けで50日線を割った翌日の寄り付き"})
+            elif depth <= 0.35 and piv * 0.95 <= d["c"][i] <= piv:
+                cands.append({**base, "pat": "B", "kind": "予約: ミネルヴィニ（ピボットの手前）",
+                              "why": f"ピボット（ベースの高値、{d['date'][kh]}）{piv:.2f}まで{(piv / d['c'][i] - 1) * 100:.1f}%、ベース{i - kh}日・調整幅{depth * 100:.0f}%",
+                              "order": f"逆指値買い {piv:.2f}（指値の上限 {piv * 1.03:.2f}＝ピボット+3%）。本は上抜けの日の出来高が50日平均の2倍以上（{2 * d['vol50'][i] / 1e4:,.0f}万株）を求める。損切り: 買値の15%下。手じまい: 引けで50日線割れ"})
+        if dt.date.fromisoformat(day).weekday() == 4:
+            if bt.E_weinstein(10, ma="10")(i, d) is not None:
+                cands.append({**base, "pat": "A", "kind": "順張り: ワインスタイン（10週の高値上抜け）",
+                              "why": f"週足の終値が直前10週の高値{d['w_hi_prev'][10][i]:.2f}を出来高{d['w_vol'][i] / d['w_vol4'][i]:.1f}倍で上抜け、10週線が上向き",
+                              "order": "翌日の寄り付きで買い。損切り: 買値の15%下。手じまい: 週足の終値が10週線を割った翌取引日の寄り付き"})
+            else:
+                h10, m10, m10p = d["w_hi_prev"][10][i], d["w_ma10"][i], d["w_ma10_1"][i]
+                if h10 and m10 and m10p and m10 > m10p and h10 * 0.95 <= d["c"][i] <= h10:
+                    cands.append({**base, "pat": "B", "kind": "予約: ワインスタイン（10週の高値の手前）",
+                                  "why": f"直前10週の高値{h10:.2f}まで{(h10 / d['c'][i] - 1) * 100:.1f}%、10週線が上向き",
+                                  "order": f"逆指値買い {h10:.2f}（本のルールは週足の終値で判定するので近似。上抜けの週の出来高は直前4週の平均の2倍以上）。損切り: 買値の15%下。手じまい: 週足の終値が10週線割れ"})
     if not cands:
         w("本日は該当なし（著者への送信は不要）。\n")
     else:
-        cands.sort(key=lambda x: -(x["rs"] or 0))
+        cands.sort(key=lambda x: (x["pat"], -(x["rs"] or 0)))
+        # Bはルールごとに RSの高い順で5件まで（NotebookLMの1日の上限とニュース調査の時間のため）
+        nb, kept = {}, []
+        for x in cands:
+            if x["pat"] == "B":
+                k = x["kind"].split("（")[0]
+                nb[k] = nb.get(k, 0) + 1
+                if nb[k] > B_MAX:
+                    continue
+            kept.append(x)
+        dropped = len(cands) - len(kept)
+        cands = kept
         with ThreadPoolExecutor(4) as ex:
             eds = dict(zip([x["sym"] for x in cands], ex.map(earnings_date, [x["sym"] for x in cands])))
         for k_, v in eds.items():
             if re.fullmatch(r"\d{4}-\d{2}-\d{2}", v):
                 n = (dt.date.fromisoformat(v) - dt.date.fromisoformat(day)).days
                 eds[k_] = f"{v}（{n}日後）" + ("**決算が近い**" if 0 <= n <= 14 else "")
-        w("| 銘柄 | グループ | 種類 | 終値 | 前日比 | RS | 局面 | 当てはまった条件 | 次回決算予定日 | 注文の目安 |")
-        w("|---|---|---|---|---|---|---|---|---|---|")
+        w("パターン: A＝最新の足で採用ルールの条件が成立（翌日の寄り付きで成行）、B＝条件の成立が目前（引け後に予約注文を置く）。\n")
+        w("| 銘柄 | グループ | パターン | 種類 | 終値 | 前日比 | RS | 局面 | 当てはまった条件 | 次回決算予定日 | 注文の目安 |")
+        w("|---|---|---|---|---|---|---|---|---|---|---|")
         for x in cands:
             rs_ = "取得不可" if x["rs"] is None else f"{x['rs']:.0f}"
-            w(f"| {x['sym']} | {x['group']} | {x['kind']} | {x['close']:.2f} | {pct(x['chg'])} | {rs_} | {x['regime']} | {x['why']} | {eds[x['sym']]} | {x['order']} |")
+            w(f"| {x['sym']} | {x['group']} | {x['pat']} | {x['kind']} | {x['close']:.2f} | {pct(x['chg'])} | {rs_} | {x['regime']} | {x['why']} | {eds[x['sym']]} | {x['order']} |")
+        if dropped:
+            w(f"\n- パターンBは各ルールでRSの高い順に{B_MAX}件までとし、{dropped}件を省いた。")
         w("\n- RS≧80の押し目（ボリンジャーIII）は、バックテストで成績がより安定していた（PF3.27、最大下落20%）。")
     text = "\n".join(L) + "\n"
     os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)

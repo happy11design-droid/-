@@ -66,7 +66,8 @@ for k in ボリンジャー ミネルヴィニ ワインスタイン; do
     if [[ ${#IMAGES[@]} -gt 0 ]] && ! nlm source add "${NB[$k]}" "${IMAGES[@]}" > "$D/answers/$k.img" 2>&1; then
       echo "（チャート画像を追加できませんでした: $(tail -1 "$D/answers/$k.img")）" > "$D/answers/$k.imgerr"
     fi
-    nlm generate-chat --citations off --prompt-file "$D/prompt.txt" "${NB[$k]}" > "$D/answers/$k.txt" 2> "$D/answers/$k.err" \
+    # --web: NotebookLMの画面に会話の履歴を残す（運用メモ 2026-09-22。付けないと画面で続きの質問ができない）
+    nlm generate-chat --citations off --web --prompt-file "$D/prompt.txt" "${NB[$k]}" > "$D/answers/$k.txt" 2> "$D/answers/$k.err" \
       || echo "送信に失敗: $(tail -1 "$D/answers/$k.err")" >> "$D/answers/$k.txt"
     # 毎朝のRoutine（テキストのみ）がこの銘柄の図を見て別の銘柄を判定しないよう、回答後に画像を外す
     del_images "${NB[$k]}" || true ) &

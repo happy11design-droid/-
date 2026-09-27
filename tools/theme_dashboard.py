@@ -72,11 +72,11 @@ def inline(t):
 
 
 def verdict_class(v):
-    if any(x in v for x in ("注文する", "保有を続ける", "ステージ2")):
-        return "good"
-    if any(x in v for x in ("早めに手じまう", "ステージ4")):
+    if v.startswith("売り") or any(x in v for x in ("早めに手じまう", "ステージ4")):
         return "bad"
-    if any(x in v for x in ("見送る", "ステージ3")):
+    if v.startswith("買い") or any(x in v for x in ("注文する", "保有継続", "保有を続ける", "ステージ2")):
+        return "good"
+    if any(x in v for x in ("様子見", "見送る", "ステージ3")):
         return "warn"
     return ""
 
@@ -153,9 +153,10 @@ def main():
     news = parts.get("ニュース（サブエージェントの調査）", "")
 
     warn = re.search(r"警告（[^）]*）:\s*\*\*([^*]+)\*\*", scan)
-    orders = [c for c in rec["candidates"] if "注文" in c["verdict"]]
-    skips = [c for c in rec["candidates"] if "見送" in c["verdict"]]
-    exits = [h for h in rec["holdings"] if "早め" in h["verdict"]]
+    orders = [c for c in rec["candidates"] if c["verdict"] == "買い" or "注文" in c["verdict"]]
+    reserves = [c for c in rec["candidates"] if c["verdict"].startswith("買い（予約")]
+    skips = [c for c in rec["candidates"] if "見送" in c["verdict"] or "様子見" in c["verdict"]]
+    exits = [h for h in rec["holdings"] if "早め" in h["verdict"] or h["verdict"].startswith("売り")]
 
     def names(xs):
         return "、".join(x["sym"] for x in xs) if xs else "なし"
@@ -174,10 +175,11 @@ def main():
     if warn:
         cls = "bad" if "出ている" in warn.group(1) and "出ていない" not in warn.group(1) else "good"
         w(f'<div class="row"><span class="label">早めの警告</span><span class="pill {cls}">{html.escape(warn.group(1))}</span></div>')
-    w(f'<div class="row"><span class="label">注文する</span><span class="pill {"good" if orders else ""}">{html.escape(names(orders))}</span></div>')
-    w(f'<div class="row"><span class="label">見送る</span><span class="pill {"warn" if skips else ""}">{html.escape(names(skips))}</span></div>')
-    w(f'<div class="row"><span class="label">早めに手じまう</span><span class="pill {"bad" if exits else ""}">{html.escape(names(exits))}</span></div>')
-    for c in orders:
+    w(f'<div class="row"><span class="label">買い（成行）</span><span class="pill {"good" if orders else ""}">{html.escape(names(orders))}</span></div>')
+    w(f'<div class="row"><span class="label">買い（予約）</span><span class="pill {"good" if reserves else ""}">{html.escape(names(reserves))}</span></div>')
+    w(f'<div class="row"><span class="label">様子見</span><span class="pill {"warn" if skips else ""}">{html.escape(names(skips))}</span></div>')
+    w(f'<div class="row"><span class="label">売り（保有中）</span><span class="pill {"bad" if exits else ""}">{html.escape(names(exits))}</span></div>')
+    for c in orders + reserves:
         m = re.search(r"\| " + re.escape(c["sym"]) + r" \|[^\n]*", scan[scan.find("## 6."):] if "## 6." in scan else "")
         if m:
             order = m.group(0).strip("|").split("|")[-1].strip()

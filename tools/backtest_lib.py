@@ -35,8 +35,9 @@ COSTS = (0.0, 0.0005, 0.001)   # 片道
 # ---------- 取得 ----------
 
 def curl(url):
-    r = subprocess.run(["curl", "-sS", "--max-time", "30", "-A", UA, url], capture_output=True, text=True)
-    return r.stdout if r.returncode == 0 else ""
+    # --compressed: サイトが圧縮した応答（gzip）を返すことがあり、そのままでは文字として読めず落ちた（2026-09-27）
+    r = subprocess.run(["curl", "-sS", "--compressed", "--max-time", "30", "-A", UA, url], capture_output=True)
+    return r.stdout.decode("utf-8", errors="replace") if r.returncode == 0 else ""
 
 
 def fetch_one(symbol, path):

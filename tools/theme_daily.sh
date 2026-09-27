@@ -88,6 +88,8 @@ open(os.path.join(d, "prompt_theme.txt"), "w", encoding="utf-8").write(p)
 PY
 
 JOBS=()
+# --web は付けない: 同じノートブックへ複数のプロンプトを並列に送るため、サーバー側の同じ会話に混ざると
+# 別の銘柄のやり取りが判定に影響しうる。結果は毎朝のページ（Artifact）で見る（個別分析 theme_single.sh は --web を付ける）。
 send() {  # $1=ノートブックID $2=プロンプト $3=回答ファイル
   ( nlm generate-chat --citations off --prompt-file "$2" "$1" > "$3" 2> "$3.err" || echo "送信に失敗: $(tail -1 "$3.err")" >> "$3" ) &
   JOBS+=($!)

@@ -91,7 +91,7 @@ def main():
             else:
                 if not any(x.startswith(f"## {sym}（候補") for x in b):
                     b.append(f"## {sym}（候補、{r['グループ']}）")
-                b.append(f"- 種類: {r['種類']}／当てはまった条件: {r['当てはまった条件']}／RS: {r['RS']}／銘柄の局面: {r.get('局面', '記載なし')}／次回決算予定日: {r['次回決算予定日']}")
+                b.append(f"- パターン: {r.get('パターン', 'A')}（A＝条件成立、B＝成立が目前で予約注文の候補）／種類: {r['種類']}／当てはまった条件: {r['当てはまった条件']}／RS: {r['RS']}／銘柄の局面: {r.get('局面', '記載なし')}／次回決算予定日: {r['次回決算予定日']}")
                 b.append(f"- 注文の目安（スクリプトの計算）: {r['注文の目安']}")
         b.append("- ニュース（サブエージェントの調査）:\n" + news.get(sym, "調査なし"))
         b.append(open(files[sym], encoding="utf-8").read().strip())

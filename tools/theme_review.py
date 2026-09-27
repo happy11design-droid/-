@@ -6,7 +6,8 @@
       毎朝の scan.md と著者の回答（answers/*.txt）から、候補・保有銘柄と著者の結論を record.json に書き出す（tools/theme_daily.sh send が呼ぶ）。
   tools/theme_review.py review <record.json を置いたディレクトリ> [--since YYYY-MM-DD] [--out FILE]
       記録した候補を、採用したルールどおりに売買していたらどうなったか（翌日の寄り付きで買い、損切り15%の逆指値、ルールの手じまい条件）を
-      最新の株価で計算し、著者の結論（【注文する】【見送る】）ごとに集計する。保有銘柄の【早めに手じまう】は、ルールどおり持ち続けた場合と比べる。
+      最新の株価で計算し、著者の結論（【買い】【買い（予約）】【様子見】、2026-09-27以前は【注文する】【見送る】）ごとに集計する。
+      予約注文（パターンB）は、翌日の高値・安値が逆指値・指値に届いたときだけ約定したとみなす。保有銘柄の【売り】は、ルールどおり持ち続けた場合と比べる。
 計算は数値の事実だけで、Claudeの売買判断は含まない。
 """
 import argparse
@@ -52,7 +53,7 @@ def verdicts(d):
             if m:
                 sym, hold = m.group(1), "保有" in line
                 continue
-            m = re.search(r"結論.*?【([^】]+)】", line)
+            m = re.search(r"(?:結論|投資判断).*?【([^】]+)】", line)
             if sym and m and (sym, hold) not in out:
                 out[(sym, hold)] = (m.group(1), author)
     return out
@@ -72,9 +73,14 @@ def cmd_record(a):
                 break
     cands = []
     for r in table_rows(scan, "## 6."):
-        lim = re.search(r"寄り付きが([0-9.]+)（ピボット", r.get("注文の目安", ""))
+        od = r.get("注文の目安", "")
+        lim = re.search(r"寄り付きが([0-9.]+)（ピボット", od) or re.search(r"指値の上限 ([0-9.]+)", od)
+        stp = re.search(r"逆指値買い ([0-9.]+)", od)
+        lmt = re.search(r"(?<!逆)指値買い ([0-9.]+)", od)
         vv = v.get((r["銘柄"], False), ("未判定", ""))
-        cands.append({"sym": r["銘柄"], "kind": r["種類"], "close": float(r["終値"]), "limit": float(lim.group(1)) if lim else None,
+        cands.append({"sym": r["銘柄"], "kind": r["種類"], "pattern": r.get("パターン", "A"), "close": float(r["終値"]),
+                      "limit": float(lim.group(1)) if lim else None,
+                      "stop_buy": float(stp.group(1)) if stp else None, "limit_buy": float(lmt.group(1)) if lmt else None,
                       "verdict": vv[0], "author": vv[1]})
     holds = []
     for r in table_rows(scan, "## 5."):
@@ -156,9 +162,20 @@ def cmd_review(a):
             if i + 1 >= len(s["c"]):
                 rows.append({**c, "date": r["trade_date"], "status": "まだ寄り付き前"})
                 continue
-            px = s["o"][i + 1]
+            o1, h1, l1 = s["o"][i + 1], s["h"][i + 1], s["l"][i + 1]
+            px = o1
+            if c.get("stop_buy"):          # パターンB: 逆指値買い（高値が届いたら max(始値, 逆指値) で約定）
+                if h1 < c["stop_buy"]:
+                    rows.append({**c, "date": r["trade_date"], "status": f"逆指値{c['stop_buy']:.2f}に届かず約定せず"})
+                    continue
+                px = max(o1, c["stop_buy"])
+            elif c.get("limit_buy"):       # パターンB: 指値買い（安値が届いたら min(始値, 指値) で約定）
+                if l1 > c["limit_buy"]:
+                    rows.append({**c, "date": r["trade_date"], "status": f"指値{c['limit_buy']:.2f}に届かず約定せず"})
+                    continue
+                px = min(o1, c["limit_buy"])
             if c.get("limit") and px > c["limit"]:
-                rows.append({**c, "date": r["trade_date"], "status": f"寄り付き{px:.2f}が上限{c['limit']:.2f}を超えたため買わない"})
+                rows.append({**c, "date": r["trade_date"], "status": f"買値{px:.2f}が上限{c['limit']:.2f}を超えたため買わない"})
                 continue
             rule = "ボリンジャー" if "ボリンジャー" in c["kind"] else "ミネルヴィニ" if "ミネルヴィニ" in c["kind"] else "ワインスタイン"
             od, op, why = follow(rule, s, i + 1, px, px * (1 - STOP))
@@ -167,13 +184,13 @@ def cmd_review(a):
     w("## 2. 候補（著者の結論ごと）\n")
     w("| 著者の結論 | 件数 | 勝ち | 平均の損益 | 合計の損益（1件＝同じ金額として） |")
     w("|---|---|---|---|---|")
-    for vd in ("注文する", "見送る", "未判定"):
+    for vd in ("買い", "買い（予約）", "様子見", "注文する", "見送る", "未判定"):
         g = [x for x in rows if x["verdict"] == vd and "ret" in x]
         if g:
             w(f"| {vd} | {len(g)} | {sum(1 for x in g if x['ret'] > 0)} | {sum(x['ret'] for x in g) / len(g) * 100:+.2f}% | {sum(x['ret'] for x in g) * 100:+.1f}% |")
     if not rows:
         w("| 候補なし | 0 | | | |")
-    w("\n| シグナルの日 | 銘柄 | 種類 | 著者の結論 | 買値（翌日の寄り付き） | 手じまい | 損益 | 状態 |")
+    w("\n| シグナルの日 | 銘柄 | 種類 | 著者の結論 | 買値（翌日。予約注文は約定した価格） | 手じまい | 損益 | 状態 |")
     w("|---|---|---|---|---|---|---|---|")
     for x in rows:
         if "ret" in x:
@@ -181,14 +198,14 @@ def cmd_review(a):
         else:
             w(f"| {x['date']} | {x['sym']} | {x['kind']} | {x['verdict']} | | | | {x['status']} |")
 
-    w("\n## 3. 保有銘柄で【早めに手じまう】となったもの\n")
+    w("\n## 3. 保有銘柄で【売り】（旧【早めに手じまう】）となったもの\n")
     w("その日の翌日の寄り付きで手じまった場合と、ルールどおり持ち続けた場合の比較。\n")
     w("| 日 | 銘柄 | ルール | 翌日の寄り付きで手じまい | ルールどおり（手じまい日・価格・理由） | 差（早めの手じまい − ルール） |")
     w("|---|---|---|---|---|---|")
     n_early = 0
     for r in recs:
         for h in r["holdings"]:
-            if "早め" not in h["verdict"]:
+            if not ("早め" in h["verdict"] or h["verdict"].startswith("売り")):
                 continue
             s = data.get(h["sym"])
             if not s or r["trade_date"] not in s["date"]:
