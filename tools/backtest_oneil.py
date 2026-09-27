@@ -35,42 +35,80 @@ from backtest_regime import X_BELOW50, freq_table, srt
 
 RISK, STOP15, COST = 0.02, 0.15, COSTS[2]
 P = {
-    "base_min": 35, "depth": 0.33, "vol": 1.5, "rs": 80, "chase": 0.05,
-    "dist_drop": 0.002, "dist_win": 25, "dist_max": 5, "dist_expire": 0.05, "ftd_day": 4, "ftd_up": 0.0125,
-    "stop": 0.08, "take": 0.20, "fast_days": 15, "fast_gain": 0.20, "hold_days": 40,
+    # 買い（第2章 p.63・65・67、第19章 p.274）
+    "base_min": 35,      # ベースの長さ ≧ 7週（取っ手付きカップ 7〜65週）
+    "depth": 0.33,       # 調整幅 ≦ 33%（取っ手付きカップ 12〜15%〜33%）
+    "prior": 0.30,       # ベースの前の上昇 ≧ 30%（ピボット ≧ ベースの前の安値×1.3。安値を探す期間 prior_win はClaudeが置いた）
+    "prior_win": 130,
+    "vol": 1.5,          # 上抜けの日の出来高 ≧ 平均×1.5（40〜50%増、第19章は50%以上）
+    "rs": 85,            # RS ≧ 85（第19章）
+    "chase": 0.05,       # ピボットから5%より上では買わない
+    "min_price": 15,     # 株価 ≧ 15ドル（ナスダック15〜300ドル、NYSE 20〜300ドル。10ドル以下は避ける）
+    # 市場の方向（第9章 p.139・147）。どれか1つの指数で売り抜けが4〜5日あれば調整局面、どれか1つの指数でフォロースルーがあれば上昇局面
+    "dist_drop": 0.002,  # 売り抜けの日: 出来高が前日より多く、指数が下げた日（下げ幅0.2%はClaudeが置いた。本は「失速」も含む）
+    "dist_win": 25,      # 4〜5週
+    "dist_max": 5,       # 4〜5日
+    "dist_expire": None, # 売り抜けの日を、その後の上昇で消す（本にない。None＝使わない）
+    "ftd_day": 4,        # 反発の4日目以降
+    "ftd_up": 0.01,      # フォロースルーの上げ幅（本は昔の1%から「大幅に引き上げた」とし、新しい値を書いていない）
+    # 売り（第10章 p.164、第11章 p.178・187）
+    "stop": 0.08,        # 買値から8%下で損切り
+    "take": 0.20,        # 20%で利益確定
+    "fast_days": 15,     # 1〜3週間で
+    "fast_gain": 0.20,   # 20%上げた銘柄は
+    "hold_days": 40,     # 最低8週間持つ
 }
 
 
 # ---------- 市場の方向（M） ----------
-def market_ok(idx):
-    """{日付: 新しい買いをしてよいか}。売り抜けの日の数とフォロースルーの日で上昇局面・調整局面を切り替える"""
-    c, v, d = idx["c"], idx["v"], idx["date"]
-    out, up, dist, low_i, rally = {}, True, [], None, None
-    for i in range(1, len(c)):
-        chg = c[i] / c[i - 1] - 1
-        if up:
-            if chg <= -P["dist_drop"] and v[i] > v[i - 1]:
-                dist.append(i)
-            dist = [k for k in dist if k > i - P["dist_win"] and (not P["dist_expire"] or c[i] < c[k] * (1 + P["dist_expire"]))]
-            if len(dist) >= P["dist_max"]:
-                up, low_i, rally, dist = False, i, None, []
-        else:
-            if c[i] < c[low_i]:
-                low_i, rally = i, None          # 安値を更新したら反発の数え直し
-            elif rally is None and chg > 0:
-                rally = i                       # 反発の1日目
-            if rally is not None and i - rally + 1 >= P["ftd_day"] and chg >= P["ftd_up"] and v[i] > v[i - 1]:
-                up, dist = True, []
-        out[d[i]] = up
+def market_ok(idxs):
+    """{日付: 新しい買いをしてよいか}。idxs は指数の株価の一覧。
+    上昇局面で、どれか1つの指数の売り抜けの日が直近 dist_win 日に dist_max 日以上 → 調整局面。
+    調整局面で、どれか1つの指数が安値の後の反発 ftd_day 日目以降に ftd_up 以上上げ、出来高が前日より多い → 上昇局面"""
+    dates = sorted(set.intersection(*(set(x["date"]) for x in idxs)))
+    pos = [{d: k for k, d in enumerate(x["date"])} for x in idxs]
+    out, up = {}, True
+    dist = [[] for _ in idxs]
+    low = [None] * len(idxs)
+    rally = [None] * len(idxs)
+    for d in dates:
+        flip = False
+        for n, x in enumerate(idxs):
+            i = pos[n][d]
+            if i == 0:
+                continue
+            c, v = x["c"], x["v"]
+            chg = c[i] / c[i - 1] - 1
+            if up:
+                if chg <= -P["dist_drop"] and v[i] > v[i - 1]:
+                    dist[n].append(i)
+                dist[n] = [k for k in dist[n] if k > i - P["dist_win"] and (not P["dist_expire"] or c[i] < c[k] * (1 + P["dist_expire"]))]
+                if len(dist[n]) >= P["dist_max"]:
+                    flip = True
+            else:
+                if low[n] is None or c[i] < c[low[n]]:
+                    low[n], rally[n] = i, None     # 安値を更新したら反発の数え直し
+                elif rally[n] is None and chg > 0:
+                    rally[n] = i                   # 反発の1日目
+                if rally[n] is not None and i - rally[n] + 1 >= P["ftd_day"] and chg >= P["ftd_up"] and v[i] > v[i - 1]:
+                    flip = True
+        if flip:
+            up = not up
+            dist = [[] for _ in idxs]
+            low = [None] * len(idxs)
+            rally = [None] * len(idxs)
+        out[d] = up
     return out
 
 
 # ---------- 買い ----------
 def E_oneil(i, s):
     kh = s["piv_i"][i]
-    if kh is None or i + 1 >= len(s["c"]) or i - kh < P["base_min"] or (s["rs"][i] or 0) < P["rs"]:
+    if kh is None or i + 1 >= len(s["c"]) or i - kh < P["base_min"] or (s["rs"][i] or 0) < P["rs"] or s["c"][i] < P["min_price"]:
         return None
     piv = s["h"][kh]
+    if kh < P["prior_win"] or piv < min(s["l"][kh - P["prior_win"]:kh]) * (1 + P["prior"]):
+        return None
     if s["c"][i] <= piv or s["o"][i + 1] > piv * (1 + P["chase"]):
         return None
     if (piv - min(s["l"][kh:i])) / piv > P["depth"]:
@@ -94,6 +132,18 @@ def X_oneil(after=None):
     return f
 
 
+def X_after_weeks(n):
+    return lambda j, s, k, px: k >= n * 5
+
+
+def X_or(*fs):
+    return lambda j, s, k, px: any(f(j, s, k, px) for f in fs)
+
+
+def X_market(allow):
+    return lambda j, s, k, px: not allow(s["date"][j])
+
+
 def main():
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -106,10 +156,10 @@ def main():
         c2.prep(d)
         d["sym"] = s
     bt.add_rs_rank(data, members)
-    M = {k: market_ok(load_prices(a.cache, k)) for k in ("^GSPC", "^IXIC")}
-    allow_sp = lambda d: M["^GSPC"].get(d, True)
-    allow_nq = lambda d: M["^IXIC"].get(d, True)
-    allow_both = lambda d: allow_sp(d) and allow_nq(d)
+    IDX = {k: load_prices(a.cache, k) for k in ("^GSPC", "^IXIC")}
+    M = {"S&P500": market_ok([IDX["^GSPC"]]), "両方": market_ok(list(IDX.values()))}
+    allow_sp = lambda d: M["S&P500"].get(d, True)
+    allow_m = lambda d: M["両方"].get(d, True)   # 本のとおり（どれか1つの指数で判断）
 
     u = json.load(open(os.path.join(a.cache, "universe.json")))
     ex = os.path.join(a.cache, "industry_extra.json")
@@ -153,7 +203,7 @@ def main():
     w("# オニール『オニールの成長株発掘法』のルールを採用するかのバックテスト\n")
     w(__doc__.split("\n", 5)[5].strip() + "\n")
     w("使った数値: " + "、".join(f"{k}={v}" for k, v in P.items()) + "\n")
-    w(f"市場の方向が上昇局面だった日の割合（2015年〜）: S&P500 {up_days['^GSPC'] * 100:.0f}%、NASDAQ総合 {up_days['^IXIC'] * 100:.0f}%\n")
+    w(f"市場の方向が上昇局面だった日の割合（2015年〜）: S&P500だけで見る {up_days['S&P500'] * 100:.0f}%、S&P500とNASDAQ総合のどちらかで見る（本のとおり） {up_days['両方'] * 100:.0f}%\n")
     w("建玉はすべて同じ（1銘柄に資金の13.3%、同時に7銘柄まで。損切りが8%のオニールでも同じ建玉にそろえて比べる）。片道0.1%。データの最終日に保有中の売買は数えない。\n")
     for lab, lo in (("2015年〜", start), ("直近3年", dt.date.today().replace(year=dt.date.today().year - 3).isoformat())):
         dd = [d for d in days if d >= lo]
@@ -165,12 +215,15 @@ def main():
         w("\n### 1. オニールの買いと売り\n")
         rep.header("RSの高い順")
         res = {}
-        res["O 本のとおり（M: S&P500）"] = g(E_oneil, X_oneil(), ok_rot, P["stop"], allow_sp)
-        res["O 本のとおり（M: S&P500とNASDAQの両方）"] = g(E_oneil, X_oneil(), ok_rot, P["stop"], allow_both)
+        res["O 本のとおり"] = g(E_oneil, X_oneil(), ok_rot, P["stop"], allow_m)
+        res["O 市場の方向をS&P500だけで見る"] = g(E_oneil, X_oneil(), ok_rot, P["stop"], allow_sp)
         res["O 市場の方向なし"] = g(E_oneil, X_oneil(), ok_rot, P["stop"])
-        res["O 8週持った後は50日線割れまで持つ（M: S&P500）"] = g(E_oneil, X_oneil(X_BELOW50), ok_rot, P["stop"], allow_sp)
-        res["O 買いだけオニール、売りは今のルール（50日線割れ・損切り15%）"] = g(E_oneil, X_BELOW50, ok_rot, STOP15, allow_sp)
-        res["O 監視銘柄のRS上位10だけ（M: S&P500）"] = g(E_oneil, X_oneil(), ok_top(10), P["stop"], allow_sp)
+        res["O 8週持った後は50日線割れまで持つ"] = g(E_oneil, X_oneil(X_BELOW50), ok_rot, P["stop"], allow_m)
+        res["O 13週たっても利益確定・損切りにならなければ売る"] = g(E_oneil, X_or(X_oneil(), X_after_weeks(13)), ok_rot, P["stop"], allow_m)
+        res["O 市場が調整局面に変わったら持ち株も売る"] = g(E_oneil, X_or(X_oneil(), X_market(allow_m)), ok_rot, P["stop"], allow_m)
+        res["O 買いだけオニール、売りは今のルール（50日線割れ・損切り15%）"] = g(E_oneil, X_BELOW50, ok_rot, STOP15, allow_m)
+        res["O 監視銘柄のRS上位10だけ"] = g(E_oneil, X_oneil(), ok_top(10), P["stop"], allow_m)
+        res["O 監視銘柄に限らずS&P500全体から探す"] = g(E_oneil, X_oneil(), bt.liquid, P["stop"], allow_m)
         for k, t in res.items():
             rep.line(k, t, STOP15)
         w("\n### 2. 今の採用ルールに、オニールの売り・市場の方向を当てる\n")
@@ -179,10 +232,10 @@ def main():
         mb = g(bm2.E_base(2.0), X_BELOW50, ok_rot, STOP15)
         cmp_ = {
             "新高値V2（今のルール: RS上位10・50日線割れ・損切り15%）": v2,
-            "新高値V2＋市場の方向（S&P500）": g(c2.V2, X_BELOW50, ok_top(10), STOP15, allow_sp),
+            "新高値V2＋市場の方向（オニール）": g(c2.V2, X_BELOW50, ok_top(10), STOP15, allow_m),
             "新高値V2・売りをオニール（+20%利確・8週・損切り8%）": g(c2.V2, X_oneil(), ok_top(10), P["stop"]),
             "ミネルヴィニのベース（今のルール）": mb,
-            "ミネルヴィニのベース＋市場の方向（S&P500）": g(bm2.E_base(2.0), X_BELOW50, ok_rot, STOP15, allow_sp),
+            "ミネルヴィニのベース＋市場の方向（オニール）": g(bm2.E_base(2.0), X_BELOW50, ok_rot, STOP15, allow_m),
         }
         for k, t in cmp_.items():
             rep.line(k, t, STOP15)
@@ -190,15 +243,33 @@ def main():
         k3 = g(bcr.C3, c2.X_MA5, ok_rot, STOP15, mh=60)
         base = b3 + mb + k3
         combos = [("今の採用ルール（ボリンジャーIII＋ミネルヴィニ＋急落の底＋新高値V2）", srt(base + v2)),
-                  ("今の採用ルール＋オニール（本のとおり）", srt(base + v2 + res["O 本のとおり（M: S&P500）"])),
-                  ("新高値V2をオニール（本のとおり）に置き換え", srt(base + res["O 本のとおり（M: S&P500）"])),
-                  ("新高値V2をオニール（RS上位10）に置き換え", srt(base + res["O 監視銘柄のRS上位10だけ（M: S&P500）"]))]
+                  ("今の採用ルール＋オニール（本のとおり）", srt(base + v2 + res["O 本のとおり"])),
+                  ("新高値V2をオニール（本のとおり）に置き換え", srt(base + res["O 本のとおり"])),
+                  ("新高値V2をオニール（RS上位10）に置き換え", srt(base + res["O 監視銘柄のRS上位10だけ"])),
+                  ("今の採用ルール＋オニール（S&P500全体から探す）", srt(base + v2 + res["O 監視銘柄に限らずS&P500全体から探す"])),
+                  ("今の採用ルールの新高値V2に市場の方向（オニール）を当てる", srt(base + cmp_["新高値V2＋市場の方向（オニール）"]))]
         w("\n### 3. ほかの採用ルールとの組み合わせ（7銘柄の枠を共有）\n")
         rep.header("RSの高い順")
         for k, t in combos:
             rep.line(k, t, STOP15)
         w("")
         freq_table(w, rep, combos, dd, len(dd) / 252)
+
+    # 市場の方向の数値を変えた場合（本は売り抜けを「4〜5日」とし、フォロースルーの上げ幅の新しい値を書いていない）
+    w("\n## 市場の方向の数値を変えた場合（後知恵なしの監視銘柄、2015年〜）\n")
+    rep = Reporter(w, data, days, [("前半", start, "2020-12-31"), ("後半", "2021-01-01", end)], len(days) / 252, cost=COST, risk=RISK)
+    rep.header("RSの高い順")
+    keep = dict(P)
+    for dm in (4, 5):
+        for fu in (0.01, 0.017):
+            P["dist_max"], P["ftd_up"] = dm, fu
+            mm = market_ok(list(IDX.values()))
+            al = lambda d, mm=mm: mm.get(d, True)
+            share = sum(1 for d in days if mm.get(d, True)) / len(days)
+            tag = f"売り抜け{dm}日・フォロースルー+{fu * 100:.1f}%（上昇局面 {share * 100:.0f}%）"
+            rep.line(f"O 本のとおり・{tag}", gen_trades(data, members, E_oneil, X_oneil(), start, end, ok=ok_rot, fill="open", allow=al, max_hold=500, stop_pct=P["stop"]), STOP15)
+            rep.line(f"新高値V2＋市場の方向・{tag}", gen_trades(data, members, c2.V2, X_BELOW50, start, end, ok=ok_top(10), fill="open", allow=al, max_hold=500, stop_pct=STOP15), STOP15)
+    P.update(keep)
 
     # 今の監視銘柄（後知恵あり）
     wl = bth.load_watchlist()
@@ -220,9 +291,9 @@ def main():
     g = lambda e, x, stop, allow=None: gen_trades(tdata, tmem, e, x, start3, end, ok=bt.liquid, fill="open", allow=allow, max_hold=500, stop_pct=stop)
     w(f"\n## 今の監視銘柄（{len(tdata)}銘柄、直近3年。後知恵あり）\n")
     rep.header("RSの高い順")
-    rep.line("O 本のとおり（M: S&P500）", g(E_oneil, X_oneil(), P["stop"], allow_sp), STOP15)
+    rep.line("O 本のとおり", g(E_oneil, X_oneil(), P["stop"], allow_m), STOP15)
     rep.line("O 市場の方向なし", g(E_oneil, X_oneil(), P["stop"]), STOP15)
-    rep.line("O 8週持った後は50日線割れまで持つ（M: S&P500）", g(E_oneil, X_oneil(X_BELOW50), P["stop"], allow_sp), STOP15)
+    rep.line("O 8週持った後は50日線割れまで持つ", g(E_oneil, X_oneil(X_BELOW50), P["stop"], allow_m), STOP15)
     rep.line("新高値V2（RS上位10の絞りなし）", g(c2.V2, X_BELOW50, STOP15), STOP15)
     rep.line("ミネルヴィニのベース", g(bm2.E_base(2.0), X_BELOW50, STOP15), STOP15)
     w("\n## 注意\n")
