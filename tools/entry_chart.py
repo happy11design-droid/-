@@ -24,6 +24,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import backtest_candle as bcd
 import backtest_connors as bc
 import backtest_crash as bcr
+import backtest_compare2 as c2
 import backtest_minervini2 as bm2
 import backtest_swing as bs
 import backtest_theme as bth
@@ -37,6 +38,7 @@ RULES = [  # 記号, 名前, 仕掛け, 手じまい, 手じまいの名前, 色
     ("M", "ミネルヴィニ（採用中）", bm2.E_base(2.0), bt.X_BELOW50, "50日線割れ", "#eb6834"),
     ("W", "ワインスタイン10週（採用中）", bt.E_weinstein(10, ma="10"), bt.X_weekly_below("10"), "10週線割れ", "#1baf7a"),
     ("C", "急落の底（採用中）", lambda i, s: bcr.C3(i, s), lambda j, s, k, px: s["bb_mid"][j] is not None and s["c"][j] >= s["bb_mid"][j], "20日線まで戻る", "#e34948"),
+    ("N", "新高値V2（採用中）", lambda i, s: c2.V2(i, s), bt.X_BELOW50, "50日線割れ", "#4a3aa7"),
     ("E1", "大陽線の反発（検証中）", bcd.E1, BAND, "上のバンド", "#eda100"),
     ("E2", "包み足（検証中）", bcd.E2, BAND, "上のバンド", "#e87ba4"),
 ]
@@ -88,6 +90,7 @@ def main():
     bs.prepare(s)
     bm2.add_pivot(s)
     bc.prepare(s)
+    c2.add_udvr(s)
     sp = [r["ticker"] for r in csv.DictReader(open(os.path.join(a.cache, "members.csv"))) if not r["end_date"]]
     bth.rs_ranks(a.cache, sorted(set(sp) | {sym}), {sym: s})
     last = dt.date.fromisoformat(s["date"][-1])

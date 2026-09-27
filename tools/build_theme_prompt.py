@@ -64,7 +64,8 @@ def main():
             head = [c.strip() for c in line.strip("|").split("|")]
         elif head and re.match(r"^\| [A-Z]", line):
             row = dict(zip(head, [c.strip() for c in line.strip("|").split("|")]))
-            if kind in row.get("ルール", "") or (kind == "コナーズ" and "急落" in row.get("ルール", "")):   # 急落の底はコナーズが担当
+            rule = row.get("ルール", "")
+            if kind in rule or (kind == "コナーズ" and "急落" in rule) or (kind == "ミネルヴィニ" and "新高値" in rule):   # 急落の底はコナーズ、新高値はミネルヴィニが担当
                 rows.setdefault(row["銘柄"], []).append({"保有": row})
     head = None
     for line in section(text, "## 6.").splitlines():

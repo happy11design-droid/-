@@ -193,7 +193,7 @@ def write_report(sym, d, ev, plan, outdir):
     L = [f"# {sym}: 大きく動いた日の前後で、新ツールの著者はどう判定したか（過去の日付での再現）\n",
          "- 各日の引け時点で見えていたデータ・チャート・ニュース（銘柄メモのその日以前の項目）・過去の決算日だけで判定させた。送信は1回ずつ独立（--webなし）。",
          "- 「その後」は、翌営業日に注文した場合。【買い】＝翌日の寄り付き、【買い（予約）】＝翌日の高値（逆指値）・安値（指値）が届いたときだけ約定。【様子見】は参考として翌日の寄り付きで買っていた場合の値動き。",
-         "- スクリプトのパターン: ボリンジャーIII／ミネルヴィニ／ワインスタイン10週／急落の底の順（A=条件成立、B=成立が目前、−=該当なし）。",
+         "- スクリプトのパターン: ボリンジャーIII／ミネルヴィニ／ワインスタイン10週／急落の底／新高値の順（A=条件成立、B=成立が目前、−=該当なし）。",
          "- この表は著者（NotebookLM）の回答を機械的に読み取ったもので、Claudeによる売買判断ではない。全文は各日のフォルダの <著者>.txt。\n"]
     stats = {k: [] for k in NB}
     for kind, r, i in ev:
@@ -207,7 +207,7 @@ def write_report(sym, d, ev, plan, outdir):
             day = d["date"][j]
             dd = os.path.join(outdir, day)
             rules = open(os.path.join(dd, "rules.md"), encoding="utf-8").read() if os.path.exists(os.path.join(dd, "rules.md")) else ""
-            m = re.search(r"ボリンジャーIII: (\S+?)／ミネルヴィニ: (\S+?)／ワインスタイン10週: (\S+?)(?:／急落の底: (\S+?))?（", rules)
+            m = re.search(r"ボリンジャーIII: (\S+?)／ミネルヴィニ: (\S+?)／ワインスタイン10週: (\S+?)(?:／急落の底: (\S+?))?(?:／新高値: (\S+?))?（", rules)
             sp = "／".join((x or "−").replace("該当なし", "−") for x in m.groups()) if m else "?"
             cells = []
             for au in NB:

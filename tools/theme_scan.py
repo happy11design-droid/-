@@ -32,6 +32,7 @@ from backtest_regime import up as regime_up
 from backtest_minervini2 import add_pivot
 from backtest_lib import DEFAULT_CACHE, MEMBERS_URL, curl, market_regime, rsi_wilder, sma
 import backtest_crash as bcr
+import backtest_compare2 as c2
 
 RISK, STOP = 0.02, 0.15
 NDX_URL = "https://api.nasdaq.com/api/quote/list-type/nasdaq100"
@@ -154,6 +155,7 @@ def main():
         bs.prepare(d)
         add_pivot(d)
         d["rsi2"] = rsi_wilder(d["c"], 2)
+        c2.add_udvr(d)
         d["sym"] = s
         if len(pool) > 50:
             d["rs"][-1] = 99 * bisect.bisect_left(pool, rs_raw(d["c"])) / (len(pool) - 1)
@@ -291,7 +293,9 @@ def main():
                 continue
             i = len(d["c"]) - 1
             c = d["c"][i]
-            if "急落" in h["rule"]:
+            if "新高値" in h["rule"]:
+                ex = "成立（引けで50日線割れ → 翌日の寄り付きで手じまい）" if c < d["ma50"][i] else f"未成立（50日線 {d['ma50'][i]:.2f}）"
+            elif "急落" in h["rule"]:
                 ex = "成立（引けで20日線以上 → 翌日の寄り付きで手じまい）" if d["bb_mid"][i] and c >= d["bb_mid"][i] else f"未成立（20日線 {d['bb_mid'][i]:.2f}）"
             elif "ボリンジャー" in h["rule"]:
                 ex = "成立（引けで上部バンド以上 → 翌日の寄り付きで手じまい）" if d["pctb"][i] is not None and d["pctb"][i] >= 1 else f"未成立（上部バンド {d['bb_up'][i]:.2f}）"
@@ -371,6 +375,16 @@ def main():
                 cands.append({**base, "pat": "B", "kind": "予約: ミネルヴィニ（ピボットの手前）",
                               "why": f"ピボット（ベースの高値、{d['date'][kh]}）{piv:.2f}まで{(piv / d['c'][i] - 1) * 100:.1f}%、ベース{i - kh}日・調整幅{depth * 100:.0f}%",
                               "order": f"逆指値買い {piv:.2f}（指値の上限 {piv * 1.03:.2f}＝ピボット+3%）。本は上抜けの日の出来高が50日平均の2倍以上（{2 * d['vol50'][i] / 1e4:,.0f}万株）を求める。損切り: 買値の15%下。手じまい: 引けで50日線割れ"})
+        # 新高値（V2、担当: ミネルヴィニ）。2026-09-27 採用
+        uv, h20 = d["udvr"][i], d["hi20c"][i]
+        if c2.V2(i, d) is not None:
+            cands.append({**base, "pat": "A", "kind": "順張り: 新高値（V2、担当: ミネルヴィニ）",
+                          "why": f"トレンドテンプレート8条件、RS {rs:.0f}（≧90）、終値が直前20日の最高値（終値）{h20:.2f}を上回る、上げ下げの出来高比（50日）{uv:.2f}（≧1.3）",
+                          "order": "翌日の寄り付きで買い。損切り: 買値の15%下。手じまい: 引けで50日線を割った翌日の寄り付き"})
+        elif h20 and uv and uv >= 1.3 and (rs or 0) >= 90 and bt.trend_template(d, i) and h20 * 0.97 <= d["c"][i] <= h20:
+            cands.append({**base, "pat": "B", "kind": "予約: 新高値（V2、担当: ミネルヴィニ）",
+                          "why": f"トレンドテンプレート8条件、RS {rs:.0f}、上げ下げの出来高比 {uv:.2f}、直前20日の最高値（終値）{h20:.2f}まで{(h20 / d['c'][i] - 1) * 100:.1f}%",
+                          "order": f"逆指値買い {h20:.2f}（本来は終値で判定するルールなので近似）。損切り: 買値の15%下。手じまい: 引けで50日線割れ"})
         if bcr.C3(i, d) is not None:
             cands.append({**base, "pat": "A", "kind": "逆張り: 急落の底（担当: コナーズ）",
                           "why": f"直前5日の最高値（終値）から{bcr.drop(i, d) * 100:.1f}%下落（−15%以上）、RSI(2)={d['rsi2'][i]:.1f}（≦5）、急落の前は50日線＞200日線。市場全体の局面: S&P500 {mkt}／NASDAQ100 {mkt_n}",
@@ -393,10 +407,10 @@ def main():
         # Bはルールごとに RSの高い順で5件まで（NotebookLMの1日の上限とニュース調査の時間のため）
         nb, kept = {}, []
         for x in cands:
-            if x["pat"] == "B" or "急落" in x["kind"]:
+            if x["pat"] == "B" or "急落" in x["kind"] or "新高値" in x["kind"]:
                 k = x["kind"].split("（")[0]
                 nb[k] = nb.get(k, 0) + 1
-                if nb[k] > (CRASH_MAX if "急落" in x["kind"] else B_MAX):
+                if nb[k] > (B_MAX if x["pat"] == "B" else CRASH_MAX):
                     continue
             kept.append(x)
         dropped = len(cands) - len(kept)
@@ -414,7 +428,7 @@ def main():
             rs_ = "取得不可" if x["rs"] is None else f"{x['rs']:.0f}"
             w(f"| {x['sym']} | {x['group']} | {x['pat']} | {x['kind']} | {x['close']:.2f} | {pct(x['chg'])} | {rs_} | {x['regime']} | {x['why']} | {eds[x['sym']]} | {x['order']} |")
         if dropped:
-            w(f"\n- パターンBは各ルールでRSの高い順に{B_MAX}件まで、急落の底は{CRASH_MAX}件（同時保有の上限）までとし、{dropped}件を省いた。")
+            w(f"\n- パターンBは各ルールでRSの高い順に{B_MAX}件まで、急落の底・新高値のAは{CRASH_MAX}件（同時保有の上限）までとし、{dropped}件を省いた。")
         w("\n- RS≧80の押し目（ボリンジャーIII）は、バックテストで成績がより安定していた（PF3.27、最大下落20%）。")
     text = "\n".join(L) + "\n"
     today_pat = {}

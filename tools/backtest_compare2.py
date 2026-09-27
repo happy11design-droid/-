@@ -43,6 +43,11 @@ def prep(s):
     bs.prepare(s)
     bc.prepare(s)
     bm2.add_pivot(s)
+    add_udvr(s)
+
+
+def add_udvr(s):
+    """udvr: 直近50日の上げた日の出来高÷下げた日の出来高。hi20c: 直前20日の最高値（終値、当日を含まない）"""
     c, v, n = s["c"], s["v"], len(s["c"])
     up = [v[i] if i and c[i] > c[i - 1] else 0 for i in range(n)]
     dn = [v[i] if i and c[i] < c[i - 1] else 0 for i in range(n)]
