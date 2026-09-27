@@ -30,10 +30,12 @@ import backtest_theme as bth
 import backtest_trend as bt
 from backtest_regime import up as regime_up
 from backtest_minervini2 import add_pivot
-from backtest_lib import DEFAULT_CACHE, MEMBERS_URL, curl, market_regime, sma
+from backtest_lib import DEFAULT_CACHE, MEMBERS_URL, curl, market_regime, rsi_wilder, sma
+import backtest_crash as bcr
 
 RISK, STOP = 0.02, 0.15
 B_MAX = 5   # パターンB（予約注文の候補）は各ルールでこの件数まで
+CRASH_MAX = 7   # 急落の底の候補（市場全体の急落の日は20件を超えることがある）はRSの高い順にこの件数まで
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
 
 
@@ -126,11 +128,12 @@ def main():
         p = os.path.join(DEFAULT_CACHE, "members.csv")
         members_csv = open(p).read() if os.path.exists(p) else "ticker,start_date,end_date\n"
     sp = [r["ticker"] for r in csv.DictReader(members_csv.splitlines()) if not r["end_date"]]
-    syms = sorted(set(sp) | set(wl) | {"SPY"})
+    syms = sorted(set(sp) | set(wl) | {"SPY", "^GSPC"})
     with ThreadPoolExecutor(8) as ex:
         got = dict(zip(syms, ex.map(fetch_daily, syms)))
     got = {s: cut(d, a.asof) for s, d in got.items() if d}
     spy = got.pop("SPY")
+    gspc = got.pop("^GSPC", None)
     day = spy["date"][-1]
     data = {s: got[s] for s in wl if s in got and got[s]["date"] and got[s]["date"][-1] == day and len(got[s]["c"]) > 260}
     missing = sorted(set(wl) - set(data))
@@ -143,6 +146,7 @@ def main():
         bt.prepare(d)
         bs.prepare(d)
         add_pivot(d)
+        d["rsi2"] = rsi_wilder(d["c"], 2)
         d["sym"] = s
         if len(pool) > 50:
             d["rs"][-1] = 99 * bisect.bisect_left(pool, rs_raw(d["c"])) / (len(pool) - 1)
@@ -183,6 +187,8 @@ def main():
     br = sum(1 for d in data.values() if d["ma50"][-1] and d["c"][-1] > d["ma50"][-1]) / len(data)
     warn = br < 0.4 and ma50[-1] is not None and c[-1] < ma50[-1]
     w("\n## 2. テーマ全体の状態と早めの警告\n")
+    mkt = market_regime(gspc).get(day, "判定不能") if gspc else "取得不可"
+    w(f"- 市場全体（S&P500指数）の30週線による局面: **{mkt}**（急落の底で買うルールは、過去の検証で下落相場で特に強く、横ばいの相場では負けていた）")
     w(f"- テーマ指数（監視銘柄の等金額平均）の30週線による局面: **{stage.get(day, '判定不可')}**（上昇＝線より上かつ上向き、下落＝線より下かつ下向き、それ以外＝横ばい。ワインスタインのステージの近似）")
     w(f"- テーマ指数と50日線: {'50日線より上' if ma50[-1] and c[-1] > ma50[-1] else '50日線より下'}（乖離 {pct(c[-1] / ma50[-1] - 1) if ma50[-1] else '取得不可'}）")
     w(f"- S&P500に対する相対的な強さ: {'50日平均より上（S&P500より強い）' if rma[-1] and ratio[-1] > rma[-1] else '50日平均より下（S&P500より弱い）'}")
@@ -247,7 +253,9 @@ def main():
                 continue
             i = len(d["c"]) - 1
             c = d["c"][i]
-            if "ボリンジャー" in h["rule"]:
+            if "急落" in h["rule"]:
+                ex = "成立（引けで20日線以上 → 翌日の寄り付きで手じまい）" if d["bb_mid"][i] and c >= d["bb_mid"][i] else f"未成立（20日線 {d['bb_mid'][i]:.2f}）"
+            elif "ボリンジャー" in h["rule"]:
                 ex = "成立（引けで上部バンド以上 → 翌日の寄り付きで手じまい）" if d["pctb"][i] is not None and d["pctb"][i] >= 1 else f"未成立（上部バンド {d['bb_up'][i]:.2f}）"
             elif "ミネルヴィニ" in h["rule"]:
                 ex = "成立（引けで50日線割れ → 翌日の寄り付きで手じまい）" if c < d["ma50"][i] else f"未成立（50日線 {d['ma50'][i]:.2f}）"
@@ -325,6 +333,10 @@ def main():
                 cands.append({**base, "pat": "B", "kind": "予約: ミネルヴィニ（ピボットの手前）",
                               "why": f"ピボット（ベースの高値、{d['date'][kh]}）{piv:.2f}まで{(piv / d['c'][i] - 1) * 100:.1f}%、ベース{i - kh}日・調整幅{depth * 100:.0f}%",
                               "order": f"逆指値買い {piv:.2f}（指値の上限 {piv * 1.03:.2f}＝ピボット+3%）。本は上抜けの日の出来高が50日平均の2倍以上（{2 * d['vol50'][i] / 1e4:,.0f}万株）を求める。損切り: 買値の15%下。手じまい: 引けで50日線割れ"})
+        if bcr.C3(i, d) is not None:
+            cands.append({**base, "pat": "A", "kind": "逆張り: 急落の底（担当: ボリンジャー）",
+                          "why": f"直前5日の最高値（終値）から{bcr.drop(i, d) * 100:.1f}%下落（−15%以上）、RSI(2)={d['rsi2'][i]:.1f}（≦5）、急落の前は50日線＞200日線。市場全体の局面: {mkt}",
+                          "order": f"翌日の寄り付きで買い。損切り: 買値の15%下。手じまい: 引けで20日線（今日 {d['bb_mid'][i]:.2f}）以上に戻った翌日の寄り付き"})
         if dt.date.fromisoformat(day).weekday() == 4:
             if bt.E_weinstein(10, ma="10")(i, d) is not None:
                 cands.append({**base, "pat": "A", "kind": "順張り: ワインスタイン（10週の高値上抜け）",
@@ -343,10 +355,10 @@ def main():
         # Bはルールごとに RSの高い順で5件まで（NotebookLMの1日の上限とニュース調査の時間のため）
         nb, kept = {}, []
         for x in cands:
-            if x["pat"] == "B":
+            if x["pat"] == "B" or "急落" in x["kind"]:
                 k = x["kind"].split("（")[0]
                 nb[k] = nb.get(k, 0) + 1
-                if nb[k] > B_MAX:
+                if nb[k] > (CRASH_MAX if "急落" in x["kind"] else B_MAX):
                     continue
             kept.append(x)
         dropped = len(cands) - len(kept)
@@ -364,7 +376,7 @@ def main():
             rs_ = "取得不可" if x["rs"] is None else f"{x['rs']:.0f}"
             w(f"| {x['sym']} | {x['group']} | {x['pat']} | {x['kind']} | {x['close']:.2f} | {pct(x['chg'])} | {rs_} | {x['regime']} | {x['why']} | {eds[x['sym']]} | {x['order']} |")
         if dropped:
-            w(f"\n- パターンBは各ルールでRSの高い順に{B_MAX}件までとし、{dropped}件を省いた。")
+            w(f"\n- パターンBは各ルールでRSの高い順に{B_MAX}件まで、急落の底は{CRASH_MAX}件（同時保有の上限）までとし、{dropped}件を省いた。")
         w("\n- RS≧80の押し目（ボリンジャーIII）は、バックテストで成績がより安定していた（PF3.27、最大下落20%）。")
     text = "\n".join(L) + "\n"
     today_pat = {}

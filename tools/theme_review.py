@@ -98,6 +98,8 @@ def cmd_record(a):
 
 def rule_exit(rule, s, j):
     """その日の引けでルールの手じまい条件が成立したか"""
+    if "急落" in rule:
+        return s["bb_mid"][j] is not None and s["c"][j] >= s["bb_mid"][j]
     if "ボリンジャー" in rule:
         return s["pctb"][j] is not None and s["pctb"][j] >= 1.0
     if "ミネルヴィニ" in rule:
@@ -173,7 +175,7 @@ def cmd_review(a):
                     rows.append({**c, "date": r["trade_date"], "status": "約定の記録なし（翌日以降の条件で改めてエントリーを探す）"})
                     continue
                 k = s["date"].index(rec[0]["date"]) if rec[0]["date"] in s["date"] else i + 1
-                rule = "ボリンジャー" if "ボリンジャー" in c["kind"] else "ミネルヴィニ" if "ミネルヴィニ" in c["kind"] else "ワインスタイン"
+                rule = "急落" if "急落" in c["kind"] else "ボリンジャー" if "ボリンジャー" in c["kind"] else "ミネルヴィニ" if "ミネルヴィニ" in c["kind"] else "ワインスタイン"
                 px = rec[0]["price"]
                 od, op, why = follow(rule, s, k, px, px * (1 - STOP))
                 rows.append({**c, "date": r["trade_date"], "entry": px, "exit_date": od, "exit": op, "status": why + "（実際の約定）",
@@ -182,7 +184,7 @@ def cmd_review(a):
             if c.get("limit") and px > c["limit"]:
                 rows.append({**c, "date": r["trade_date"], "status": f"買値{px:.2f}が上限{c['limit']:.2f}を超えたため買わない"})
                 continue
-            rule = "ボリンジャー" if "ボリンジャー" in c["kind"] else "ミネルヴィニ" if "ミネルヴィニ" in c["kind"] else "ワインスタイン"
+            rule = "急落" if "急落" in c["kind"] else "ボリンジャー" if "ボリンジャー" in c["kind"] else "ミネルヴィニ" if "ミネルヴィニ" in c["kind"] else "ワインスタイン"
             od, op, why = follow(rule, s, i + 1, px, px * (1 - STOP))
             rows.append({**c, "date": r["trade_date"], "entry": px, "exit_date": od, "exit": op, "status": why,
                          "ret": op / px - 1 - 2 * COST})

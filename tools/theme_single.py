@@ -22,7 +22,8 @@ import backtest_swing as bs
 import backtest_trend as bt
 from backtest_regime import up
 from backtest_minervini2 import add_pivot
-from backtest_lib import MEMBERS_URL, curl
+import backtest_crash as bcr
+from backtest_lib import MEMBERS_URL, curl, rsi_wilder
 from theme_scan import cut, earnings_date, fetch_daily, pct
 
 STOP = 0.15
@@ -46,11 +47,17 @@ def load_pool():
 def who(rules):
     """rules.md から、送る著者（合図 A・B が出ているルールの著者＋保有中のルールの著者）を返す"""
     authors = ("ボリンジャー", "ミネルヴィニ", "ワインスタイン")
-    m = re.search(r"ボリンジャーIII: (\S+)／ミネルヴィニ: (\S+)／ワインスタイン10週: (\S+?)（", rules)
-    out = [a for a, p in zip(authors, m.groups()) if p in ("A", "B")] if m else list(authors)
-    h = re.search(r"## 4. 保有中の確認\n\n- ルール: ([^／]+)", rules)
+    m = re.search(r"ボリンジャーIII: (\S+?)／ミネルヴィニ: (\S+?)／ワインスタイン10週: (\S+?)(?:／急落の底: (\S+?))?（", rules)
+    if m:
+        pats = dict(zip(("ボリンジャー", "ミネルヴィニ", "ワインスタイン", "急落"), m.groups()))
+        out = [a for a in authors if pats[a] in ("A", "B")]
+        if pats["急落"] == "A" and "ボリンジャー" not in out:     # 急落の底はボリンジャーが担当
+            out.insert(0, "ボリンジャー")
+    else:
+        out = list(authors)
+    h = re.search(r"## \d\. 保有中の確認\n\n- ルール: ([^／]+)", rules)
     if h:
-        out += [a for a in authors if a in h.group(1) and a not in out]
+        out += [a for a in authors if (a in h.group(1) or (a == "ボリンジャー" and "急落" in h.group(1))) and a not in out]
     return out
 
 
@@ -166,14 +173,30 @@ def report(sym, d, pool_series, asof=None, hold=None, earn=None):
     if pat_w == "B":
         w(f"- 予約注文の目安（B）: 逆指値買い {h10:.2f}（本のルールは週足の終値で判定するので近似。上抜けの週の出来高は直前4週の平均の2倍以上）")
     w("")
-    w(f"## まとめ（スクリプトのパターン判定）\n\n- ボリンジャーIII: {pat_b}／ミネルヴィニ: {pat_m}／ワインスタイン10週: {pat_w}（A=条件成立、B=成立が目前で予約注文の候補）\n")
+    # 急落の底（逆張り、担当: ボリンジャー）。2026-09-27 採用
+    d["rsi2"] = rsi_wilder(d["c"], 2)
+    crash = bcr.C3(i, d) is not None
+    dr, r2 = bcr.drop(i, d), d["rsi2"][i]
+    pat_c = "A" if crash else "該当なし"
+    w("## 4. 逆張り: 急落の底（担当: ボリンジャー）\n")
+    w(f"- 条件: 急落の前（6日前）に50日線＞200日線、直前5日の最高値（終値）から15%以上下落、RSI(2)≦5 → **{mark(crash)}**"
+      f"（6日前の50日線／200日線 {d['ma50'][i - 6]:.2f}／{d['ma200'][i - 6]:.2f}、下落率 {dr * 100:+.1f}%、RSI(2) {r2:.1f}）")
+    w(f"- 直前5日の最高値（終値）{max(d['c'][i - 5:i]):.2f} の15%下は {max(d['c'][i - 5:i]) * 0.85:.2f}")
+    w(f"- スクリプトのパターン判定: **{pat_c}**（A=条件成立。終値で判定するルールのため予約注文（B）はない）")
+    if crash:
+        w(f"- 注文の目安（A）: 翌日の寄り付きで買い、損切りは買値の15%下、引けで20日線（今日 {d['bb_mid'][i]:.2f}）以上に戻った翌日の寄り付きで手じまい。"
+          "過去の検証では、市場全体（S&P500）が下落相場のときに特に強く、横ばいの相場では負けていた")
+    w("")
+    w(f"## まとめ（スクリプトのパターン判定）\n\n- ボリンジャーIII: {pat_b}／ミネルヴィニ: {pat_m}／ワインスタイン10週: {pat_w}／急落の底: {pat_c}（A=条件成立、B=成立が目前で予約注文の候補）\n")
 
     if hold:
         px, bd, rule = float(hold[0]), hold[1], hold[2]
         stop = px * (1 - STOP)
-        w("## 4. 保有中の確認\n")
+        w("## 5. 保有中の確認\n")
         w(f"- ルール: {rule}／買った日: {bd}／買値: {px:.2f}／損益: {pct(c / px - 1)}／損切り価格（買値の15%下）: {stop:.2f}" + ("（**下回っている**）" if c <= stop else ""))
-        if "ボリンジャー" in rule:
+        if "急落" in rule:
+            w(f"- 手じまい条件（引けで20日線以上）: {mark(c >= d['bb_mid'][i])}（20日線 {d['bb_mid'][i]:.2f}）")
+        elif "ボリンジャー" in rule:
             w(f"- 手じまい条件（引けで上部バンド以上）: {mark(pb >= 1)}（上部バンド {d['bb_up'][i]:.2f}）")
         elif "ミネルヴィニ" in rule:
             w(f"- 手じまい条件（引けで50日線割れ）: {mark(c < m50)}（50日線 {m50:.2f}）")
