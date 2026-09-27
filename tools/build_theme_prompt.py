@@ -2,9 +2,10 @@
 """テーマ監視の候補を著者ノートブックへ送るプロンプトの組み立て（`新分析ツール/テーマ監視_手順書.md` 手順T4）
 
 使い方:
-  tools/build_theme_prompt.py <scan.md> <出力ディレクトリ> <種類の語> <ティッカー>:<データファイル> [...]
+  tools/build_theme_prompt.py <scan.md> <出力ディレクトリ> <種類の語> [--news news.md] <ティッカー>:<データファイル> [...]
     <scan.md>: tools/theme_scan.py の出力
-    <種類の語>: 候補の表の「種類」の列に含まれる語（例: 「ボリンジャー」「ミネルヴィニ」「ワインスタイン」）。その種類の候補だけを入れる
+    <種類の語>: 「ボリンジャー」「ミネルヴィニ」「ワインスタイン」のどれか。候補の表の「種類」と、保有銘柄の表の「ルール」にこの語を含む銘柄だけを入れる
+    --news: サブエージェントが書いた news.md（`新分析ツール/ニュース調査指示.md`）。銘柄ごとの節とテーマ全体の節を差し込む
     <データファイル>: tools/market_data.py ticker が書き出した <ティッカー>_data.txt（ニュースを足したファイルでもよい）
 
 `新分析ツール/テーマ監視_送信プロンプト雛形.txt` の {{THEME}} と {{CANDIDATES}} だけを差し込み、雛形のほかの文言は変えない。
@@ -18,17 +19,55 @@ LIMIT = 12000
 TEMPLATE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "新分析ツール", "テーマ監視_送信プロンプト雛形.txt")
 
 
+def section(text, head):
+    """「## 5.」のような見出しから次の「## 」までを返す（見出しがなければ空）"""
+    i = text.find(head)
+    if i < 0:
+        return ""
+    j = text.find("\n## ", i + 1)
+    return text[i:j if j > 0 else len(text)]
+
+
+def parse_news(path):
+    """news.md を {ティッカー: 本文, "テーマ全体": 本文} に分ける（見出しが大文字のティッカーでない節はテーマ全体とみなす）"""
+    out, cur = {}, None
+    for line in open(path, encoding="utf-8"):
+        m = re.match(r"^## (.+)", line)
+        if m:
+            t = m.group(1).strip()
+            cur = t if re.fullmatch(r"[A-Z][A-Z.]*", t) else "テーマ全体"
+            out.setdefault(cur, "")
+        elif cur:
+            out[cur] += line
+    return {k: v.strip() for k, v in out.items()}
+
+
 def main():
     if len(sys.argv) < 5:
         sys.exit(__doc__)
     scan, outdir, kind = sys.argv[1], sys.argv[2], sys.argv[3]
-    files = dict(x.split(":", 1) for x in sys.argv[4:])
+    rest = sys.argv[4:]
+    news = {}
+    if rest and rest[0] == "--news":
+        news = parse_news(rest[1])
+        rest = rest[2:]
+    files = dict(x.split(":", 1) for x in rest)
     text = open(scan, encoding="utf-8").read()
     # テーマの状態＝1・2節（ヒートマップの表は長いので送らない）
     theme = text[text.index("## 1."):text.index("## 3.")].strip()
+    if news.get("テーマ全体"):
+        theme += "\n\nテーマ全体のニュース（サブエージェントの調査）:\n" + news["テーマ全体"]
     rows = {}
     head = None
-    for line in text[text.index("## 4."):].splitlines():
+    for line in section(text, "## 5.").splitlines():
+        if line.startswith("| 銘柄 |"):
+            head = [c.strip() for c in line.strip("|").split("|")]
+        elif head and re.match(r"^\| [A-Z]", line):
+            row = dict(zip(head, [c.strip() for c in line.strip("|").split("|")]))
+            if kind in row.get("ルール", ""):
+                rows.setdefault(row["銘柄"], []).append({"保有": row})
+    head = None
+    for line in section(text, "## 6.").splitlines():
         if line.startswith("| 銘柄 |"):
             head = [c.strip() for c in line.strip("|").split("|")]
         elif head and re.match(r"^\| [A-Z]", line):
@@ -41,10 +80,19 @@ def main():
     for sym, rs in rows.items():
         if sym not in files:
             sys.exit(f"{sym} のデータファイルが指定されていません")
-        b = [f"## {sym}（{rs[0]['グループ']}）"]
+        b = []
         for r in rs:
-            b.append(f"- 種類: {r['種類']}／当てはまった条件: {r['当てはまった条件']}／RS: {r['RS']}／次回決算予定日: {r['次回決算予定日']}")
-            b.append(f"- 注文の目安（スクリプトの計算。採否は著者が判定）: {r['注文の目安']}")
+            if "保有" in r:
+                h = r["保有"]
+                b.append(f"## {sym}（保有中）")
+                b.append(f"- ルール: {h['ルール']}／買った日: {h['買った日']}／買値: {h['買値']}／終値: {h['終値']}（{h['損益']}）／損切り価格: {h['損切り価格（買値の15%下、逆指値）']}")
+                b.append(f"- ルールの手じまい条件: {h['ルールの手じまい条件']}／次回決算予定日: {h['次回決算予定日']}")
+            else:
+                if not any(x.startswith(f"## {sym}（候補") for x in b):
+                    b.append(f"## {sym}（候補、{r['グループ']}）")
+                b.append(f"- 種類: {r['種類']}／当てはまった条件: {r['当てはまった条件']}／RS: {r['RS']}／次回決算予定日: {r['次回決算予定日']}")
+                b.append(f"- 注文の目安（スクリプトの計算）: {r['注文の目安']}")
+        b.append("- ニュース（サブエージェントの調査）:\n" + news.get(sym, "調査なし"))
         b.append(open(files[sym], encoding="utf-8").read().strip())
         blocks.append("\n".join(b))
     if not blocks:

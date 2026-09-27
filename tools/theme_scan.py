@@ -83,6 +83,18 @@ def earnings_date(sym):
     return m.group(1) if m else "取得不可"
 
 
+def load_holdings(path=os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "新分析ツール", "保有銘柄.md")):
+    """保有銘柄.md の表（| ティッカー | 買った日 | 買値 | 株数 | ルール |）を読む"""
+    out = []
+    if not os.path.exists(path):
+        return out
+    for line in open(path, encoding="utf-8"):
+        m = re.match(r"^\| ([A-Z][A-Z.]*) \| (\d{4}-\d{2}-\d{2}) \| ([0-9.]+) \| ([0-9.]*) \| ([^|]*)\|", line)
+        if m:
+            out.append({"sym": m.group(1), "date": m.group(2), "price": float(m.group(3)), "rule": m.group(5).strip()})
+    return out
+
+
 def pct(x, d=1):
     return "取得不可" if x is None else f"{x * 100:+.{d}f}%"
 
@@ -177,8 +189,61 @@ def main():
     else:
         w("取得不可\n")
 
+    # ---- 急騰・急落 ----
+    w("## 4. 急騰・急落した銘柄（前日比±5%以上、または出来高が50日平均の2倍以上）\n")
+    w("原因のニュースをサブエージェントが調べ、候補・保有銘柄の判定材料として著者に渡す。急騰・急落そのものは売買の合図にしない"
+      "（後知恵のないS&P500全体のバックテストでは、急騰の翌日に買うルールは年率7%、急落の翌日に買うルールは年率9〜10%で、採用した3つのルールより優れていなかった）。\n")
+    mv = []
+    for s_, d in data.items():
+        i = len(d["c"]) - 1
+        ch = d["c"][i] / d["c"][i - 1] - 1
+        vr = d["v"][i] / d["vol50"][i] if d["vol50"][i] else None
+        if abs(ch) >= 0.05 or (vr and vr >= 2):
+            mv.append((s_, ch, vr))
+    if mv:
+        w("| 銘柄 | グループ | 前日比 | 出来高（50日平均の倍） | 終値 | 50日線 | RS |")
+        w("|---|---|---|---|---|---|---|")
+        for s_, ch, vr in sorted(mv, key=lambda x: -abs(x[1])):
+            d = data[s_]
+            rs = d["rs"][-1]
+            w(f"| {s_} | {wl[s_]} | {pct(ch)} | {vr:.1f}倍 | {d['c'][-1]:.2f} | {'上' if d['ma50'][-1] and d['c'][-1] > d['ma50'][-1] else '下'} | {'取得不可' if rs is None else f'{rs:.0f}'} |")
+    else:
+        w("該当なし")
+    w("")
+
+    # ---- 保有銘柄 ----
+    hold = load_holdings()
+    w("## 5. 保有銘柄の手じまい条件（`新分析ツール/保有銘柄.md`）\n")
+    if not hold:
+        w("保有銘柄なし（または一覧が空）\n")
+    else:
+        w("| 銘柄 | ルール | 買った日 | 買値 | 終値 | 損益 | 損切り価格（買値の15%下、逆指値） | ルールの手じまい条件 | 次回決算予定日 |")
+        w("|---|---|---|---|---|---|---|---|---|")
+        for h in hold:
+            d = data.get(h["sym"])
+            if not d:
+                w(f"| {h['sym']} | {h['rule']} | {h['date']} | {h['price']} | 取得不可 | | | | |")
+                continue
+            i = len(d["c"]) - 1
+            c = d["c"][i]
+            if "ボリンジャー" in h["rule"]:
+                ex = "成立（引けで上部バンド以上 → 翌日の寄り付きで手じまい）" if d["pctb"][i] is not None and d["pctb"][i] >= 1 else f"未成立（上部バンド {d['bb_up'][i]:.2f}）"
+            elif "ミネルヴィニ" in h["rule"]:
+                ex = "成立（引けで50日線割れ → 翌日の寄り付きで手じまい）" if c < d["ma50"][i] else f"未成立（50日線 {d['ma50'][i]:.2f}）"
+            elif "ワインスタイン" in h["rule"]:
+                wk = dt.date.fromisoformat(day).weekday() == 4
+                ex = ("成立（週足の終値が10週線割れ → 翌取引日の寄り付きで手じまい）" if wk and d["w_c"][i] < d["w_ma10"][i]
+                      else f"未成立（10週線 {d['w_ma10'][i]:.2f}、判定は週の最終取引日）" if wk else "判定は週の最終取引日")
+            else:
+                ex = "ルールが不明（保有銘柄.md の「ルール」を確認）"
+            stop = h["price"] * (1 - STOP)
+            if c <= stop:
+                ex = "**損切り価格を下回った** " + ex
+            w(f"| {h['sym']} | {h['rule']} | {h['date']} | {h['price']:.2f} | {c:.2f} | {pct(c / h['price'] - 1)} | {stop:.2f} | {ex} | {earnings_date(h['sym'])} |")
+        w("")
+
     # ---- 候補 ----
-    w("## 4. 候補（バックテストで採用した条件に当てはまった銘柄）\n")
+    w("## 6. 候補（採用したルールに当てはまった銘柄）\n")
     w(f"建玉の目安: 1トレードのリスク2%・損切り15% → 1銘柄に資金の{RISK / STOP * 100:.1f}%、同時保有{int(STOP / RISK)}銘柄まで（ユーザー決定）。\n")
     cands = []
     for s, d in data.items():

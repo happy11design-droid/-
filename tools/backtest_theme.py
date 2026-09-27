@@ -81,6 +81,24 @@ def theme_index(data, dates):
     return {"date": dates, "c": c}
 
 
+def E_surge(i, s):
+    c = s["c"]
+    if i < 1 or s["vol50"][i] is None or s["ma50"][i] is None:
+        return None
+    ch = c[i] / c[i - 1] - 1
+    return -ch if ch >= 0.05 and s["v"][i] >= 2 * s["vol50"][i] and c[i] > s["ma50"][i] else None
+
+
+def E_plunge(th):
+    def f(i, s):
+        ch = s["c"][i] / s["c"][i - 1] - 1 if i >= 1 else 0
+        return ch if ch <= -th else None
+    return f
+
+
+X_UPPER = lambda j, s, k, px: s["pctb"][j] is not None and s["pctb"][j] >= 1.0
+
+
 def group_strength(data, wl, lookback=63):
     """{日付: [グループ名, ...]}（直近 lookback 日の騰落率の中央値が高い順）"""
     by = {}
@@ -238,6 +256,7 @@ def cmd_run(a):
             ("ボリンジャー: ドンチャン4週ルール（20日高値上抜け・20日安値割れで手じまい）", lambda f=None: S(bs.O_donchian, bs.X_donchian_low, allow=f)),
             ("ボリンジャー: メソッドI スクイーズ・パラボリックSAR", lambda f=None: S(bs.O_squeeze, trail=bs.trail_sar, allow=f)),
             ("ボリンジャー: メソッドII（%b>0.8かつMFI>80の後の最初の押し）・パラボリックSAR", lambda f=None: S(bs.O_method2, trail=bs.trail_sar, allow=f)),
+            ("参考（本のルールではない）: 急騰（前日比+5%以上・出来高2倍・50日線より上）の翌日寄り付きで買い・50日線割れで手じまい", lambda f=None: G(E_surge, bt.X_BELOW50, allow=f)),
             ("ラシュキ: 聖杯（ADX≧30・20EMAへの押し）・2日チャネル", lambda f=None: S(bs.O_holy_grail, trail=bs.trail_2day, allow=f)),
             ("ラシュキ: NR7（翌日高値に逆指値買い）・2日チャネル", lambda f=None: S(bs.O_nr7, trail=bs.trail_2day, allow=f)),
         ]),
@@ -247,6 +266,8 @@ def cmd_run(a):
             ("コナーズ: RSI(2)≦5（200日線より上）・5日線上抜けで手じまい", lambda f=None: C(bc.E_rsi2(5), "5日線上抜け", allow=f)),
             ("コナーズ: 個別株2日累積RSI≦10・5日線上抜けで手じまい", lambda f=None: C(bc.E_cum2(10), "5日線上抜け", allow=f)),
             ("コナーズ: ダブル7（7日最安値で引け）・7日最高値で手じまい", lambda f=None: C(bc.E_double7, "7日最高値で引け", allow=f)),
+            ("参考（本のルールではない）: 急落（前日比-5%以下）の翌日寄り付きで買い・上部バンドで手じまい", lambda f=None: G(E_plunge(0.05), X_UPPER, allow=f, max_hold=60)),
+            ("参考（本のルールではない）: 急落（前日比-2.5%以下）の翌日寄り付きで買い・上部バンドで手じまい", lambda f=None: G(E_plunge(0.025), X_UPPER, allow=f, max_hold=60)),
             ("ラシュキ: タートルスープ（20日安値割れからの戻り）", lambda f=None: S(bs.O_turtle_soup, trail=bs.trail_turtle, allow=f)),
             ("ラシュキ: アンチ（%D上向き・%Kが3日下落）・2日チャネル", lambda f=None: S(bs.O_anti, trail=bs.trail_2day, allow=f)),
         ]),
