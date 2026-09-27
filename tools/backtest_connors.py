@@ -80,7 +80,7 @@ def cmd_fetch(a):
         sys.exit("構成銘柄表を取得できませんでした")
     open(mpath, "w").write(txt)
     members = load_members(a.cache)
-    syms = sorted(members) + ["SPY", "^VIX"]
+    syms = sorted(members) + ["SPY", "QQQ", "^VIX"]
     ysym = lambda s: s.replace(".", "-")
     with ThreadPoolExecutor(8) as ex:
         ok = list(ex.map(lambda s: fetch_one(ysym(s), os.path.join(a.cache, "prices", s + ".json")), syms))
@@ -227,25 +227,30 @@ def signal_ok(s, i, spans):
             and s["vol100"][i] >= 250_000 and s["c"][i] > s["ma200"][i] and is_member(spans, s["date"][i]))
 
 
-def gen_trades(data, members, entry, exit_name, stop, start, end):
+def gen_trades(data, members, entry, exit_name, stop, start, end, fill="close", allow=None):
+    """fill="close": シグナルの日の引けで仕掛け、手じまい条件の日の引けで手じまう（ルール表の注文方法どおり）。
+    fill="open": 引け後に判定して翌取引日の寄り付きで仕掛け・手じまう（引け後に分析する運用で実際にできる方法）。
+    allow(日付): 市場全体の条件（局面・VIX）でその日のシグナルを使うか。Noneなら常に使う。"""
     ex = X[exit_name]
+    lag = 1 if fill == "open" else 0
+    price = (lambda s, k: s["o"][k]) if fill == "open" else (lambda s, k: s["c"][k])
     stop_pct, time_stop = stop[1], stop[2]
     trades = []
     for sym, s in data.items():
         n, i = len(s["c"]), 200
         while i < n - 1:
             d = s["date"][i]
-            if d < start or d > end or not signal_ok(s, i, members[sym]):
+            if d < start or d > end or not signal_ok(s, i, members[sym]) or (allow and not allow(d)):
                 i += 1
                 continue
             rank = entry(i, s)
-            if rank is None:
+            if rank is None or i + lag >= n:
                 i += 1
                 continue
-            px, j, reason = s["c"][i], i, "打ち切り"
+            px, j, reason = price(s, i + lag), i, "打ち切り"
             for k in range(1, MAX_HOLD + 1):
                 j = i + k
-                if j >= n:
+                if j + lag >= n:
                     j, reason = n - 1, "データ終端"
                     break
                 if stop_pct is not None and s["c"][j] <= px * (1 - stop_pct):
@@ -259,9 +264,9 @@ def gen_trades(data, members, entry, exit_name, stop, start, end):
                     break
             if reason == "データ終端":
                 break  # 手じまいが未確定のトレードは数えない
-            trades.append({"sym": sym, "in": d, "out": s["date"][j], "ret": s["c"][j] / px - 1,
-                           "days": j - i, "rank": rank, "why": reason})
-            i = j + 1  # 同じ銘柄は手じまい後に次のシグナルを探す
+            trades.append({"sym": sym, "in": s["date"][i + lag], "out": s["date"][j + lag], "px": px,
+                           "ret": price(s, j + lag) / px - 1, "days": j - i, "rank": rank, "why": reason})
+            i = j + lag + 1  # 同じ銘柄は手じまい後に次のシグナルを探す
     trades.sort(key=lambda t: (t["out"], t["sym"]))
     return trades
 
@@ -319,9 +324,11 @@ def stats(trades, cost):
     }
 
 
-def portfolio(trades, cost, slots, days, data):
+def portfolio(trades, cost, slots, days, data, weight=None):
     """同時保有数の上限つきの資金推移。資金を slots 等分し、その日のシグナルは rank の小さい順に空き枠へ入れる。
-    手じまいで戻った資金はその日の引けから次に使える（複利）。保有中はその日の終値で時価評価する。"""
+    手じまいで戻った資金はその日の引けから次に使える（複利）。保有中はその日の終値で時価評価する。
+    weight を指定すると1銘柄の建玉を資金×weight にする（リスク2%・損切り幅X%なら weight=0.02/X）。"""
+    weight = weight or 1 / slots
     idx = {sym: {d: k for k, d in enumerate(data[sym]["date"])} for sym in {t["sym"] for t in trades}}
 
     def value(h, d):
@@ -332,12 +339,13 @@ def portfolio(trades, cost, slots, days, data):
     for t in trades:
         by_in.setdefault(t["in"], []).append(t)
     cash, held, eq_curve = 1.0, [], []
-    peak, mdd, taken = 1.0, 0.0, 0
+    peak, mdd, taken, worst_hit = 1.0, 0.0, 0, 0.0
     for d in days:
         still = []
         for h in held:
             if h["out"] == d:
                 cash += h["size"] * (1 + h["ret"] - cost)
+                worst_hit = max(worst_hit, -h["size"] * (h["ret"] - cost) / h["eq0"])
             else:
                 still.append(h)
         held = still
@@ -349,12 +357,13 @@ def portfolio(trades, cost, slots, days, data):
                 break
             if any(h["sym"] == t["sym"] for h in held):
                 continue
-            size = min(equity / slots, cash)
+            size = min(equity * weight, cash)
             if size <= 0:
                 break
             cash -= size
-            sym_c = data[t["sym"]]["c"][idx[t["sym"]][d]]
-            held.append({**t, "size": size * (1 - cost), "px": sym_c, "last": size * (1 - cost)})
+            h = {**t, "size": size * (1 - cost), "eq0": equity, "last": size * (1 - cost)}
+            h["last"] = value(h, d)
+            held.append(h)
             taken += 1
         eq = cash + sum(h["last"] for h in held)
         eq_curve.append(eq)
@@ -362,7 +371,7 @@ def portfolio(trades, cost, slots, days, data):
         mdd = max(mdd, 1 - eq / peak)
     years = (dt.date.fromisoformat(days[-1]) - dt.date.fromisoformat(days[0])).days / 365.25
     final = eq_curve[-1]
-    return {"cagr": final ** (1 / years) - 1, "mdd": mdd, "taken": taken, "final": final}
+    return {"cagr": final ** (1 / years) - 1, "mdd": mdd, "taken": taken, "final": final, "worst_hit": worst_hit}
 
 
 def pct(x, d=1):
@@ -467,8 +476,126 @@ def cmd_run(a):
             w(f"| {name} | {slots} | {pct(p['cagr'])} | {pct(p['mdd'])} | {p['taken']} | {(1 + p['cagr']) ** 10:.2f} |")
     w(f"| （参考）SPY買い持ち | | {pct(spy_cagr)} | {pct(mdd)} | | {(1 + spy_cagr) ** 10:.2f} |")
 
-    w("\n## 5. 注意\n")
-    w("- 過去の成績は将来を保証しない。特に上場廃止銘柄の欠落（生存者バイアスの残り）、配当なし、引け値ちょうどで約定できる前提は、いずれも現実より良く見せる方向に働きうる。")
+    # ---- 5〜7: 引け後に判定して翌日の寄り付きで売買する運用（実際にできる方法）----
+    vlo_d = lambda d: vix10.get(d) and vixc[d] <= vix10[d] * 0.95
+    vhi_d = lambda d: vix10.get(d) and vixc[d] >= vix10[d] * 1.05
+    not_down = lambda d: regime.get(d) != "下落"
+    filters = [
+        ("なし", None),
+        ("下落局面は買わない", not_down),
+        ("VIX≦10日線×0.95の日は買わない（p.12）", lambda d: not vlo_d(d)),
+        ("下落局面は買わない＋VIX≦10日線×0.95の日は買わない", lambda d: not_down(d) and not vlo_d(d)),
+        ("下落局面は買わない＋VIX≧10日線×1.05の日だけ買う（p.12）", lambda d: not_down(d) and bool(vhi_d(d))),
+    ]
+    main3 = [STRATEGIES[0], STRATEGIES[5], STRATEGIES[6]]
+    halves = [("前半 2015〜2020", a.start, "2020-12-31"), ("後半 2021〜", "2021-01-01", a.end)]
+
+    def pf_line(tr):
+        st = stats(tr, COSTS[2])
+        return f"{pct(st['mean'], 2)}（{pct(st['mean_ci'][0], 2)}〜{pct(st['mean_ci'][1], 2)}）/ {st['pf']:.2f}" if st else "0件"
+
+    def port(tr, lo, hi, **kw):
+        dd = [d for d in days if lo <= d <= hi]
+        return portfolio([t for t in tr if lo <= t["in"] and t["out"] <= hi], COSTS[2], kw.pop("slots", 10), dd, data, **kw)
+
+    w("\n## 5. 引け値で売買した場合と、翌日の寄り付きで売買した場合（フィルターなし、片道0.1%）\n")
+    w("引け後に分析する運用では、シグナルの日の引けでは買えない。引け後に判定し、翌取引日の寄り付きで仕掛け・手じまう場合と比べる。ポートフォリオは同時保有10銘柄。\n")
+    w("| 戦略 | 売買のタイミング | 件数 | 勝率 | 1トレード平均（95%区間）/ PF | 年率 | 最大下落率 |")
+    w("|---|---|---|---|---|---|---|")
+    opened = {}
+    for name, ent, exn, src in main3:
+        opened[name] = gen_trades(data, members, ent, exn, STOPS[0], a.start, a.end, fill="open")
+        for lab, tr in (("当日の引け", results[name]), ("翌日の寄り付き", opened[name])):
+            st, p = stats(tr, COSTS[2]), portfolio(tr, COSTS[2], 10, days, data)
+            w(f"| {name} | {lab} | {st['n']} | {pct(st['win'])} | {pf_line(tr)} | {pct(p['cagr'])} | {pct(p['mdd'])} |")
+
+    same_day = {}
+    for t in opened[STRATEGIES[0][0]]:
+        same_day[t["in"]] = same_day.get(t["in"], 0) + 1
+    w("\n基本戦略（翌日の寄り付き）を、同じ日に仕掛けたシグナルの数で分けた1トレード平均。"
+      "1トレード平均のプラスは相場全体が売られた日（多数の銘柄が同時にシグナルを出す日）に集中しており、"
+      "同時保有数に上限があるとその日に一部しか買えないため、ポートフォリオの年率が伸びない。\n")
+    w("| 同じ日のシグナル数 | 件数 | 1トレード平均（95%区間）/ PF |")
+    w("|---|---|---|")
+    for lo_n, hi_n in ((1, 3), (4, 10), (11, 30), (31, 10 ** 6)):
+        g = [t for t in opened[STRATEGIES[0][0]] if lo_n <= same_day[t["in"]] <= hi_n]
+        w(f"| {lo_n}〜{'' if hi_n > 1000 else hi_n} | {len(g)} | {pf_line(g)} |")
+
+    w("\n## 6. 市場全体の条件（局面・VIX）を足した場合（翌日の寄り付きで売買、片道0.1%）\n")
+    w("条件はどれも本のルール（ワインスタインの局面、コナーズのVIXルール p.12）で、数値を調整していない。"
+      "過去データに合わせ込んでいないかを見るため、前半（2015〜2020）と後半（2021〜）の両方で効くかを確認する。"
+      "「1トレード平均」は1シグナル＝1トレード、年率・最大下落率は同時保有10銘柄のポートフォリオ。\n")
+    w("| 戦略 | 市場全体の条件 | 年平均件数 | 前半 1トレード平均 / PF | 後半 1トレード平均 / PF | 前半 年率 / 最大下落 | 後半 年率 / 最大下落 | 全期間 年率 / 最大下落 |")
+    w("|---|---|---|---|---|---|---|---|")
+    filtered = {}
+    for name, ent, exn, src in main3:
+        for fl, fn in filters:
+            tr = opened[name] if fn is None else gen_trades(data, members, ent, exn, STOPS[0], a.start, a.end, fill="open", allow=fn)
+            filtered[(name, fl)] = tr
+            cells = [pf_line([t for t in tr if lo <= t["in"] <= hi]) for _, lo, hi in halves]
+            ports = [port(tr, lo, hi) for _, lo, hi in halves] + [portfolio(tr, COSTS[2], 10, days, data)]
+            w(f"| {name} | {fl} | {len(tr) / years:.0f} | {cells[0]} | {cells[1]} | "
+              + " | ".join(f"{pct(p['cagr'])} / {pct(p['mdd'])}" for p in ports) + " |")
+        print("filters", name, file=sys.stderr)
+    w(f"| （参考）SPY買い持ち | | | | | | | {pct(spy_cagr)} / {pct(mdd)} |")
+
+    w("\n## 7. 1トレードのリスクを資金の2%にした場合（翌日の寄り付きで売買、片道0.1%）\n")
+    w("コナーズの手法にはストップがないため、リスク2%を決めるには非常時の損切り幅が必要になる。"
+      "損切り幅X%なら1銘柄の建玉は資金の 2%÷X%（10%→20%、15%→13.3%、20%→10%）、同時保有数は資金が足りる範囲（X÷2 銘柄）。"
+      "損切りは引け値で判定し翌日の寄り付きで手じまうため、窓開けで2%を超えて負けることがある（「1トレードの最大損失」）。"
+      "市場全体の条件は「下落局面は買わない＋VIX≦10日線×0.95の日は買わない」。\n")
+    w("| 戦略 | 非常時の損切り幅 | 建玉 / 同時保有数 | 年率 | 最大下落率 | 1トレードの最大損失（資金比） | 損切りになった件数 |")
+    w("|---|---|---|---|---|---|---|")
+    both = filters[3][1]
+    for name, ent, exn, src in main3:
+        for x in (0.10, 0.15, 0.20):
+            tr = gen_trades(data, members, ent, exn, (None, x, None), a.start, a.end, fill="open", allow=both)
+            wt, slots = 0.02 / x, int(round(x / 0.02, 6))
+            p = portfolio(tr, COSTS[2], slots, days, data, weight=wt)
+            cut = sum(1 for t in tr if t["why"] == "損切り")
+            w(f"| {name} | {pct(x, 0)} | {pct(wt)} / {slots} | {pct(p['cagr'])} | {pct(p['mdd'])} | {pct(p['worst_hit'], 2)} | {cut} |")
+        print("risk2", name, file=sys.stderr)
+
+    # ---- 8: 指数ETF ----
+    w("\n## 8. 指数ETF（SPY・QQQ）のルール（片道0.1%）\n")
+    w("コナーズの指数・ETF向けのルール（ルール表 p.23, p.24, p.30, p.33）。どれも終値>200日線のときだけ買う。"
+      "ポートフォリオは資金を2等分してSPY・QQQに1つずつ割り当て、シグナルがない間は現金（利息なし）。件数が少ないので信頼区間は広い。\n")
+    etf_m = {"SPY": [("0000-00-00", "9999-12-31")], "QQQ": [("0000-00-00", "9999-12-31")]}
+    etf = {k: prepare(load_prices(a.cache, k)) for k in etf_m}
+    vix_up3 = {}
+    run = 0
+    for d in vix["date"]:
+        run = run + 1 if vhi_d(d) else 0
+        vix_up3[d] = run >= 3
+
+    def E_cumn(nd, th):
+        def f(i, s):
+            v = s["rsi2"][i - nd + 1:i + 1]
+            return sum(v) if None not in v and sum(v) <= th else None
+        return f
+    X["RSI(2)≧65"] = lambda i, s, k: s["rsi2"][i] >= 65
+    etf_rules = [
+        ("2期間RSI≦5・5日線上抜けで手じまい", E_rsi2(5), "5日線上抜け", None, "p.22"),
+        ("2日累積RSI≦35・RSI(2)≧65で手じまい", E_cumn(2, 35), "RSI(2)≧65", None, "p.23"),
+        ("2日累積RSI≦50・RSI(2)≧65で手じまい", E_cumn(2, 50), "RSI(2)≧65", None, "p.23-24"),
+        ("3日累積RSI≦45・RSI(2)≧70で手じまい", E_cumn(3, 45), "RSI(2)≧70", None, "p.33"),
+        ("VIXストレッチ（VIX≧10日線×1.05が3日以上）・RSI(2)≧65で手じまい", lambda i, s: 0, "RSI(2)≧65", lambda d: vix_up3.get(d, False), "p.30"),
+    ]
+    w("| ルール | 出典 | 売買のタイミング | 件数（SPY+QQQ） | 年平均件数 | 勝率 | 1トレード平均（95%区間）/ PF | 平均保有日数 | 年率 | 最大下落率 | 保有している日の割合 |")
+    w("|---|---|---|---|---|---|---|---|---|---|---|")
+    for name, ent, exn, allow, src in etf_rules:
+        for fill, lab in (("close", "当日の引け"), ("open", "翌日の寄り付き")):
+            tr = gen_trades(etf, etf_m, ent, exn, STOPS[0], a.start, a.end, fill=fill, allow=allow)
+            st = stats(tr, COSTS[2])
+            if not st:
+                continue
+            p = portfolio(tr, COSTS[2], 2, days, etf)
+            held = sum(t["days"] for t in tr) / (2 * len(days))
+            w(f"| {name} | {src} | {lab} | {st['n']} | {st['n'] / years:.1f} | {pct(st['win'])} | {pf_line(tr)} | {st['days']:.1f} | {pct(p['cagr'])} | {pct(p['mdd'])} | {pct(held, 0)} |")
+    w(f"| （参考）SPY買い持ち | | | | | | | | {pct(spy_cagr)} | {pct(mdd)} | 100% |")
+
+    w("\n## 9. 注意\n")
+    w("- 過去の成績は将来を保証しない。特に上場廃止銘柄の欠落（生存者バイアスの残り）、配当なし、引け値ちょうどで約定できる前提（1〜4）、寄り付きの気配値のすべりを入れていないこと（5〜7）は、いずれも現実より良く見せる方向に働きうる。")
     w("- 1シグナル＝1トレードの統計は、同じ日に多数のシグナルが重なる（相場全体の急落時）ため、件数ほど独立ではない。信頼区間は月単位のブロックで補正した。")
     w("- この結果はルールの条件どおりに機械的に計算したもので、Claudeによる個別銘柄の売買判断ではない。")
     open(a.out, "w").write("\n".join(L) + "\n")
