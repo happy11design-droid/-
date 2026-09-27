@@ -17,33 +17,16 @@ import datetime as dt
 import operator
 import os
 import sys
-from collections import deque
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from backtest_lib import (COSTS, DEFAULT_CACHE, coverage, gen_trades, is_member, load_prices, load_universe,
-                          market_regime, pct, portfolio, sma, spy_benchmark, stats)
+from backtest_lib import (COSTS, DEFAULT_CACHE, Reporter, coverage, sliding, gen_trades, is_member, load_prices, load_universe,
+                          market_regime, pct, sma, spy_benchmark, stats)
 
 RISK = 0.02
 COST = COSTS[2]  # 片道0.1%
 
 
 # ---------- 指標 ----------
-
-def sliding(x, n, better, include_today):
-    """直近n本の最大（better=operator.ge）・最小（operator.le）。include_today=False なら当日を含まない"""
-    out, dq = [None] * len(x), deque()
-    for i, v in enumerate(x):
-        if not include_today and i >= n:
-            out[i] = x[dq[0]]
-        while dq and better(v, x[dq[-1]]):
-            dq.pop()
-        dq.append(i)
-        if dq[0] <= i - n:
-            dq.popleft()
-        if include_today:
-            out[i] = x[dq[0]]
-    return out
-
 
 def rolling_max(x, n):
     return sliding(x, n, operator.ge, False)  # 当日を含まない直近n日
@@ -209,18 +192,6 @@ def cmd_run(a):
         return gen_trades(data, members, entry, exit_fn, a.start, a.end, ok=liquid, fill="open", allow=allow,
                           max_hold=kw.pop("max_hold", 500), stop_pct=stop, **kw)
 
-    SEEDS = range(10)
-
-    def port(tr, stop, lo=None, hi=None, seed=None):
-        lo, hi = lo or a.start, hi or a.end
-        dd = [d for d in days if lo <= d <= hi]
-        return portfolio([t for t in tr if lo <= t["in"] and t["out"] <= hi], COST, max(1, int(round(stop / RISK, 6))), dd, data,
-                         weight=RISK / stop, seed=seed)
-
-    def med(xs):
-        xs = sorted(xs)
-        return xs[len(xs) // 2]
-
     L = []
     w = L.append
     w("---\ntype: backtest\ntitle: ミネルヴィニ・ワインスタイン 数値ルールのバックテスト\n"
@@ -237,30 +208,8 @@ def cmd_run(a):
     w("- RSランキング: ルール表に計算式がないため、直近3カ月40%・6/9/12カ月各20%の加重リターンを、その日の構成銘柄の中で百分位（1〜99）にした（Claudeの選択）。")
     w(f"- 比較: 同期間のSPY買い持ち 年率 {pct(spy_cagr)}、最大下落率 {pct(spy_mdd)}（配当込み）\n")
 
-    def header():
-        w("| 条件 | 年平均件数 | 勝率 | 平均利益 / 平均損失 | 1トレード平均（95%区間）/ PF | 平均保有日数 | 前半 PF / 後半 PF "
-          "| 年率 ランダム順 中央値（幅） | 最大下落率 ランダム順 中央値 | 前半 / 後半 年率（ランダム順 中央値） | 年率 / 最大下落率（RSの高い順） | 平均投資比率 |")
-        w("|---|---|---|---|---|---|---|---|---|---|---|---|")
-
-    def line(label, tr, stop):
-        st = stats(tr, COST)
-        if not st:
-            w(f"| {label} | 0 | | | | | | | | | | |")
-            return
-        pfs = []
-        for _, lo, hi in halves:
-            sh = stats([t for t in tr if lo <= t["in"] <= hi], COST)
-            pfs.append(f"{sh['pf']:.2f}" if sh else "-")
-        rnd = [port(tr, stop, seed=k) for k in SEEDS]
-        h1 = med([port(tr, stop, *halves[0][1:], seed=k)["cagr"] for k in SEEDS])
-        h2 = med([port(tr, stop, *halves[1][1:], seed=k)["cagr"] for k in SEEDS])
-        cg = [p["cagr"] for p in rnd]
-        p = port(tr, stop)
-        w(f"| {label} | {st['n'] / years:.0f} | {pct(st['win'])} | {pct(st['avg_win'], 1)} / {pct(st['avg_loss'], 1)} | "
-          f"{pct(st['mean'], 2)}（{pct(st['mean_ci'][0], 2)}〜{pct(st['mean_ci'][1], 2)}）/ {st['pf']:.2f} | {st['days']:.0f} | "
-          f"{pfs[0]} / {pfs[1]} | {pct(med(cg))}（{pct(min(cg))}〜{pct(max(cg))}） | {pct(med([q['mdd'] for q in rnd]))} | "
-          f"{pct(h1)} / {pct(h2)} | {pct(p['cagr'])} / {pct(p['mdd'])} | {pct(p['exposure'], 0)} |")
-        print(label, st["n"], file=sys.stderr)
+    rep = Reporter(w, data, days, halves, years, cost=COST, risk=RISK)
+    header, line = rep.header, rep.line
 
     # ---- ミネルヴィニ ----
     w("## 1. ミネルヴィニ: トレンドテンプレート＋出来高を伴うベース上抜け\n")
