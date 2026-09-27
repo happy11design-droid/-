@@ -111,6 +111,9 @@ swap_images() {
     echo "[$title] 画像の追加に失敗: $out" >&2; return 1; }
 }
 
+# nlm_chat: 新しいnlmの exit 8（回答の書き直し）と exit 3（認証切れ）を扱う共通関数
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/nlm_chat.sh"
+
 # プロンプトを送信し、回答をファイルへ保存する
 run_chat() {
   local id="$1" title="$2"
@@ -119,7 +122,7 @@ run_chat() {
   # --web は「サーバー側の最新の会話を使う」。これを付けないと generate-chat は one-shot 扱いとなり、
   # やり取りが手元にしか残らず、NotebookLMの画面には履歴が一切現れない（2026-09-22に実際に発生）。
   # ユーザーが後からUIで「直前の判定を図解して」等と追加依頼できるよう、常に付けること。
-  if ! nlm generate-chat --citations off --web --prompt-file "$PROMPT" "$id" >"$out" 2>"$err"; then
+  if ! nlm_chat "$id" "$PROMPT" "$out" "$err" --web; then
     { echo "【エラー: 回答を取得できませんでした】"; cat "$err"; } >"$out"
   fi
   rm -f "$err"

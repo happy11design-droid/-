@@ -14,6 +14,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$ROOT/tools/nlm_chat.sh"
 CMD="${1:-}"; D="${2:-}"
 [[ -n "$CMD" && -n "$D" ]] || { sed -n '2,14p' "$0"; exit 2; }
 mkdir -p "$D"
@@ -102,7 +103,7 @@ JOBS=()
 # --web は付けない: 同じノートブックへ複数のプロンプトを並列に送るため、サーバー側の同じ会話に混ざると
 # 別の銘柄のやり取りが判定に影響しうる。結果は毎朝のページ（Artifact）で見る（個別分析 theme_single.sh は --web を付ける）。
 send() {  # $1=ノートブックID $2=プロンプト $3=回答ファイル
-  ( nlm generate-chat --citations off --prompt-file "$2" "$1" > "$3" 2> "$3.err" || echo "送信に失敗: $(tail -1 "$3.err")" >> "$3" ) &
+  ( nlm_chat "$1" "$2" "$3" "$3.err" || echo "送信に失敗: $(tail -1 "$3.err")" >> "$3" ) &
   JOBS+=($!)
 }
 send "${NB[ワインスタイン]}" "$D/prompt_theme.txt" "$D/answers/0_テーマの局面_ワインスタイン.txt"

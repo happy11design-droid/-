@@ -11,6 +11,7 @@
 #       チャート画像（日足・分足）をノートブックに差し替えてから並列に送り（回答後に画像は外す）、回答を <作業ディレクトリ>/answers/ に書き出して全文を表示する。
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$ROOT/tools/nlm_chat.sh"
 CMD="${1:-}"; T="${2:-}"; D="${3:-}"
 [[ -n "$CMD" && -n "$T" && -n "$D" ]] || { sed -n '2,12p' "$0"; exit 2; }
 T="${T^^}"
@@ -85,7 +86,7 @@ for k in "${WHO[@]}"; do
       echo "（チャート画像を追加できませんでした: $(tail -1 "$D/answers/$k.img")）" > "$D/answers/$k.imgerr"
     fi
     # --web: NotebookLMの画面に会話の履歴を残す（運用メモ 2026-09-22。付けないと画面で続きの質問ができない）
-    nlm generate-chat --citations off --web --prompt-file "$D/prompt.txt" "${NB[$k]}" > "$D/answers/$k.txt" 2> "$D/answers/$k.err" \
+    nlm_chat "${NB[$k]}" "$D/prompt.txt" "$D/answers/$k.txt" "$D/answers/$k.err" --web \
       || echo "送信に失敗: $(tail -1 "$D/answers/$k.err")" >> "$D/answers/$k.txt"
     # 毎朝のRoutine（テキストのみ）がこの銘柄の図を見て別の銘柄を判定しないよう、回答後に画像を外す
     del_images "${NB[$k]}" || true ) &
