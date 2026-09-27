@@ -129,4 +129,7 @@ for j in "${JOBS[@]}"; do wait "$j" || true; done
     cat "$D/news.md"
   fi
 } > "$D/report.md"
+# 週次レビュー用の記録（候補・保有銘柄と著者の結論）
+python3 "$ROOT/tools/theme_review.py" record "$D" > /dev/null
 echo "report: $D/report.md"
+echo "record: $D/record.json"
