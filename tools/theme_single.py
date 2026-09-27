@@ -47,18 +47,16 @@ def load_pool():
 
 def who(rules):
     """rules.md から、送る著者（合図 A・B が出ているルールの著者＋保有中のルールの著者）を返す"""
-    authors = ("ボリンジャー", "ミネルヴィニ", "ワインスタイン")
+    authors = ("ボリンジャー", "ミネルヴィニ", "ワインスタイン", "コナーズ")
     m = re.search(r"ボリンジャーIII: (\S+?)／ミネルヴィニ: (\S+?)／ワインスタイン10週: (\S+?)(?:／急落の底: (\S+?))?（", rules)
     if m:
-        pats = dict(zip(("ボリンジャー", "ミネルヴィニ", "ワインスタイン", "急落"), m.groups()))
+        pats = dict(zip(("ボリンジャー", "ミネルヴィニ", "ワインスタイン", "コナーズ"), m.groups()))   # 急落の底はコナーズが担当
         out = [a for a in authors if pats[a] in ("A", "B")]
-        if pats["急落"] == "A" and "ボリンジャー" not in out:     # 急落の底はボリンジャーが担当
-            out.insert(0, "ボリンジャー")
     else:
         out = list(authors)
     h = re.search(r"## \d\. 保有中の確認\n\n- ルール: ([^／]+)", rules)
     if h:
-        out += [a for a in authors if (a in h.group(1) or (a == "ボリンジャー" and "急落" in h.group(1))) and a not in out]
+        out += [a for a in authors if (a in h.group(1) or (a == "コナーズ" and "急落" in h.group(1))) and a not in out]
     return out
 
 
@@ -178,12 +176,12 @@ def report(sym, d, pool_series, asof=None, hold=None, earn=None):
     w("## 決算の中身\n")
     w("過去の日付での再現のため渡さない（その時点で発表済みだったか分からない）\n" if asof else fund_text(sym) + "\n")
 
-    # 急落の底（逆張り、担当: ボリンジャー）。2026-09-27 採用
+    # 急落の底（逆張り、担当: コナーズ）。2026-09-27 採用
     d["rsi2"] = rsi_wilder(d["c"], 2)
     crash = bcr.C3(i, d) is not None
     dr, r2 = bcr.drop(i, d), d["rsi2"][i]
     pat_c = "A" if crash else "該当なし"
-    w("## 4. 逆張り: 急落の底（担当: ボリンジャー）\n")
+    w("## 4. 逆張り: 急落の底（担当: コナーズ）\n")
     w(f"- 条件: 急落の前（6日前）に50日線＞200日線、直前5日の最高値（終値）から15%以上下落、RSI(2)≦5 → **{mark(crash)}**"
       f"（6日前の50日線／200日線 {d['ma50'][i - 6]:.2f}／{d['ma200'][i - 6]:.2f}、下落率 {dr * 100:+.1f}%、RSI(2) {r2:.1f}）")
     w(f"- 直前5日の最高値（終値）{max(d['c'][i - 5:i]):.2f} の15%下は {max(d['c'][i - 5:i]) * 0.85:.2f}")

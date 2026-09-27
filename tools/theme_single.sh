@@ -7,7 +7,7 @@
 #   （ここでメインが、`新分析ツール/ニュース調査指示.md` を読ませた単一のサブエージェントに <作業ディレクトリ>/news.md を書かせる）
 #   tools/theme_single.sh send <ティッカー> <作業ディレクトリ> [--all]
 #       採用ルールの合図（A=条件成立、B=成立が目前）が出ているルールの著者と、保有中ならそのルールの著者にだけ送る
-#       （合図がない著者は方式Bでは必ず【様子見】になるため。--all で3人全員に送る）。
+#       （合図がない著者は方式Bでは必ず【様子見】になるため。--all で4人全員に送る）。
 #       チャート画像（日足・分足）をノートブックに差し替えてから並列に送り（回答後に画像は外す）、回答を <作業ディレクトリ>/answers/ に書き出して全文を表示する。
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -51,7 +51,7 @@ open(os.path.join(d, "prompt.txt"), "w", encoding="utf-8").write(out)
 PY
 
 mkdir -p "$D/answers"
-declare -A NB=([ボリンジャー]=3dc5edc5-7808-438c-abf0-9c0e5ca6cef9 [ミネルヴィニ]=e09b765e-4f20-496a-ae2f-6d991c488d0d [ワインスタイン]=69875bdb-8d0d-474e-9b1a-c6c1b7bc82a1)
+declare -A NB=([ボリンジャー]=3dc5edc5-7808-438c-abf0-9c0e5ca6cef9 [ミネルヴィニ]=e09b765e-4f20-496a-ae2f-6d991c488d0d [ワインスタイン]=69875bdb-8d0d-474e-9b1a-c6c1b7bc82a1 [コナーズ]=56852e48-e64b-4b7d-871e-748abb263d13)
 # チャート画像（日足・直近の分足。prepare の market_data.py が作る）をノートブックのソースに差し替える。
 # 既存ツールの tools/run_notebooks.sh と同じ方法: 画像拡張子のソースだけを削除し、新しい画像を追加する（本のソースには触れない）。
 IMAGES=()
@@ -64,7 +64,7 @@ del_images() {   # $1 = ノートブックID。画像拡張子で終わるソー
 
 # 送る著者: 合図（A・B）が出ているルールの著者と、保有中のルールの著者（--all なら3人全員）
 if [[ "${4:-}" == --all ]]; then
-  WHO=(ボリンジャー ミネルヴィニ ワインスタイン)
+  WHO=(ボリンジャー ミネルヴィニ ワインスタイン コナーズ)
 else
   mapfile -t WHO < <(python3 "$ROOT/tools/theme_single.py" --who "$D/rules.md")
 fi
@@ -73,7 +73,7 @@ if [[ ${#WHO[@]} -eq 0 ]]; then
   echo "3つの採用ルールのどれも、合図（A=条件成立、B=成立が目前）が出ていません。方式Bでは著者の判定は【様子見】になるため、NotebookLMには送っていません。"
   echo "次に条件がそろう目安（スクリプトの計算）:"
   grep -E "目安|パターン判定" "$D/rules.md" || true
-  echo "（3人の見方を聞きたい場合は、send の最後に --all を付けて送る。質問3回）"
+  echo "（全員の見方を聞きたい場合は、send の最後に --all を付けて送る。質問4回）"
   exit 0
 fi
 echo "送る著者: ${WHO[*]}（質問${#WHO[@]}回）"

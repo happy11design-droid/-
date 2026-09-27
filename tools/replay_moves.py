@@ -36,7 +36,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TEMPLATE = os.path.join(ROOT, "新分析ツール", "個別分析_送信プロンプト雛形.txt")
 MEMO_BRANCH = "origin/claude/ecstatic-tesla-660dhs"
 NB = {"ボリンジャー": "3dc5edc5-7808-438c-abf0-9c0e5ca6cef9", "ミネルヴィニ": "e09b765e-4f20-496a-ae2f-6d991c488d0d",
-      "ワインスタイン": "69875bdb-8d0d-474e-9b1a-c6c1b7bc82a1"}
+      "ワインスタイン": "69875bdb-8d0d-474e-9b1a-c6c1b7bc82a1",
+      "コナーズ": "56852e48-e64b-4b7d-871e-748abb263d13"}
 OFFSETS = (-2, -1, 0, 1, 2)
 RULE_AUTHOR = {"ボリンジャーIII": "ボリンジャー", "ミネルヴィニ": "ミネルヴィニ", "ワインスタイン10週": "ワインスタイン"}
 CONFIRM_MAX = 10   # これを超える回数を送るときは、事前にユーザーの確認を取る（ユーザーの指示 2026-09-27）。確認後に --yes を付けて実行する

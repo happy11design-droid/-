@@ -4,7 +4,7 @@
 使い方:
   tools/build_theme_prompt.py <scan.md> <出力ディレクトリ> <種類の語> [--news news.md] <ティッカー>:<データファイル> [...]
     <scan.md>: tools/theme_scan.py の出力
-    <種類の語>: 「ボリンジャー」「ミネルヴィニ」「ワインスタイン」のどれか。候補の表の「種類」と、保有銘柄の表の「ルール」にこの語を含む銘柄だけを入れる
+    <種類の語>: 「ボリンジャー」「ミネルヴィニ」「ワインスタイン」「コナーズ」のどれか。候補の表の「種類」と、保有銘柄の表の「ルール」にこの語を含む銘柄だけを入れる
     --news: サブエージェントが書いた news.md（`新分析ツール/ニュース調査指示.md`）。銘柄ごとの節とテーマ全体の節を差し込む
     <データファイル>: tools/market_data.py ticker が書き出した <ティッカー>_data.txt（ニュースを足したファイルでもよい）
 
@@ -64,7 +64,7 @@ def main():
             head = [c.strip() for c in line.strip("|").split("|")]
         elif head and re.match(r"^\| [A-Z]", line):
             row = dict(zip(head, [c.strip() for c in line.strip("|").split("|")]))
-            if kind in row.get("ルール", "") or (kind == "ボリンジャー" and "急落" in row.get("ルール", "")):   # 急落の底はボリンジャーが担当
+            if kind in row.get("ルール", "") or (kind == "コナーズ" and "急落" in row.get("ルール", "")):   # 急落の底はコナーズが担当
                 rows.setdefault(row["銘柄"], []).append({"保有": row})
     head = None
     for line in section(text, "## 6.").splitlines():

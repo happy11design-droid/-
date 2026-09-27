@@ -23,6 +23,7 @@ declare -A NB=(
   [ボリンジャー]=3dc5edc5-7808-438c-abf0-9c0e5ca6cef9
   [ミネルヴィニ]=e09b765e-4f20-496a-ae2f-6d991c488d0d
   [ワインスタイン]=69875bdb-8d0d-474e-9b1a-c6c1b7bc82a1
+  [コナーズ]=56852e48-e64b-4b7d-871e-748abb263d13   # 急落の底（2026-09-27〜）
 )
 
 tickers() {  # scan.md の指定した節の表の1列目
@@ -49,7 +50,7 @@ if [[ "$CMD" == prepare ]]; then
     fi
   fi
   python3 "$ROOT/tools/theme_scan.py" "$D/scan.md" "${PREV[@]}" > /dev/null
-  { tickers "## 4."; tickers "## 5."; tickers "## 6."; } | sort -u > "$D/news_targets.txt"
+  { tickers "## 4."; tickers "## 4-2."; tickers "## 5."; tickers "## 6."; } | sort -u > "$D/news_targets.txt"
   { tickers "## 5."; tickers "## 6."; } | sort -u > "$D/data_targets.txt"
   while read -r t; do
     python3 "$ROOT/tools/market_data.py" ticker "$t" "$D" > /dev/null 2>&1 || echo "$t の数値データを取得できませんでした" >&2
@@ -57,7 +58,7 @@ if [[ "$CMD" == prepare ]]; then
     [[ -f "$D/${t}_data.txt" ]] && { echo; python3 "$ROOT/tools/fundamentals.py" "$t"; } >> "$D/${t}_data.txt"
   done < "$D/data_targets.txt"
   echo "scan: $D/scan.md"
-  echo "ニュースを調べる銘柄（急騰・急落・保有・候補）: $(tr '\n' ' ' < "$D/news_targets.txt")"
+  echo "ニュースを調べる銘柄（急騰・急落・監視外の注目・保有・候補）: $(tr '\n' ' ' < "$D/news_targets.txt")"
   echo "候補・保有銘柄: $(tr '\n' ' ' < "$D/data_targets.txt")"
   exit 0
 fi
@@ -106,7 +107,7 @@ send() {  # $1=ノートブックID $2=プロンプト $3=回答ファイル
 }
 send "${NB[ワインスタイン]}" "$D/prompt_theme.txt" "$D/answers/0_テーマの局面_ワインスタイン.txt"
 
-for KIND in ボリンジャー ミネルヴィニ ワインスタイン; do
+for KIND in ボリンジャー ミネルヴィニ ワインスタイン コナーズ; do
   ARGS=()
   while read -r t; do
     [[ -f "$D/${t}_data.txt" ]] && ARGS+=("$t:$D/${t}_data.txt")

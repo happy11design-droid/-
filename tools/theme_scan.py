@@ -34,6 +34,8 @@ from backtest_lib import DEFAULT_CACHE, MEMBERS_URL, curl, market_regime, rsi_wi
 import backtest_crash as bcr
 
 RISK, STOP = 0.02, 0.15
+NDX_URL = "https://api.nasdaq.com/api/quote/list-type/nasdaq100"
+OUT_MAX = 5   # 監視外の注目銘柄（ニュースを調べる）はRSの高い順にこの件数まで
 B_MAX = 5   # パターンB（予約注文の候補）は各ルールでこの件数まで
 CRASH_MAX = 7   # 急落の底の候補（市場全体の急落の日は20件を超えることがある）はRSの高い順にこの件数まで
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
@@ -128,7 +130,11 @@ def main():
         p = os.path.join(DEFAULT_CACHE, "members.csv")
         members_csv = open(p).read() if os.path.exists(p) else "ticker,start_date,end_date\n"
     sp = [r["ticker"] for r in csv.DictReader(members_csv.splitlines()) if not r["end_date"]]
-    syms = sorted(set(sp) | set(wl) | {"SPY", "^GSPC", "^NDX"})
+    try:   # NASDAQ100の今の構成銘柄（監視外の注目銘柄を探すため）
+        ndx_m = [r["symbol"].replace("/", ".") for r in json.loads(curl(NDX_URL))["data"]["data"]["rows"]]
+    except Exception:
+        ndx_m = []
+    syms = sorted(set(sp) | set(ndx_m) | set(wl) | {"SPY", "^GSPC", "^NDX"})
     with ThreadPoolExecutor(8) as ex:
         got = dict(zip(syms, ex.map(fetch_daily, syms)))
     got = {s: cut(d, a.asof) for s, d in got.items() if d}
@@ -240,6 +246,36 @@ def main():
         w("該当なし")
     w("")
 
+    # ---- 監視外の注目銘柄 ----
+    w("## 4-2. 監視外の注目銘柄（S&P500・NASDAQ100のうち監視銘柄に入っていない銘柄）\n")
+    w("条件: 流動性（株価5ドル以上・50日平均出来高25万株以上）があり、(a) 前日比+8%以上かつ出来高が50日平均の2倍以上、"
+      f"または (b) 終値が直前1年の最高値（終値）を上回り、RS≧90。RSの高い順に{OUT_MAX}銘柄（ニュースを調べる）。監視銘柄に入れるかはユーザーが決める。\n")
+    outs = []
+    for s_, d in got.items():
+        if s_ in wl or s_.startswith("^") or len(d["c"]) < 254 or d["date"][-1] != day:
+            continue
+        c_, v_ = d["c"], d["v"]
+        v50 = sum(v_[-51:-1]) / 50
+        if c_[-1] < 5 or v50 < 250_000:
+            continue
+        ch, vr = c_[-1] / c_[-2] - 1, v_[-1] / v50 if v50 else 0
+        rs_ = 99 * bisect.bisect_left(pool, rs_raw(c_)) / (len(pool) - 1) if len(pool) > 50 else None
+        surge = ch >= 0.08 and vr >= 2
+        newhi = c_[-1] > max(c_[-253:-1]) and rs_ is not None and rs_ >= 90
+        if surge or newhi:
+            outs.append((s_, ch, vr, rs_, "急騰" if surge and not newhi else "1年の高値更新" if newhi and not surge else "急騰・1年の高値更新", c_[-1]))
+    outs.sort(key=lambda x: -(x[3] or 0))
+    if outs:
+        w("| 銘柄 | 種類 | 前日比 | 出来高（50日平均の倍） | RS | 終値 |")
+        w("|---|---|---|---|---|---|")
+        for s_, ch, vr, rs_, kd, cl in outs[:OUT_MAX]:
+            w(f"| {s_} | {kd} | {pct(ch)} | {vr:.1f}倍 | {'取得不可' if rs_ is None else f'{rs_:.0f}'} | {cl:.2f} |")
+        if len(outs) > OUT_MAX:
+            w(f"\n- ほかに{len(outs) - OUT_MAX}銘柄: " + "、".join(f"{x[0]}（{x[4]}、RS {x[3]:.0f}）" for x in outs[OUT_MAX:OUT_MAX + 15] if x[3] is not None))
+    else:
+        w("該当なし")
+    w("")
+
     # ---- 保有銘柄 ----
     hold = load_holdings()
     w("## 5. 保有銘柄の手じまい条件（`新分析ツール/保有銘柄.md`）\n")
@@ -336,7 +372,7 @@ def main():
                               "why": f"ピボット（ベースの高値、{d['date'][kh]}）{piv:.2f}まで{(piv / d['c'][i] - 1) * 100:.1f}%、ベース{i - kh}日・調整幅{depth * 100:.0f}%",
                               "order": f"逆指値買い {piv:.2f}（指値の上限 {piv * 1.03:.2f}＝ピボット+3%）。本は上抜けの日の出来高が50日平均の2倍以上（{2 * d['vol50'][i] / 1e4:,.0f}万株）を求める。損切り: 買値の15%下。手じまい: 引けで50日線割れ"})
         if bcr.C3(i, d) is not None:
-            cands.append({**base, "pat": "A", "kind": "逆張り: 急落の底（担当: ボリンジャー）",
+            cands.append({**base, "pat": "A", "kind": "逆張り: 急落の底（担当: コナーズ）",
                           "why": f"直前5日の最高値（終値）から{bcr.drop(i, d) * 100:.1f}%下落（−15%以上）、RSI(2)={d['rsi2'][i]:.1f}（≦5）、急落の前は50日線＞200日線。市場全体の局面: S&P500 {mkt}／NASDAQ100 {mkt_n}",
                           "order": f"翌日の寄り付きで買い。損切り: 買値の15%下。手じまい: 引けで20日線（今日 {d['bb_mid'][i]:.2f}）以上に戻った翌日の寄り付き"})
         if dt.date.fromisoformat(day).weekday() == 4:
