@@ -296,7 +296,8 @@ def main():
             if "新高値" in h["rule"]:
                 ex = "成立（引けで50日線割れ → 翌日の寄り付きで手じまい）" if c < d["ma50"][i] else f"未成立（50日線 {d['ma50'][i]:.2f}）"
             elif "急落" in h["rule"]:
-                ex = "成立（引けで20日線以上 → 翌日の寄り付きで手じまい）" if d["bb_mid"][i] and c >= d["bb_mid"][i] else f"未成立（20日線 {d['bb_mid'][i]:.2f}）"
+                ma5 = sum(d["c"][i - 4:i + 1]) / 5
+                ex = "成立（終値が5日線を上回った → 翌日の寄り付きで手じまい）" if c > ma5 else f"未成立（5日線 {ma5:.2f}）"
             elif "ボリンジャー" in h["rule"]:
                 ex = "成立（引けで上部バンド以上 → 翌日の寄り付きで手じまい）" if d["pctb"][i] is not None and d["pctb"][i] >= 1 else f"未成立（上部バンド {d['bb_up'][i]:.2f}）"
             elif "ミネルヴィニ" in h["rule"]:
@@ -388,7 +389,7 @@ def main():
         if bcr.C3(i, d) is not None:
             cands.append({**base, "pat": "A", "kind": "逆張り: 急落の底（担当: コナーズ）",
                           "why": f"直前5日の最高値（終値）から{bcr.drop(i, d) * 100:.1f}%下落（−15%以上）、RSI(2)={d['rsi2'][i]:.1f}（≦5）、急落の前は50日線＞200日線。市場全体の局面: S&P500 {mkt}／NASDAQ100 {mkt_n}",
-                          "order": f"翌日の寄り付きで買い。損切り: 買値の15%下。手じまい: 引けで20日線（今日 {d['bb_mid'][i]:.2f}）以上に戻った翌日の寄り付き"})
+                          "order": f"翌日の寄り付きで買い。損切り: 買値の15%下。手じまい: 終値が5日線（今日 {sum(d['c'][i - 4:i + 1]) / 5:.2f}）を上回った翌日の寄り付き（コナーズ）"})
         if dt.date.fromisoformat(day).weekday() == 4:
             if bt.E_weinstein(10, ma="10")(i, d) is not None:
                 cands.append({**base, "pat": "A", "kind": "順張り: ワインスタイン（10週の高値上抜け）",

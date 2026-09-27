@@ -100,8 +100,8 @@ def rule_exit(rule, s, j):
     """その日の引けでルールの手じまい条件が成立したか"""
     if "新高値" in rule:
         return s["ma50"][j] is not None and s["c"][j] < s["ma50"][j]
-    if "急落" in rule:
-        return s["bb_mid"][j] is not None and s["c"][j] >= s["bb_mid"][j]
+    if "急落" in rule:   # コナーズの手じまい: 終値が5日線を上回る（2026-09-27〜）
+        return j >= 4 and s["c"][j] > sum(s["c"][j - 4:j + 1]) / 5
     if "ボリンジャー" in rule:
         return s["pctb"][j] is not None and s["pctb"][j] >= 1.0
     if "ミネルヴィニ" in rule:
