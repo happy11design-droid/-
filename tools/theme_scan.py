@@ -128,12 +128,13 @@ def main():
         p = os.path.join(DEFAULT_CACHE, "members.csv")
         members_csv = open(p).read() if os.path.exists(p) else "ticker,start_date,end_date\n"
     sp = [r["ticker"] for r in csv.DictReader(members_csv.splitlines()) if not r["end_date"]]
-    syms = sorted(set(sp) | set(wl) | {"SPY", "^GSPC"})
+    syms = sorted(set(sp) | set(wl) | {"SPY", "^GSPC", "^NDX"})
     with ThreadPoolExecutor(8) as ex:
         got = dict(zip(syms, ex.map(fetch_daily, syms)))
     got = {s: cut(d, a.asof) for s, d in got.items() if d}
     spy = got.pop("SPY")
     gspc = got.pop("^GSPC", None)
+    ndx = got.pop("^NDX", None)
     day = spy["date"][-1]
     data = {s: got[s] for s in wl if s in got and got[s]["date"] and got[s]["date"][-1] == day and len(got[s]["c"]) > 260}
     missing = sorted(set(wl) - set(data))
@@ -188,7 +189,8 @@ def main():
     warn = br < 0.4 and ma50[-1] is not None and c[-1] < ma50[-1]
     w("\n## 2. テーマ全体の状態と早めの警告\n")
     mkt = market_regime(gspc).get(day, "判定不能") if gspc else "取得不可"
-    w(f"- 市場全体（S&P500指数）の30週線による局面: **{mkt}**（急落の底で買うルールは、過去の検証で下落相場で特に強く、横ばいの相場では負けていた）")
+    mkt_n = market_regime(ndx).get(day, "判定不能") if ndx else "取得不可"
+    w(f"- 市場全体の30週線による局面: S&P500指数 **{mkt}**／NASDAQ100指数 **{mkt_n}**（急落の底で買うルールは、過去の検証で下落相場で特に強く、横ばいの相場では負けていた）")
     w(f"- テーマ指数（監視銘柄の等金額平均）の30週線による局面: **{stage.get(day, '判定不可')}**（上昇＝線より上かつ上向き、下落＝線より下かつ下向き、それ以外＝横ばい。ワインスタインのステージの近似）")
     w(f"- テーマ指数と50日線: {'50日線より上' if ma50[-1] and c[-1] > ma50[-1] else '50日線より下'}（乖離 {pct(c[-1] / ma50[-1] - 1) if ma50[-1] else '取得不可'}）")
     w(f"- S&P500に対する相対的な強さ: {'50日平均より上（S&P500より強い）' if rma[-1] and ratio[-1] > rma[-1] else '50日平均より下（S&P500より弱い）'}")
@@ -335,7 +337,7 @@ def main():
                               "order": f"逆指値買い {piv:.2f}（指値の上限 {piv * 1.03:.2f}＝ピボット+3%）。本は上抜けの日の出来高が50日平均の2倍以上（{2 * d['vol50'][i] / 1e4:,.0f}万株）を求める。損切り: 買値の15%下。手じまい: 引けで50日線割れ"})
         if bcr.C3(i, d) is not None:
             cands.append({**base, "pat": "A", "kind": "逆張り: 急落の底（担当: ボリンジャー）",
-                          "why": f"直前5日の最高値（終値）から{bcr.drop(i, d) * 100:.1f}%下落（−15%以上）、RSI(2)={d['rsi2'][i]:.1f}（≦5）、急落の前は50日線＞200日線。市場全体の局面: {mkt}",
+                          "why": f"直前5日の最高値（終値）から{bcr.drop(i, d) * 100:.1f}%下落（−15%以上）、RSI(2)={d['rsi2'][i]:.1f}（≦5）、急落の前は50日線＞200日線。市場全体の局面: S&P500 {mkt}／NASDAQ100 {mkt_n}",
                           "order": f"翌日の寄り付きで買い。損切り: 買値の15%下。手じまい: 引けで20日線（今日 {d['bb_mid'][i]:.2f}）以上に戻った翌日の寄り付き"})
         if dt.date.fromisoformat(day).weekday() == 4:
             if bt.E_weinstein(10, ma="10")(i, d) is not None:

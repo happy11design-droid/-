@@ -23,6 +23,7 @@ import backtest_trend as bt
 from backtest_regime import up
 from backtest_minervini2 import add_pivot
 import backtest_crash as bcr
+from fundamentals import text as fund_text
 from backtest_lib import MEMBERS_URL, curl, rsi_wilder
 from theme_scan import cut, earnings_date, fetch_daily, pct
 
@@ -173,6 +174,10 @@ def report(sym, d, pool_series, asof=None, hold=None, earn=None):
     if pat_w == "B":
         w(f"- 予約注文の目安（B）: 逆指値買い {h10:.2f}（本のルールは週足の終値で判定するので近似。上抜けの週の出来高は直前4週の平均の2倍以上）")
     w("")
+    # 決算の中身（ミネルヴィニの本の銘柄選定。過去の日付での再現では、その時点で発表済みか分からないため渡さない）
+    w("## 決算の中身\n")
+    w("過去の日付での再現のため渡さない（その時点で発表済みだったか分からない）\n" if asof else fund_text(sym) + "\n")
+
     # 急落の底（逆張り、担当: ボリンジャー）。2026-09-27 採用
     d["rsi2"] = rsi_wilder(d["c"], 2)
     crash = bcr.C3(i, d) is not None

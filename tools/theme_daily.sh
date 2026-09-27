@@ -53,6 +53,8 @@ if [[ "$CMD" == prepare ]]; then
   { tickers "## 5."; tickers "## 6."; } | sort -u > "$D/data_targets.txt"
   while read -r t; do
     python3 "$ROOT/tools/market_data.py" ticker "$t" "$D" > /dev/null 2>&1 || echo "$t の数値データを取得できませんでした" >&2
+    # 決算の中身（四半期のEPS・売上・純利益率。ミネルヴィニの本の銘柄選定の材料）を数値データの後ろに足す
+    [[ -f "$D/${t}_data.txt" ]] && { echo; python3 "$ROOT/tools/fundamentals.py" "$t"; } >> "$D/${t}_data.txt"
   done < "$D/data_targets.txt"
   echo "scan: $D/scan.md"
   echo "ニュースを調べる銘柄（急騰・急落・保有・候補）: $(tr '\n' ' ' < "$D/news_targets.txt")"
