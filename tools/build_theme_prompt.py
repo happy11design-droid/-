@@ -79,7 +79,8 @@ def main():
     blocks = []
     for sym, rs in rows.items():
         if sym not in files:
-            sys.exit(f"{sym} のデータファイルが指定されていません")
+            print(f"{sym} の数値データがないため送信から外しました", file=sys.stderr)
+            continue
         b = []
         for r in rs:
             if "保有" in r:

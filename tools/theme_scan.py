@@ -139,8 +139,8 @@ def main():
 
     # ---- テーマの強さ ----
     w("## 1. テーマ（グループ）の強さ\n")
-    w("| グループ | 銘柄数 | 1週 | 1カ月 | 3カ月 | 3カ月の順位 | 50日線より上の銘柄の割合 |")
-    w("|---|---|---|---|---|---|---|")
+    w("| グループ | 銘柄数 | 1週 | 1カ月 | 3カ月 | 3カ月の順位 | 50日線より上の銘柄の割合 | グループ指数の30週線の局面（線との乖離、4週前からの線の傾き） |")
+    w("|---|---|---|---|---|---|---|---|")
     groups = list(dict.fromkeys(wl.values()))
     med = lambda xs: sorted(xs)[len(xs) // 2] if xs else None
     rows = []
@@ -148,10 +148,14 @@ def main():
         mem = [d for s, d in data.items() if wl[s] == g]
         r = [med([d["c"][-1] / d["c"][-1 - k] - 1 for d in mem]) for k in (5, 21, 63)]
         ab = sum(1 for d in mem if d["ma50"][-1] and d["c"][-1] > d["ma50"][-1]) / len(mem) if mem else None
-        rows.append((g, len(mem), r, ab))
+        gi = bth.theme_index({s: d for s, d in data.items() if wl[s] == g}, spy["date"])
+        m30 = sma(gi["c"], 150)
+        st = market_regime(gi).get(day, "判定不能")
+        desc = f"{st}（{pct(gi['c'][-1] / m30[-1] - 1)}、{pct(m30[-1] / m30[-21] - 1)}）" if m30[-1] and m30[-21] else st
+        rows.append((g, len(mem), r, ab, desc))
     order = sorted(rows, key=lambda x: -(x[2][2] or -9))
-    for g, n, r, ab in rows:
-        w(f"| {g} | {n} | {pct(r[0])} | {pct(r[1])} | {pct(r[2])} | {[x[0] for x in order].index(g) + 1}位 | {pct(ab, 0).lstrip('+')} |")
+    for g, n, r, ab, desc in rows:
+        w(f"| {g} | {n} | {pct(r[0])} | {pct(r[1])} | {pct(r[2])} | {[x[0] for x in order].index(g) + 1}位 | {pct(ab, 0).lstrip('+')} | {desc} |")
 
     idx = bth.theme_index(data, [d for d in spy["date"] if d >= spy["date"][0]])
     stage = market_regime(idx)
