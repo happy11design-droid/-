@@ -2,163 +2,29 @@
 """コナーズ『短期売買入門』の数値ルールのバックテスト（`新分析ツール/引き継ぎ.md` 5-1）
 
 使い方:
-  tools/backtest_connors.py fetch [--cache DIR]
-      S&P500の過去の構成銘柄（fja05680/sp500 の日付つき構成銘柄表）と、2015年以降に一度でも構成銘柄だった
-      全銘柄＋SPY・^VIXの日足（2013年〜）をYahooから取得してキャッシュする。取得できなかった銘柄は一覧に残す。
+  tools/backtest_lib.py fetch [--cache DIR]
+      データの取得（共通。先に1回実行する）
   tools/backtest_connors.py run [--cache DIR] [--out FILE] [--start YYYY-MM-DD] [--end YYYY-MM-DD]
       ルール表（`書籍ルール/コナーズ_ルール表.md`）の条件でシグナルを出し、成績をMarkdownで書き出す。
 
 前提（結果の読み方に関わるので出力にも明記する）:
   - シグナルはその日の構成銘柄だけで出す（今の構成銘柄だけで検証したときの生存者バイアスを避けるため）。
     ただしYahooから消えた上場廃止銘柄は取得できないので、その分のバイアスは残る（取得率を出力する）。
-  - 価格は株式分割調整済み・配当調整なし。仕掛け・手じまいとも当日の引け値（ルール表の注文方法「大引け」）。
+  - 価格は配当・株式分割調整済み。1〜4節は当日の引け値（ルール表の注文方法「大引け」）、5節以降は翌日の寄り付きで売買。
   - 売買コストは片道の率で複数通り（0%・0.05%・0.1%）を出す。
   - 統計は1シグナル＝1トレード（資金の制約なし）と、同時保有数に上限を置いたポートフォリオの2通り。
 """
 import argparse
-import bisect
-import csv
 import datetime as dt
-import json
-import math
 import os
-import random
-import subprocess
 import sys
-import time
-from concurrent.futures import ThreadPoolExecutor
 
-UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
-MEMBERS_URL = "https://raw.githubusercontent.com/fja05680/sp500/master/sp500_ticker_start_end.csv"
-DEFAULT_CACHE = os.path.expanduser("~/.cache/backtest_connors")
-FETCH_FROM = dt.datetime(2013, 1, 1)
-MEMBER_SINCE = "2015-01-01"
-COSTS = (0.0, 0.0005, 0.001)   # 片道
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import backtest_lib as lib
+from backtest_lib import (COSTS, DEFAULT_CACHE, is_member, load_members, load_prices, market_regime, pct,
+                          portfolio, rsi_wilder, sma, stats)
+
 MAX_HOLD = 30                  # 手じまい条件が出ないときの打ち切り（取引日）
-
-
-# ---------- 取得 ----------
-
-def curl(url):
-    r = subprocess.run(["curl", "-sS", "--max-time", "30", "-A", UA, url], capture_output=True, text=True)
-    return r.stdout if r.returncode == 0 else ""
-
-
-def fetch_one(symbol, path):
-    if os.path.exists(path):
-        return True
-    p1, p2 = int(FETCH_FROM.timestamp()), int(time.time())
-    for attempt in range(3):
-        txt = curl(f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval=1d&period1={p1}&period2={p2}")
-        try:
-            res = json.loads(txt)["chart"]["result"][0]
-            q = res["indicators"]["quote"][0]
-            off = res["meta"].get("gmtoffset", 0)
-            rows = []
-            for i, t in enumerate(res["timestamp"]):
-                o, h, l, c, v = q["open"][i], q["high"][i], q["low"][i], q["close"][i], q["volume"][i]
-                if None in (o, h, l, c):
-                    continue
-                rows.append([dt.datetime.utcfromtimestamp(t + off).strftime("%Y-%m-%d"), o, h, l, c, v or 0])
-            if not rows:
-                return False
-            with open(path, "w") as f:
-                json.dump(rows, f)
-            return True
-        except Exception:
-            if '"Not Found"' in txt or "No data found" in txt:
-                return False
-            time.sleep(2 ** attempt)
-    return False
-
-
-def cmd_fetch(a):
-    os.makedirs(os.path.join(a.cache, "prices"), exist_ok=True)
-    mpath = os.path.join(a.cache, "members.csv")
-    txt = curl(MEMBERS_URL)
-    if not txt.startswith("ticker,"):
-        sys.exit("構成銘柄表を取得できませんでした")
-    open(mpath, "w").write(txt)
-    members = load_members(a.cache)
-    syms = sorted(members) + ["SPY", "QQQ", "^VIX"]
-    ysym = lambda s: s.replace(".", "-")
-    with ThreadPoolExecutor(8) as ex:
-        ok = list(ex.map(lambda s: fetch_one(ysym(s), os.path.join(a.cache, "prices", s + ".json")), syms))
-    missing = [s for s, k in zip(syms, ok) if not k]
-    open(os.path.join(a.cache, "missing.txt"), "w").write("\n".join(missing))
-    print(f"対象 {len(syms)} 銘柄、取得 {len(syms) - len(missing)}、取得不可 {len(missing)}")
-
-
-def load_members(cache):
-    """{ticker: [(start, end), ...]}（2015年以降に構成銘柄だったもののみ。endが空なら現在も構成銘柄）"""
-    m = {}
-    for r in csv.DictReader(open(os.path.join(cache, "members.csv"))):
-        end = r["end_date"] or "9999-12-31"
-        if end >= MEMBER_SINCE:
-            m.setdefault(r["ticker"], []).append((r["start_date"], end))
-    return m
-
-
-def load_prices(cache, sym):
-    p = os.path.join(cache, "prices", sym + ".json")
-    if not os.path.exists(p):
-        return None
-    rows = json.load(open(p))
-    d = {"date": [], "o": [], "h": [], "l": [], "c": [], "v": []}
-    for r in rows:
-        for k, x in zip(d, r):
-            d[k].append(x)
-    return d
-
-
-# ---------- 指標 ----------
-
-def sma(x, n):
-    out, s = [None] * len(x), 0.0
-    for i, v in enumerate(x):
-        s += v
-        if i >= n:
-            s -= x[i - n]
-        if i >= n - 1:
-            out[i] = s / n
-    return out
-
-
-def rsi_wilder(c, n=2):
-    """コナーズの2期間RSI（ワイルダーの平滑化。市販ツールと同じ計算）"""
-    out = [None] * len(c)
-    if len(c) <= n:
-        return out
-    g = [max(c[i] - c[i - 1], 0) for i in range(1, len(c))]
-    l = [max(c[i - 1] - c[i], 0) for i in range(1, len(c))]
-    ag, al = sum(g[:n]) / n, sum(l[:n]) / n
-    for i in range(n, len(c)):
-        if i > n:
-            ag = (ag * (n - 1) + g[i - 1]) / n
-            al = (al * (n - 1) + l[i - 1]) / n
-        out[i] = 100.0 if al == 0 else 100 - 100 / (1 + ag / al)
-    return out
-
-
-def rolling(x, n, fn):
-    return [fn(x[i - n + 1:i + 1]) if i >= n - 1 else None for i in range(len(x))]
-
-
-# ---------- 局面（市場全体） ----------
-
-def market_regime(spy):
-    """SPYの30週線（≒150日線）の位置と傾きで、ワインスタインのステージを近似した3区分を日付ごとに返す。
-    上昇: 終値>30週線 かつ 30週線が4週前より上 / 下落: 終値<30週線 かつ 30週線が4週前より下 / それ以外: 横ばい"""
-    c = spy["c"]
-    m = sma(c, 150)
-    reg = {}
-    for i, d in enumerate(spy["date"]):
-        if m[i] is None or i < 20 or m[i - 20] is None:
-            continue
-        up, rising = c[i] > m[i], m[i] > m[i - 20]
-        reg[d] = "上昇" if up and rising else "下落" if (not up and not rising) else "横ばい"
-    return reg
-
 
 # ---------- 戦略 ----------
 # entry(i, s) -> シグナルなら並べ替え用の値（小さいほど優先）、なければNone
@@ -217,9 +83,6 @@ def prepare(d):
     return d
 
 
-def is_member(spans, day):
-    return any(s <= day <= e for s, e in spans)
-
 
 def signal_ok(s, i, spans):
     """ルール表の銘柄選定・トレンドフィルター（p.16-17, p.22: 株価≧5ドル、100日平均出来高≧25万株、終値>200日線）"""
@@ -228,161 +91,16 @@ def signal_ok(s, i, spans):
 
 
 def gen_trades(data, members, entry, exit_name, stop, start, end, fill="close", allow=None):
-    """fill="close": シグナルの日の引けで仕掛け、手じまい条件の日の引けで手じまう（ルール表の注文方法どおり）。
-    fill="open": 引け後に判定して翌取引日の寄り付きで仕掛け・手じまう（引け後に分析する運用で実際にできる方法）。
-    allow(日付): 市場全体の条件（局面・VIX）でその日のシグナルを使うか。Noneなら常に使う。"""
     ex = X[exit_name]
-    lag = 1 if fill == "open" else 0
-    price = (lambda s, k: s["o"][k]) if fill == "open" else (lambda s, k: s["c"][k])
-    stop_pct, time_stop = stop[1], stop[2]
-    trades = []
-    for sym, s in data.items():
-        n, i = len(s["c"]), 200
-        while i < n - 1:
-            d = s["date"][i]
-            if d < start or d > end or not signal_ok(s, i, members[sym]) or (allow and not allow(d)):
-                i += 1
-                continue
-            rank = entry(i, s)
-            if rank is None or i + lag >= n:
-                i += 1
-                continue
-            px, j, reason = price(s, i + lag), i, "打ち切り"
-            for k in range(1, MAX_HOLD + 1):
-                j = i + k
-                if j + lag >= n:
-                    j, reason = n - 1, "データ終端"
-                    break
-                if stop_pct is not None and s["c"][j] <= px * (1 - stop_pct):
-                    reason = "損切り"
-                    break
-                if ex(j, s, k):
-                    reason = "条件"
-                    break
-                if time_stop is not None and k >= time_stop:
-                    reason = "時間"
-                    break
-            if reason == "データ終端":
-                break  # 手じまいが未確定のトレードは数えない
-            trades.append({"sym": sym, "in": s["date"][i + lag], "out": s["date"][j + lag], "px": px,
-                           "ret": price(s, j + lag) / px - 1, "days": j - i, "rank": rank, "why": reason})
-            i = j + lag + 1  # 同じ銘柄は手じまい後に次のシグナルを探す
-    trades.sort(key=lambda t: (t["out"], t["sym"]))
-    return trades
+    return lib.gen_trades(data, members, entry, lambda j, s, k, px: ex(j, s, k), start, end, ok=signal_ok, fill=fill,
+                          allow=allow, max_hold=MAX_HOLD, stop_pct=stop[1], time_stop=stop[2])
 
-
-# ---------- 統計 ----------
-
-def wilson(k, n, z=1.96):
-    if n == 0:
-        return (0, 0)
-    p = k / n
-    den = 1 + z * z / n
-    mid = (p + z * z / (2 * n)) / den
-    half = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / den
-    return (mid - half, mid + half)
-
-
-def mean_ci(xs, seed=0):
-    """平均の95%信頼区間。同じ日に多数のシグナルが出て互いに独立でないため、
-    仕掛けた月ごとにまとめて抜き出すブロック・ブートストラップで出す"""
-    if not xs:
-        return (0, 0)
-    months = {}
-    for m, x in xs:
-        months.setdefault(m, []).append(x)
-    blocks = list(months.values())
-    rnd = random.Random(seed)
-    means = []
-    for _ in range(1000):
-        pick = [rnd.choice(blocks) for _ in blocks]
-        tot, cnt = sum(sum(b) for b in pick), sum(len(b) for b in pick)
-        means.append(tot / cnt)
-    means.sort()
-    return (means[25], means[974])
-
-
-def stats(trades, cost):
-    rets = [t["ret"] - 2 * cost for t in trades]
-    n = len(rets)
-    if n == 0:
-        return None
-    wins = [r for r in rets if r > 0]
-    losses = [r for r in rets if r <= 0]
-    streak = worst = 0
-    for r in rets:
-        streak = streak + 1 if r <= 0 else 0
-        worst = max(worst, streak)
-    gl = -sum(losses)
-    return {
-        "n": n, "win": len(wins) / n, "win_ci": wilson(len(wins), n),
-        "mean": sum(rets) / n,
-        "mean_ci": mean_ci([(t["in"][:7], r) for t, r in zip(trades, rets)]),
-        "avg_win": sum(wins) / len(wins) if wins else 0, "avg_loss": sum(losses) / len(losses) if losses else 0,
-        "pf": sum(wins) / gl if gl else float("inf"), "streak": worst, "min": min(rets),
-        "days": sum(t["days"] for t in trades) / n,
-    }
-
-
-def portfolio(trades, cost, slots, days, data, weight=None):
-    """同時保有数の上限つきの資金推移。資金を slots 等分し、その日のシグナルは rank の小さい順に空き枠へ入れる。
-    手じまいで戻った資金はその日の引けから次に使える（複利）。保有中はその日の終値で時価評価する。
-    weight を指定すると1銘柄の建玉を資金×weight にする（リスク2%・損切り幅X%なら weight=0.02/X）。"""
-    weight = weight or 1 / slots
-    idx = {sym: {d: k for k, d in enumerate(data[sym]["date"])} for sym in {t["sym"] for t in trades}}
-
-    def value(h, d):
-        k = idx[h["sym"]].get(d)
-        return h["size"] * data[h["sym"]]["c"][k] / h["px"] if k is not None else h["last"]
-
-    by_in = {}
-    for t in trades:
-        by_in.setdefault(t["in"], []).append(t)
-    cash, held, eq_curve = 1.0, [], []
-    peak, mdd, taken, worst_hit = 1.0, 0.0, 0, 0.0
-    for d in days:
-        still = []
-        for h in held:
-            if h["out"] == d:
-                cash += h["size"] * (1 + h["ret"] - cost)
-                worst_hit = max(worst_hit, -h["size"] * (h["ret"] - cost) / h["eq0"])
-            else:
-                still.append(h)
-        held = still
-        for h in held:
-            h["last"] = value(h, d)
-        equity = cash + sum(h["last"] for h in held)
-        for t in sorted(by_in.get(d, []), key=lambda t: t["rank"]):
-            if len(held) >= slots:
-                break
-            if any(h["sym"] == t["sym"] for h in held):
-                continue
-            size = min(equity * weight, cash)
-            if size <= 0:
-                break
-            cash -= size
-            h = {**t, "size": size * (1 - cost), "eq0": equity, "last": size * (1 - cost)}
-            h["last"] = value(h, d)
-            held.append(h)
-            taken += 1
-        eq = cash + sum(h["last"] for h in held)
-        eq_curve.append(eq)
-        peak = max(peak, eq)
-        mdd = max(mdd, 1 - eq / peak)
-    years = (dt.date.fromisoformat(days[-1]) - dt.date.fromisoformat(days[0])).days / 365.25
-    final = eq_curve[-1]
-    return {"cagr": final ** (1 / years) - 1, "mdd": mdd, "taken": taken, "final": final, "worst_hit": worst_hit}
-
-
-def pct(x, d=1):
-    return f"{x * 100:.{d}f}%"
 
 
 # ---------- 実行 ----------
 
 def cmd_run(a):
     members = load_members(a.cache)
-    missing = set(open(os.path.join(a.cache, "missing.txt")).read().split())
     data = {}
     for sym in members:
         d = load_prices(a.cache, sym)
@@ -412,11 +130,11 @@ def cmd_run(a):
     w(f"- 対象: その日にS&P500の構成銘柄だった銘柄（構成銘柄の履歴: fja05680/sp500）。期間中の構成銘柄 {len(in_period)} のうち価格を取得できたのは {len(got)}（{pct(len(got) / len(in_period))}）。"
       "取得できなかったのは主に買収・上場廃止・ティッカー変更の銘柄で、上場廃止前の急落を含まない分だけ成績は良く出る方向にずれうる。")
     w("- ルール: `書籍ルール/コナーズ_ルール表.md` の条件（株価≧5ドル、100日平均出来高≧25万株、終値>200日線）＋各エントリー条件。仕掛け・手じまいとも引け値。")
-    w("- 価格: 分割調整済み、配当は含まない（数日の保有なので影響は小さい）。")
+    w("- 価格: 配当・分割調整済み（Yahooの調整後終値）。")
     w(f"- 手じまい条件が{MAX_HOLD}取引日出ない場合はその日の引けで打ち切り。同じ銘柄の保有中は新しいシグナルを数えない。")
     w("- 局面: SPYの30週線（150日線）の位置と4週前からの傾きでワインスタインのステージを近似（上昇＝線より上かつ上向き、下落＝線より下かつ下向き、それ以外＝横ばい）。")
     w("- 平均リターンの信頼区間は、同じ日のシグナル同士が独立でないため、月単位のブロック・ブートストラップ（1000回）。")
-    w(f"- 比較: 同期間のSPY買い持ち 年率 {pct(spy_cagr)}、最大下落率 {pct(mdd)}（配当なし）\n")
+    w(f"- 比較: 同期間のSPY買い持ち 年率 {pct(spy_cagr)}、最大下落率 {pct(mdd)}（配当込み）\n")
 
     w("## 1. 戦略ごとの成績（ストップなし）\n")
     w("1シグナル＝1トレード（資金の制約なし）。コストは片道。\n")
@@ -434,7 +152,7 @@ def cmd_run(a):
         print(name, s0["n"], file=sys.stderr)
 
     base = STRATEGIES[0][0]
-    w(f"\n## 2. 基本戦略の期間別・局面別（片道0.1%）\n")
+    w("\n## 2. 基本戦略の期間別・局面別（片道0.1%）\n")
     w("過去の一時期だけ良かったのではないか、局面によって成績が変わるかを見る。\n")
     w("| 区分 | 件数 | 勝率（95%区間） | 平均（95%区間） | PF | 最大連敗 | 最悪 |")
     w("|---|---|---|---|---|---|---|")
@@ -595,7 +313,7 @@ def cmd_run(a):
     w(f"| （参考）SPY買い持ち | | | | | | | | {pct(spy_cagr)} | {pct(mdd)} | 100% |")
 
     w("\n## 9. 注意\n")
-    w("- 過去の成績は将来を保証しない。特に上場廃止銘柄の欠落（生存者バイアスの残り）、配当なし、引け値ちょうどで約定できる前提（1〜4）、寄り付きの気配値のすべりを入れていないこと（5〜7）は、いずれも現実より良く見せる方向に働きうる。")
+    w("- 過去の成績は将来を保証しない。特に上場廃止銘柄の欠落（生存者バイアスの残り）、引け値ちょうどで約定できる前提（1〜4）、寄り付きの気配値のすべりを入れていないこと（5〜7）は、いずれも現実より良く見せる方向に働きうる。")
     w("- 1シグナル＝1トレードの統計は、同じ日に多数のシグナルが重なる（相場全体の急落時）ため、件数ほど独立ではない。信頼区間は月単位のブロックで補正した。")
     w("- この結果はルールの条件どおりに機械的に計算したもので、Claudeによる個別銘柄の売買判断ではない。")
     open(a.out, "w").write("\n".join(L) + "\n")
@@ -605,15 +323,13 @@ def cmd_run(a):
 def main():
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
-    f = sub.add_parser("fetch")
-    f.add_argument("--cache", default=DEFAULT_CACHE)
     r = sub.add_parser("run")
     r.add_argument("--cache", default=DEFAULT_CACHE)
     r.add_argument("--out", default="新分析ツール/バックテスト結果/コナーズ.md")
     r.add_argument("--start", default="2015-01-02")
     r.add_argument("--end", default=dt.date.today().isoformat())
     a = ap.parse_args()
-    (cmd_fetch if a.cmd == "fetch" else cmd_run)(a)
+    cmd_run(a)
 
 
 if __name__ == "__main__":
