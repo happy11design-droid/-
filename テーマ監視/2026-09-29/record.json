@@ -1,0 +1,74 @@
+{
+ "trade_date": "2026-09-28",
+ "run_date": "2026-09-29",
+ "theme_stage": "",
+ "candidates": [
+  {
+   "sym": "PANW",
+   "kind": "予約: ミネルヴィニ（ピボットの手前）",
+   "pattern": "B",
+   "close": 392.09,
+   "limit": 410.85,
+   "stop_buy": 398.88,
+   "limit_buy": null,
+   "verdict": "未判定",
+   "author": ""
+  },
+  {
+   "sym": "NTAP",
+   "kind": "予約: ミネルヴィニ（ピボットの手前）",
+   "pattern": "B",
+   "close": 204.41,
+   "limit": 215.33,
+   "stop_buy": 209.06,
+   "limit_buy": null,
+   "verdict": "未判定",
+   "author": ""
+  },
+  {
+   "sym": "KEYS",
+   "kind": "予約: ミネルヴィニ（ピボットの手前）",
+   "pattern": "B",
+   "close": 359.74,
+   "limit": 386.21,
+   "stop_buy": 374.96,
+   "limit_buy": null,
+   "verdict": "未判定",
+   "author": ""
+  },
+  {
+   "sym": "ANET",
+   "kind": "予約: ミネルヴィニ（ピボットの手前）",
+   "pattern": "B",
+   "close": 204.92,
+   "limit": 221.34,
+   "stop_buy": 214.89,
+   "limit_buy": null,
+   "verdict": "未判定",
+   "author": ""
+  },
+  {
+   "sym": "NVDA",
+   "kind": "予約: ミネルヴィニ（ピボットの手前）",
+   "pattern": "B",
+   "close": 228.86,
+   "limit": 243.08,
+   "stop_buy": 236.0,
+   "limit_buy": null,
+   "verdict": "買い（予約）",
+   "author": "ミネルヴィニ"
+  },
+  {
+   "sym": "AMZN",
+   "kind": "予約: ボリンジャー メソッドIII（%bが0.05未満に近い）",
+   "pattern": "B",
+   "close": 246.15,
+   "limit": null,
+   "stop_buy": null,
+   "limit_buy": 245.85,
+   "verdict": "買い（予約）",
+   "author": "ボリンジャー"
+  }
+ ],
+ "holdings": []
+}
