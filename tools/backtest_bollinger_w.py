@@ -72,7 +72,7 @@ def w_bottom(i, s, need_ii=True, look=40):
     return a, b
 
 
-def O_w(need_ii=True, trigger=True, within=10):
+def O_w(need_ii=True, trigger=True, within=10, tight=True):
     def f(i, s):
         w = w_bottom(i, s, need_ii)
         if w is None:
@@ -86,7 +86,7 @@ def O_w(need_ii=True, trigger=True, within=10):
             c, o, v, v50, r20 = s["c"], s["o"], s["v"], s["vol50"][i], s["rng20"][i]
             if v50 is None or r20 is None or not (c[i] > c[i - 1] and v[i] > v50 and s["h"][i] - s["l"][i] > r20):
                 return None
-        return {"rank": s["pctb"][b], "kind": "open", "stop": s["l"][b] * 0.99}
+        return {"rank": s["pctb"][b], "kind": "open", "stop": s["l"][b] * 0.99 if tight else None}
     return f
 
 
@@ -144,6 +144,8 @@ def main():
         "今のルール（%b<0.05・II%>0の翌日に買う、上のバンドで手じまい）": sim(bs.O_method3, bs.X_upper_band),
         "W型＋II%の確認＋強い上げの日に買う（図のとおり）・上のバンド": sim(O_w(True, True), bs.X_upper_band),
         "W型＋強い上げの日（II%の確認なし）・上のバンド": sim(O_w(False, True), bs.X_upper_band),
+        "W型（図のとおり）・損切りは買値の15%下（2つ目の安値にしない）・上のバンド": sim(O_w(True, True, tight=False), bs.X_upper_band),
+        "W型（II%の確認なし）・損切りは買値の15%下・上のバンド": sim(O_w(False, True, tight=False), bs.X_upper_band),
         "W型＋II%の確認（強い上げの日を待たない）・上のバンド": sim(O_w(True, False, within=3), bs.X_upper_band),
         "W型（図のとおり）・パラボリックSARで損切りを引き上げ、上のバンドでも手じまい": sim(O_w(True, True), bs.X_upper_band, bs.trail_sar),
         "W型（図のとおり）・パラボリックSARだけで手じまい": sim(O_w(True, True), lambda j, s, k, t: None, bs.trail_sar),
