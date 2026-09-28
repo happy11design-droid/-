@@ -207,18 +207,23 @@ def report(sym, d, pool_series, asof=None, hold=None, earn=None, wl_rs10=None):
     c2.add_udvr(d)
     uv, h20 = d["udvr"][i], d["hi20c"][i]
     top10 = wl_rs10 is None or (rs is not None and rs >= wl_rs10)
-    v2 = top10 and c2.V2(i, d) is not None
-    pre = top10 and bool(h20 and uv and uv >= 1.3 and (rs or 0) >= 90 and tt and h20 * 0.97 <= c <= h20)
+    import theme_scan as ts
+    h2y = ts.hi2y(d, i)
+    trig = max(h20 or 0, h2y or 0)
+    o2y = h2y is not None and c >= h2y
+    v2 = top10 and c2.V2(i, d) is not None and o2y
+    pre = top10 and bool(h20 and h2y and uv and uv >= 1.3 and (rs or 0) >= 90 and tt and trig * 0.97 <= c < trig)
     pat_n = "A" if v2 else ("B" if pre else "該当なし")
     w("## 5. 順張り: 新高値（V2、担当: ミネルヴィニ）\n")
     w(f"- 条件: トレンドテンプレート8条件、RS≧90、終値が直前20日の最高値（終値）を上回る、上げ下げの出来高比（直近50日、上げた日の出来高÷下げた日の出来高）≧1.3 → **{mark(v2)}**"
       f"（テンプレート {mark(tt)}、RS {'取得不可' if rs is None else f'{rs:.0f}'}、直前20日の最高値 {h20:.2f}、出来高比 {'取得不可' if uv is None else f'{uv:.2f}'}）")
+    w(f"- 追加の条件（2026-09-28 採用）: 終値が直前2年の最高値以上（上値のレジスタンスがない。ワインスタインの図） → **{mark(o2y)}**（直前2年の最高値 {'取得不可' if h2y is None else f'{h2y:.2f}'}）")
     w("- 追加の条件: 監視銘柄のうち、その日のRSが上位10銘柄に入ること（" + ("過去の日付での再現では確認していない" if wl_rs10 is None else f"10位の銘柄のRS {wl_rs10:.0f}、この銘柄のRS {'取得不可' if rs is None else f'{rs:.0f}'} → **{mark(top10)}**") + "）")
-    w(f"- スクリプトのパターン判定: **{pat_n}**（A=条件成立、B=ほかの条件を満たし、終値が直前20日の最高値の−3%以内）")
+    w(f"- スクリプトのパターン判定: **{pat_n}**（A=条件成立、B=ほかの条件を満たし、終値が直前20日の最高値（終値）と直前2年の最高値の高い方の−3%以内）")
     if v2:
         w("- 注文の目安（A）: 翌日の寄り付きで買い、損切りは買値の15%下、引けで50日線割れの翌日の寄り付きで手じまい")
     elif pre:
-        w(f"- 予約注文の目安（B）: 逆指値買い {h20:.2f}（本来は終値で判定するルールなので近似）")
+        w(f"- 予約注文の目安（B）: 逆指値買い {trig:.2f}（直前20日の最高値（終値）と直前2年の最高値の高い方。本来は終値で判定するルールなので近似）")
     w("- このルールは、ミネルヴィニのトレンドテンプレート、ドンチャンの4週ルール（ボリンジャーの本で紹介）、オニールの「機関投資家の買い集め」の考え方を、Claudeが組み合わせて数値にしたもの（ユーザー採用 2026-09-27）")
     w("")
     w(f"## まとめ（スクリプトのパターン判定）\n\n- ボリンジャーIII: {pat_b}／ミネルヴィニ: {pat_m}／ワインスタイン10週: {pat_w}／急落の底: {pat_c}／新高値: {pat_n}（A=条件成立、B=成立が目前で予約注文の候補）\n")

@@ -44,9 +44,9 @@ UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like 
 
 
 def fetch_daily(sym):
-    """直近2年の日足（配当・分割調整済み）。取得できなければ None"""
+    """直近3年の日足（配当・分割調整済み）。取得できなければ None（新高値V2の「直前2年の最高値」に2年分以上が必要）"""
     try:
-        res = json.loads(curl(f"https://query1.finance.yahoo.com/v8/finance/chart/{sym.replace('.', '-')}?interval=1d&range=2y"))["chart"]["result"][0]
+        res = json.loads(curl(f"https://query1.finance.yahoo.com/v8/finance/chart/{sym.replace('.', '-')}?interval=1d&range=3y"))["chart"]["result"][0]
         q, off = res["indicators"]["quote"][0], res["meta"].get("gmtoffset", 0)
         adj = res["indicators"].get("adjclose", [{}])[0].get("adjclose") or q["close"]
         d = {"date": [], "o": [], "h": [], "l": [], "c": [], "v": []}
@@ -134,6 +134,11 @@ def load_industries():
             out[m.group(1)] = m.group(2).strip()
     # 「Software—Infrastructure」と「Software - Infrastructure」のような書き方の違いをそろえる
     return {k: re.sub(r"\s*[—–-]\s*", " - ", v) for k, v in out.items()}
+
+
+def hi2y(d, i):
+    """直前2年（500取引日、当日を含まない）の最高値（高値）。新高値V2の「上値のレジスタンスがない」条件（2026-09-28 ユーザー採用）"""
+    return max(d["h"][max(0, i - 500):i]) if i > 0 else None
 
 
 def pct(x, d=1):
@@ -404,14 +409,16 @@ def main():
                               "order": f"逆指値買い {piv:.2f}（指値の上限 {piv * 1.03:.2f}＝ピボット+3%）。本は上抜けの日の出来高が50日平均の2倍以上（{2 * d['vol50'][i] / 1e4:,.0f}万株）を求める。損切り: 買値の15%下。手じまい: 引けで50日線割れ"})
         # 新高値（V2、担当: ミネルヴィニ）。2026-09-27 採用
         uv, h20 = d["udvr"][i], d["hi20c"][i]
-        if s in v2_top and c2.V2(i, d) is not None:
+        h2y = hi2y(d, i)
+        trig = max(h20 or 0, h2y or 0)
+        if s in v2_top and c2.V2(i, d) is not None and h2y is not None and d["c"][i] >= h2y:
             cands.append({**base, "pat": "A", "kind": "順張り: 新高値（V2、担当: ミネルヴィニ）",
-                          "why": f"監視銘柄のRS上位{V2_TOP}以内（{v2_rank[s]}位）、トレンドテンプレート8条件、RS {rs:.0f}（≧90）、終値が直前20日の最高値（終値）{h20:.2f}を上回る、上げ下げの出来高比（50日）{uv:.2f}（≧1.3）",
+                          "why": f"監視銘柄のRS上位{V2_TOP}以内（{v2_rank[s]}位）、トレンドテンプレート8条件、RS {rs:.0f}（≧90）、終値が直前20日の最高値（終値）{h20:.2f}を上回る、上げ下げの出来高比（50日）{uv:.2f}（≧1.3）、終値が直前2年の最高値{h2y:.2f}以上（上値のレジスタンスなし）",
                           "order": "翌日の寄り付きで買い。損切り: 買値の15%下。手じまい: 引けで50日線を割った翌日の寄り付き"})
-        elif s in v2_top and h20 and uv and uv >= 1.3 and (rs or 0) >= 90 and bt.trend_template(d, i) and h20 * 0.97 <= d["c"][i] <= h20:
+        elif s in v2_top and h20 and h2y and uv and uv >= 1.3 and (rs or 0) >= 90 and bt.trend_template(d, i) and trig * 0.97 <= d["c"][i] < trig:
             cands.append({**base, "pat": "B", "kind": "予約: 新高値（V2、担当: ミネルヴィニ）",
-                          "why": f"監視銘柄のRS上位{V2_TOP}以内（{v2_rank[s]}位）、トレンドテンプレート8条件、RS {rs:.0f}、上げ下げの出来高比 {uv:.2f}、直前20日の最高値（終値）{h20:.2f}まで{(h20 / d['c'][i] - 1) * 100:.1f}%",
-                          "order": f"逆指値買い {h20:.2f}（本来は終値で判定するルールなので近似）。損切り: 買値の15%下。手じまい: 引けで50日線割れ"})
+                          "why": f"監視銘柄のRS上位{V2_TOP}以内（{v2_rank[s]}位）、トレンドテンプレート8条件、RS {rs:.0f}、上げ下げの出来高比 {uv:.2f}、直前20日の最高値（終値）{h20:.2f}・直前2年の最高値{h2y:.2f}の高い方まで{(trig / d['c'][i] - 1) * 100:.1f}%",
+                          "order": f"逆指値買い {trig:.2f}（直前20日の最高値（終値）と直前2年の最高値の高い方。本来は終値で判定するルールなので近似）。損切り: 買値の15%下。手じまい: 引けで50日線割れ"})
         if bcr.C3(i, d) is not None:
             cands.append({**base, "pat": "A", "kind": "逆張り: 急落の底（担当: コナーズ）",
                           "why": f"直前5日の最高値（終値）から{bcr.drop(i, d) * 100:.1f}%下落（−15%以上）、RSI(2)={d['rsi2'][i]:.1f}（≦5）、急落の前は50日線＞200日線。市場全体の局面: S&P500 {mkt}／NASDAQ100 {mkt_n}",
