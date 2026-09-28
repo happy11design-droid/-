@@ -115,6 +115,27 @@ def load_trades(path=os.path.join(os.path.dirname(os.path.abspath(__file__)), ".
     return out
 
 
+GROUP_CAP = 2   # 同じ業種（Yahooの分類）は同時に2銘柄まで（2026-09-28 ユーザー決定。`バックテスト結果/本のルールの追加と現代風のアレンジ.md` 4節）
+
+
+def load_industries():
+    """{ティッカー: 業種}。テーマ監視銘柄.md の表の3列目（Yahoo Financeの業種）。監視銘柄にない銘柄はバックテストのキャッシュから補う"""
+    out = {}
+    for f in ("universe.json", "industry_extra.json"):
+        p = os.path.join(DEFAULT_CACHE, f)
+        if os.path.exists(p):
+            try:
+                out.update({k: (v or {}).get("industry") for k, v in json.load(open(p)).items() if (v or {}).get("industry")})
+            except Exception:
+                pass
+    for line in open(bth.WATCHLIST, encoding="utf-8"):
+        m = re.match(r"^\| ([A-Z][A-Z.]*) \| [^|]* \| ([^|]+?) \|", line)
+        if m and m.group(2) != "業種":
+            out[m.group(1)] = m.group(2).strip()
+    # 「Software—Infrastructure」と「Software - Infrastructure」のような書き方の違いをそろえる
+    return {k: re.sub(r"\s*[—–-]\s*", " - ", v) for k, v in out.items()}
+
+
 def pct(x, d=1):
     return "取得不可" if x is None else f"{x * 100:+.{d}f}%"
 
@@ -421,6 +442,23 @@ def main():
             kept.append(x)
         dropped = len(cands) - len(kept)
         cands = kept
+        # 同じ業種は同時に GROUP_CAP 銘柄まで: 保有中の銘柄と、RSの高い順に先に残した候補（A→Bの順）で数える
+        inds = load_industries()
+        held_by = {}
+        for h in load_holdings():
+            if inds.get(h["sym"]):
+                held_by.setdefault(inds[h["sym"]], []).append(h["sym"])
+        cnt, kept, capped = {k: list(v) for k, v in held_by.items()}, [], []
+        for x in cands:
+            g = inds.get(x["sym"])
+            cur = [t for t in cnt.get(g, []) if t != x["sym"]] if g else []
+            if g and len(cur) >= GROUP_CAP:
+                capped.append((x, g, cur))
+                continue
+            kept.append(x)
+            if g and x["sym"] not in cnt.setdefault(g, []):
+                cnt[g].append(x["sym"])
+        cands = kept
         with ThreadPoolExecutor(4) as ex:
             eds = dict(zip([x["sym"] for x in cands], ex.map(earnings_date, [x["sym"] for x in cands])))
         for k_, v in eds.items():
@@ -433,6 +471,9 @@ def main():
         for x in cands:
             rs_ = "取得不可" if x["rs"] is None else f"{x['rs']:.0f}"
             w(f"| {x['sym']} | {x['group']} | {x['pat']} | {x['kind']} | {x['close']:.2f} | {pct(x['chg'])} | {rs_} | {x['regime']} | {x['why']} | {eds[x['sym']]} | {x['order']} |")
+        if capped:
+            w(f"\n- 同じ業種は同時に{GROUP_CAP}銘柄まで（ユーザー決定 2026-09-28）のため見送った候補（保有中の銘柄と、RSの高い順に先に残した候補で数える）: "
+              + "、".join(f"{x['sym']}（{x['pat']}・{x['kind'].split('（')[0]}。{g}: {'・'.join(c)}）" for x, g, c in capped))
         if dropped:
             w(f"\n- パターンBは各ルールでRSの高い順に{B_MAX}件まで、急落の底・新高値のAは{CRASH_MAX}件（同時保有の上限）までとし、{dropped}件を省いた。")
         w("\n- RS≧80の押し目（ボリンジャーIII）は、バックテストで成績がより安定していた（PF3.27、最大下落20%）。")

@@ -222,6 +222,18 @@ def report(sym, d, pool_series, asof=None, hold=None, earn=None, wl_rs10=None):
     w("- このルールは、ミネルヴィニのトレンドテンプレート、ドンチャンの4週ルール（ボリンジャーの本で紹介）、オニールの「機関投資家の買い集め」の考え方を、Claudeが組み合わせて数値にしたもの（ユーザー採用 2026-09-27）")
     w("")
     w(f"## まとめ（スクリプトのパターン判定）\n\n- ボリンジャーIII: {pat_b}／ミネルヴィニ: {pat_m}／ワインスタイン10週: {pat_w}／急落の底: {pat_c}／新高値: {pat_n}（A=条件成立、B=成立が目前で予約注文の候補）\n")
+    if not asof and not hold:
+        # 同じ業種は同時に2銘柄まで（2026-09-28 ユーザー決定）。保有銘柄.md の同じ業種の銘柄を数える
+        try:
+            import theme_scan as ts
+            inds = ts.load_industries()
+            g = inds.get(sym)
+            same = [h["sym"] for h in ts.load_holdings() if h["sym"] != sym and g and inds.get(h["sym"]) == g]
+            if g:
+                w(f"- 同じ業種（{g}）の保有: " + ("、".join(same) if same else "なし") + f"（上限{ts.GROUP_CAP}銘柄）"
+                  + (" → **上限に達しているため、買いの合図が出ても見送り**" if len(same) >= ts.GROUP_CAP else "") + "\n")
+        except Exception as e:
+            w(f"- 同じ業種の保有数を確認できませんでした（{e}）\n")
 
     if hold:
         px, bd, rule = float(hold[0]), hold[1], hold[2]
