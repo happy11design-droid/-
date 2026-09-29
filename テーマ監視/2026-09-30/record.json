@@ -1,0 +1,63 @@
+{
+ "trade_date": "2026-09-29",
+ "run_date": "2026-09-30",
+ "theme_stage": "【ステージ2】（テーマ指数が上昇中の30週移動平均線の上にあり、S&P500に対する相対的強さも優勢なため。第2章、第8章）",
+ "candidates": [
+  {
+   "sym": "PANW",
+   "kind": "予約: ミネルヴィニ（ピボットの手前）",
+   "pattern": "B",
+   "close": 388.41,
+   "limit": 410.85,
+   "stop_buy": 398.88,
+   "limit_buy": null,
+   "verdict": "未判定",
+   "author": ""
+  },
+  {
+   "sym": "KEYS",
+   "kind": "予約: ミネルヴィニ（ピボットの手前）",
+   "pattern": "B",
+   "close": 360.65,
+   "limit": 386.21,
+   "stop_buy": 374.96,
+   "limit_buy": null,
+   "verdict": "未判定",
+   "author": ""
+  },
+  {
+   "sym": "NVDA",
+   "kind": "予約: ミネルヴィニ（ピボットの手前）",
+   "pattern": "B",
+   "close": 227.21,
+   "limit": 243.08,
+   "stop_buy": 236.0,
+   "limit_buy": null,
+   "verdict": "未判定",
+   "author": ""
+  },
+  {
+   "sym": "JCI",
+   "kind": "予約: ミネルヴィニ（ピボットの手前）",
+   "pattern": "B",
+   "close": 149.42,
+   "limit": 161.32,
+   "stop_buy": 156.62,
+   "limit_buy": null,
+   "verdict": "未判定",
+   "author": ""
+  },
+  {
+   "sym": "AMZN",
+   "kind": "予約: ボリンジャー メソッドIII（%bが0.05未満に近い）",
+   "pattern": "B",
+   "close": 246.67,
+   "limit": null,
+   "stop_buy": null,
+   "limit_buy": 245.27,
+   "verdict": "買い（予約）",
+   "author": "ボリンジャー"
+  }
+ ],
+ "holdings": []
+}
