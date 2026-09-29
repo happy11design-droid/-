@@ -24,6 +24,12 @@ import backtest_trend as bt
 from theme_scan import fetch_daily, load_trades
 
 STOP, COST = 0.15, 0.001
+CAPITAL = 18000   # 運用開始時の資金（ドル、2026-09-29 ユーザー）。4節の資金の増減と最大下落率の基準
+TOOLS = os.path.dirname(os.path.abspath(__file__))
+# バックテストの見込み（4銘柄・1銘柄25%・損切り15%・急落の底RSI(2)≦10、後知恵なしの監視銘柄 2015年〜。
+# `バックテスト結果/銘柄数と損切りの組み合わせ.md`・`ユーザーの売買の仕方とペトラリア氏の手じまい.md`）
+EXPECT = {"cagr": (0.10, 0.20, 0.216), "win": 0.62, "avg": 0.018, "mdd": 0.33, "mdd_worst": 0.37, "per_year": 35, "hold": 26}
+MIN_N = 20   # これより少ない件数では、勝率・平均は比べない
 
 
 # ---------- 記録 ----------
@@ -228,10 +234,107 @@ def cmd_review(a):
             w(f"| {r['trade_date']} | {h['sym']} | {h['rule']} | {early:.2f} | {od} {op:.2f}（{why}） | {(early / op - 1) * 100:+.1f}% |")
     if not n_early:
         w("該当なし")
+    actual_vs_expected(w)
     text = "\n".join(L) + "\n"
     if a.out:
         open(a.out, "w", encoding="utf-8").write(text)
     print(text)
+
+
+def load_real(path):
+    """保有銘柄.md・売買記録.md の表から [{sym, buy_date, buy, shares, rule, sell_date, sell}] を返す（保有中は sell_date=None）"""
+    out = []
+    if not os.path.exists(path):
+        return out
+    for line in open(path, encoding="utf-8"):
+        c = [x.strip() for x in line.strip().strip("|").split("|")]
+        if len(c) < 5 or not re.match(r"^[A-Z][A-Z.]*$", c[0]) or not re.match(r"^\d{4}-\d{2}-\d{2}$", c[1]):
+            continue
+        try:
+            t = {"sym": c[0], "buy_date": c[1], "buy": float(c[2]), "shares": float(c[3]), "rule": c[4], "sell_date": None, "sell": None}
+            if len(c) >= 7 and re.match(r"^\d{4}-\d{2}-\d{2}$", c[5]) and c[6]:
+                t["sell_date"], t["sell"] = c[5], float(c[6])
+        except ValueError:
+            continue
+        out.append(t)
+    return out
+
+
+def actual_vs_expected(w):
+    """4節: ユーザーが実際に約定した売買（保有銘柄.md・売買記録.md）の成績と、バックテストの見込みの比較（2026-09-29 ユーザーの指示）"""
+    base = os.path.join(TOOLS, "..", "新分析ツール")
+    closed = [t for t in load_real(os.path.join(base, "売買記録.md")) if t["sell_date"]]
+    opened = [t for t in load_real(os.path.join(base, "保有銘柄.md")) if not t["sell_date"]]
+    w("\n## 4. 実際の成績とバックテストの見込みの比較\n")
+    w(f"`保有銘柄.md`・`売買記録.md` に記録された実際の売買だけで計算する（株数×値段。手数料は含まない）。資金は{CAPITAL:,}ドルから始めたものとする。"
+      f"勝率・1回の平均は、決済した売買が{MIN_N}件以上になってから比べる（少ないと偶然の差が大きい）。\n")
+    if not closed and not opened:
+        w("実際の売買の記録はまだない。")
+        return
+    px = {}
+    for t in closed + opened:
+        if t["sym"] not in px:
+            d = fetch_daily(t["sym"])
+            if d:
+                px[t["sym"]] = dict(zip(d["date"], d["c"]))
+    today = max((max(v) for v in px.values() if v), default=dt.date.today().isoformat())
+    start = min(t["buy_date"] for t in closed + opened)
+    # 毎日の資金（決済した損益＋保有中の含み損益、終値で評価）
+    days = sorted({d for v in px.values() for d in v if start <= d <= today})
+    peak, mdd, last_close = CAPITAL, 0.0, {}
+    for d in days:
+        eq = CAPITAL
+        for t in closed + opened:
+            if t["buy_date"] > d:
+                continue
+            if t["sell_date"] and t["sell_date"] <= d:
+                eq += t["shares"] * (t["sell"] - t["buy"])
+                continue
+            c = px.get(t["sym"], {}).get(d)
+            if c is not None:
+                last_close[t["sym"]] = c
+            c = last_close.get(t["sym"], t["buy"])
+            eq += t["shares"] * (c - t["buy"])
+        peak = max(peak, eq)
+        mdd = max(mdd, 1 - eq / peak)
+    realized = sum(t["shares"] * (t["sell"] - t["buy"]) for t in closed)
+    unreal = sum(t["shares"] * (last_close.get(t["sym"], t["buy"]) - t["buy"]) for t in opened)
+    rets = [t["sell"] / t["buy"] - 1 for t in closed]
+    n = len(rets)
+    win = sum(r > 0 for r in rets) / n if n else None
+    avg = sum(rets) / n if n else None
+    hold = sum((dt.date.fromisoformat(t["sell_date"]) - dt.date.fromisoformat(t["buy_date"])).days * 252 / 365 for t in closed) / n if n else None
+    span = max(1, (dt.date.fromisoformat(today) - dt.date.fromisoformat(start)).days)
+    total = (realized + unreal) / CAPITAL
+    cagr = (1 + total) ** (365.25 / span) - 1 if span >= 180 else None
+    per_year = n * 365.25 / span if span >= 90 else None
+    E = EXPECT
+    pct = lambda x, d=1: "-" if x is None else f"{x * 100:+.{d}f}%"
+    w(f"- 期間: {start} 〜 {today}（{span}日）。決済した売買 {n}件、保有中 {len(opened)}銘柄")
+    w(f"- 損益: 決済分 {realized:+,.0f}ドル、保有中の含み損益 {unreal:+,.0f}ドル、合計 {realized + unreal:+,.0f}ドル（資金{CAPITAL:,}ドルに対して {pct(total)}）\n")
+    w("| 項目 | 実際 | バックテストの見込み | 見方 |")
+    w("|---|---|---|---|")
+    small = n < MIN_N
+
+    def judge(ok, warn):
+        return "件数が少なく、まだ比べない" if small else ("見込みの範囲" if ok else warn)
+    w(f"| 年率（換算） | {pct(cagr) if cagr is not None else '期間が半年未満のため出さない'} | 年率10〜20%（計算上は{E['cagr'][2] * 100:.1f}%） | "
+      f"{'-' if cagr is None else ('見込みの範囲以上' if cagr >= E['cagr'][0] else '見込みより低い（1年未満の差は偶然のことが多い）')} |")
+    w(f"| 勝率 | {'-' if win is None else f'{win * 100:.0f}%'}（{n}件） | 約{E['win'] * 100:.0f}% | {judge(win is not None and win >= 0.50, '50%を下回っている')} |")
+    w(f"| 1回の平均の損益 | {pct(avg, 2)} | 約{pct(E['avg'])} | {judge(avg is not None and avg > 0, '平均がマイナス')} |")
+    w(f"| 最大下落率（資金） | {mdd * 100:.1f}% | 約{E['mdd'] * 100:.0f}%（悪い場合{E['mdd_worst'] * 100:.0f}%） | "
+      f"{'バックテストの最悪を超えた（ルールの見直しを検討）' if mdd > E['mdd_worst'] else ('見込みに近い大きな下落の途中' if mdd > 0.25 else '見込みの範囲')} |")
+    w(f"| 売買の件数（1年あたり） | {'-' if per_year is None else f'{per_year:.0f}件'} | 約{E['per_year']}件 | {'期間が3か月未満のため出さない' if per_year is None else ('少ない（合図を見送っている可能性）' if per_year < E['per_year'] * 0.5 else '見込みの範囲')} |")
+    w(f"| 平均保有日数（取引日） | {'-' if hold is None else f'{hold:.0f}日'} | 約{E['hold']}日 | - |")
+    if closed:
+        w("\n| ルール | 決済件数 | 勝率 | 1回の平均 | 損益（ドル） |")
+        w("|---|---|---|---|---|")
+        for rule in sorted({t["rule"] for t in closed}):
+            ts = [t for t in closed if t["rule"] == rule]
+            rr = [t["sell"] / t["buy"] - 1 for t in ts]
+            w(f"| {rule} | {len(ts)} | {sum(r > 0 for r in rr) / len(rr) * 100:.0f}% | {pct(sum(rr) / len(rr), 2)} | "
+              f"{sum(t['shares'] * (t['sell'] - t['buy']) for t in ts):+,.0f} |")
+    w("\n- 見込みはバックテストの数字で、実際はそれより低くなりやすい（多くの形を試して一番良いものを選んでいるため）。年率10〜20%、悪い年は−10〜−20%を目安にする。")
 
 
 def main():
