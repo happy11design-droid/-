@@ -191,11 +191,11 @@ def report(sym, d, pool_series, asof=None, hold=None, earn=None, wl_rs10=None):
 
     # 急落の底（逆張り、担当: コナーズ）。2026-09-27 採用
     d["rsi2"] = rsi_wilder(d["c"], 2)
-    crash = bcr.C3(i, d) is not None
+    crash = bcr.C3R10(i, d) is not None
     dr, r2 = bcr.drop(i, d), d["rsi2"][i]
     pat_c = "A" if crash else "該当なし"
     w("## 4. 逆張り: 急落の底（担当: コナーズ）\n")
-    w(f"- 条件: 急落の前（6日前）に50日線＞200日線、直前5日の最高値（終値）から15%以上下落、RSI(2)≦5 → **{mark(crash)}**"
+    w(f"- 条件: 急落の前（6日前）に50日線＞200日線、直前5日の最高値（終値）から15%以上下落、RSI(2)≦10 → **{mark(crash)}**"
       f"（6日前の50日線／200日線 {d['ma50'][i - 6]:.2f}／{d['ma200'][i - 6]:.2f}、下落率 {dr * 100:+.1f}%、RSI(2) {r2:.1f}）")
     w(f"- 直前5日の最高値（終値）{max(d['c'][i - 5:i]):.2f} の15%下は {max(d['c'][i - 5:i]) * 0.85:.2f}")
     w(f"- スクリプトのパターン判定: **{pat_c}**（A=条件成立。終値で判定するルールのため予約注文（B）はない）")

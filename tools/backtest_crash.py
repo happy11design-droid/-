@@ -65,6 +65,12 @@ def C3(i, s):
     return r if r <= -0.15 and r2 is not None and r2 <= 5 and was_strong(i, s) else None
 
 
+def C3R10(i, s):
+    """採用中の急落の底（2026-09-29〜）: C3 の RSI(2) の上限を 10 にしたもの（`数値の調整.md`・`銘柄数と損切りの組み合わせ.md`）"""
+    r, r2 = drop(i, s), s["rsi2"][i]
+    return r if r <= -0.15 and r2 is not None and r2 <= 10 and was_strong(i, s) else None
+
+
 def C4(i, s):
     c, dn = s["c"], s["bb_dn"][i]
     ok = dn is not None and c[i] < dn and c[i] < c[i - 1] < c[i - 2] < c[i - 3]

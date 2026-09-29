@@ -39,7 +39,7 @@ NDX_URL = "https://api.nasdaq.com/api/quote/list-type/nasdaq100"
 OUT_MAX = 5   # 監視外の注目銘柄（ニュースを調べる）はRSの高い順にこの件数まで
 V2_TOP = 10   # 新高値V2を当てる銘柄: 監視銘柄のうちその日のRSが上位この数まで
 B_MAX = 5   # パターンB（予約注文の候補）は各ルールでこの件数まで
-CRASH_MAX = 7   # 急落の底の候補（市場全体の急落の日は20件を超えることがある）はRSの高い順にこの件数まで
+CRASH_MAX = 4   # 同時保有の上限（2026-09-29 に7→4）。急落の底の候補（市場全体の急落の日は20件を超えることがある）はRSの高い順にこの件数まで
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
 
 
@@ -419,9 +419,9 @@ def main():
             cands.append({**base, "pat": "B", "kind": "予約: 新高値（V2、担当: ミネルヴィニ）",
                           "why": f"監視銘柄のRS上位{V2_TOP}以内（{v2_rank[s]}位）、トレンドテンプレート8条件、RS {rs:.0f}、上げ下げの出来高比 {uv:.2f}、直前20日の最高値（終値）{h20:.2f}・直前2年の最高値{h2y:.2f}の高い方まで{(trig / d['c'][i] - 1) * 100:.1f}%",
                           "order": f"逆指値買い {trig:.2f}（直前20日の最高値（終値）と直前2年の最高値の高い方。本来は終値で判定するルールなので近似）。損切り: 買値の15%下。手じまい: 引けで50日線割れ"})
-        if bcr.C3(i, d) is not None:
+        if bcr.C3R10(i, d) is not None:
             cands.append({**base, "pat": "A", "kind": "逆張り: 急落の底（担当: コナーズ）",
-                          "why": f"直前5日の最高値（終値）から{bcr.drop(i, d) * 100:.1f}%下落（−15%以上）、RSI(2)={d['rsi2'][i]:.1f}（≦5）、急落の前は50日線＞200日線。市場全体の局面: S&P500 {mkt}／NASDAQ100 {mkt_n}",
+                          "why": f"直前5日の最高値（終値）から{bcr.drop(i, d) * 100:.1f}%下落（−15%以上）、RSI(2)={d['rsi2'][i]:.1f}（≦10）、急落の前は50日線＞200日線。市場全体の局面: S&P500 {mkt}／NASDAQ100 {mkt_n}",
                           "order": f"翌日の寄り付きで買い。損切り: 買値の15%下。手じまい: 終値が5日線（今日 {sum(d['c'][i - 4:i + 1]) / 5:.2f}）を上回った翌日の寄り付き（コナーズ）"})
         if dt.date.fromisoformat(day).weekday() == 4:
             if bt.E_weinstein(10, ma="10")(i, d) is not None:
