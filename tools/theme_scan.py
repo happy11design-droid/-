@@ -34,7 +34,7 @@ from backtest_lib import DEFAULT_CACHE, MEMBERS_URL, curl, market_regime, rsi_wi
 import backtest_crash as bcr
 import backtest_compare2 as c2
 
-RISK, STOP = 0.02, 0.15
+SLOTS, STOP = 4, 0.15   # 同時保有4銘柄・1銘柄に資金÷4（2026-09-29 ユーザー決定。以前はリスク2%→13.3%×7銘柄）
 NDX_URL = "https://api.nasdaq.com/api/quote/list-type/nasdaq100"
 OUT_MAX = 5   # 監視外の注目銘柄（ニュースを調べる）はRSの高い順にこの件数まで
 V2_TOP = 10   # 新高値V2を当てる銘柄: 監視銘柄のうちその日のRSが上位この数まで
@@ -370,7 +370,7 @@ def main():
 
     # ---- 候補 ----
     w("## 6. 候補（採用したルールの条件が成立＝A、成立が目前＝B）\n")
-    w(f"建玉の目安: 1トレードのリスク2%・損切り15% → 1銘柄に資金の{RISK / STOP * 100:.1f}%、同時保有{int(STOP / RISK)}銘柄まで（ユーザー決定）。\n")
+    w(f"建玉の目安: 同時保有{SLOTS}銘柄まで、1銘柄に資金の{100 / SLOTS:.0f}%（資金÷{SLOTS}）、損切りは買値の{STOP * 100:.0f}%下（ユーザー決定 2026-09-29）。\n")
     cands = []
     # 新高値V2は、監視銘柄のうちその日のRSが上位10銘柄だけに当てる（後知恵なしの検証で、絞らないと効かなかった。2026-09-27 ユーザー決定）
     rs_sorted = sorted(((d["rs"][-1] or 0), s) for s, d in data.items())[::-1]
