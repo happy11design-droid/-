@@ -118,6 +118,26 @@ def load_trades(path=os.path.join(os.path.dirname(os.path.abspath(__file__)), ".
 GROUP_CAP = 2   # 同じ業種（Yahooの分類）は同時に2銘柄まで（2026-09-28 ユーザー決定。`バックテスト結果/本のルールの追加と現代風のアレンジ.md` 4節）
 
 
+def bear_candles(d, since, look=5):
+    """買った日以降の直近 look 取引日で、出来高2倍を伴った大陰線の日を返す（`backtest_bear_exit.py` の実体ATR1.5倍・出来高2倍と同じ定義）"""
+    o, h, l, c, v, n = d["o"], d["h"], d["l"], d["c"], d["v"], len(d["c"])
+    tr = [h[0] - l[0]] + [max(h[k] - l[k], abs(h[k] - c[k - 1]), abs(l[k] - c[k - 1])) for k in range(1, n)]
+    atr, x = [None] * n, None
+    for k in range(n):
+        x = tr[k] if x is None else (x * 13 + tr[k]) / 14
+        atr[k] = x if k >= 14 else None
+    out = []
+    for j in range(max(1, n - look), n):
+        if d["date"][j] < since:
+            continue
+        a, v50 = atr[j - 1], d["vol50"][j]
+        if a is None or not v50 or h[j] <= l[j]:
+            continue
+        if o[j] - c[j] >= 1.5 * a and (c[j] - l[j]) / (h[j] - l[j]) <= 0.25 and v[j] >= 2 * v50:
+            out.append(f"{d['date'][j]}（実体 ATRの{(o[j] - c[j]) / a:.1f}倍・出来高{v[j] / v50:.1f}倍）")
+    return "**あり** " + "、".join(out) if out else "なし"
+
+
 def load_industries():
     """{ティッカー: 業種}。テーマ監視銘柄.md の表の3列目（Yahoo Financeの業種）。監視銘柄にない銘柄はバックテストのキャッシュから補う"""
     out = {}
@@ -311,12 +331,12 @@ def main():
     if not hold:
         w("保有銘柄なし（または一覧が空）\n")
     else:
-        w("| 銘柄 | ルール | 買った日 | 買値 | 終値 | 損益 | 損切り価格（買値の15%下、逆指値） | ルールの手じまい条件 | 次回決算予定日 |")
-        w("|---|---|---|---|---|---|---|---|---|")
+        w("| 銘柄 | ルール | 買った日 | 買値 | 終値 | 損益 | 損切り価格（買値の15%下、逆指値） | ルールの手じまい条件 | 出来高2倍の大陰線（買った後の直近5日） | 次回決算予定日 |")
+        w("|---|---|---|---|---|---|---|---|---|---|")
         for h in hold:
             d = data.get(h["sym"])
             if not d:
-                w(f"| {h['sym']} | {h['rule']} | {h['date']} | {h['price']} | 取得不可 | | | | |")
+                w(f"| {h['sym']} | {h['rule']} | {h['date']} | {h['price']} | 取得不可 | | | | | |")
                 continue
             i = len(d["c"]) - 1
             c = d["c"][i]
@@ -338,8 +358,11 @@ def main():
             stop = h["price"] * (1 - STOP)
             if c <= stop:
                 ex = "**損切り価格を下回った** " + ex
-            w(f"| {h['sym']} | {h['rule']} | {h['date']} | {h['price']:.2f} | {c:.2f} | {pct(c / h['price'] - 1)} | {stop:.2f} | {ex} | {earnings_date(h['sym'])} |")
+            w(f"| {h['sym']} | {h['rule']} | {h['date']} | {h['price']:.2f} | {c:.2f} | {pct(c / h['price'] - 1)} | {stop:.2f} | {ex} | {bear_candles(d, h['date'])} | {earnings_date(h['sym'])} |")
         w("")
+        w("- 出来高2倍の大陰線: 実体（始値−終値）が前日までのATR(14)の1.5倍以上、終値がその日の値幅の下25%以内、出来高が前日までの50日平均の2倍以上の日。"
+          "売りのルールではなく事実の表示（2026-09-29 ユーザーの指示）。過去の検証では、利益の出ている銘柄・順張りの銘柄をこの日の翌日に売ると、その売買1回ごとには平均+1.2〜2.8%良かったが、"
+          "件数が少なく資金全体の年率は上がらなかった（`バックテスト結果/出来高を伴った大陰線で売る.md`）。\n")
 
     # ---- 前日の予約注文 ----
     if a.prev and os.path.exists(a.prev):
