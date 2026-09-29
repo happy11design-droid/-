@@ -41,7 +41,7 @@ def med(xs):
     return xs[len(xs) // 2]
 
 
-def setup(cache):
+def setup(cache, with_parts=True):
     a = argparse.Namespace(cache=cache)
     members, data = load_universe(a.cache, min_bars=260)
     g = load_prices(a.cache, "^GSPC")
@@ -96,7 +96,7 @@ def setup(cache):
 
     G = lambda e, x, ok, stop, mh=500: gen_trades(data, members, e, x, START, end, ok=ok, fill="open", max_hold=mh, stop_pct=stop)
     parts = {}
-    for stop in (0.15, 0.18):
+    for stop in ((0.15, 0.18) if with_parts else ()):
         parts[("B", stop)] = B3(stop)
         parts[("M", stop)] = G(bm2.E_base(2.0), below50, ok_rot, stop)
         parts[("V", stop)] = G(v2o, below50, ok10, stop)
@@ -112,7 +112,8 @@ def setup(cache):
             tr += parts[("C", stop, rsi)]
         return srt(tr)
 
-    return dict(members=members, data=data, ind=ind, days=days, parts=parts, trades=trades, ok_rot=ok_rot, G=G, end=end)
+    return dict(members=members, data=data, ind=ind, days=days, parts=parts, trades=trades, ok_rot=ok_rot, G=G, end=end,
+                ok10=ok10, CR=CR, v2o=v2o, below50=below50, above5=above5)
 
 
 def main():
