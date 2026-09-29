@@ -206,7 +206,7 @@ def main():
                         continue
                     x, path, info = res
                     out.append({"sym": sym, "in": s["date"][i + 1], "out": s["date"][x], "rank": rk, "path": path,
-                                "ret": path[s["date"][x]] - 1, "worst": info["worst"], "hold": x - i - 1, "rule": k})
+                                "ret": path[s["date"][x]] - 1, "worst": min(path.values()) - 1, "hold": x - i - 1, "rule": k})
                     nxt = x + 1
         return out
 
