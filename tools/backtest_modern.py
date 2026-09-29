@@ -45,15 +45,17 @@ IS_END, OOS_START = "2021-12-31", "2022-01-01"
 
 class GroupReporter(Reporter):
     """同じ業種の同時保有を cap 銘柄までにして資金を計算する Reporter"""
-    def __init__(self, *a, group_of=None, cap=None, **k):
+    def __init__(self, *a, group_of=None, cap=None, group2_of=None, cap2=None, **k):
         super().__init__(*a, **k)
         self.group_of, self.cap = group_of, cap
+        self.group2_of, self.cap2 = group2_of, cap2
 
     def port(self, tr, stop, lo=None, hi=None, seed=None):
         lo, hi = lo or self.days[0], hi or self.days[-1]
         dd = [d for d in self.days if lo <= d <= hi]
         return portfolio([t for t in tr if lo <= t["in"] and t["out"] <= hi], self.cost, max(1, int(round(stop / self.risk, 6))),
-                         dd, self.data, weight=self.risk / stop, seed=seed, group_of=self.group_of, group_cap=self.cap)
+                         dd, self.data, weight=self.risk / stop, seed=seed, group_of=self.group_of, group_cap=self.cap,
+                         group2_of=self.group2_of, group2_cap=self.cap2)
 
 
 def prep(s, spx):
