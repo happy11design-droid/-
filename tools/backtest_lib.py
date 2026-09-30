@@ -298,7 +298,7 @@ _IDX = {}
 
 
 def portfolio(trades, cost, slots, days, data, weight=None, seed=None, cash_asset=None, group_of=None, group_cap=None,
-              group2_of=None, group2_cap=None, day_cap=None, log=None):
+              group2_of=None, group2_cap=None, day_cap=None, log=None, per_sym=1):
     """同時保有数の上限つきの資金推移。資金を slots 等分し、その日のシグナルは rank の小さい順に空き枠へ入れる。
     手じまいで戻った資金はその日の引けから次に使える（複利）。保有中はその日の終値で時価評価する。
     weight を指定すると1銘柄の建玉を資金×weight にする（リスク2%・損切り幅X%なら weight=0.02/X）。
@@ -307,7 +307,8 @@ def portfolio(trades, cost, slots, days, data, weight=None, seed=None, cash_asse
     （入れ替えの売買コストは入れていない）。
     group_of（{銘柄: グループ}）と group_cap を指定すると、同じグループの同時保有を group_cap 銘柄までにする。
     group2_of と group2_cap で、2つ目のまとまり（セクターなど）の上限も同時にかけられる。
-    day_cap を指定すると、1日に新しく買う銘柄数をその数までにする。log（リスト）を渡すと、実際に買った売買を足していく。返り値の curve は毎日の資金（最初を1とする）。"""
+    day_cap を指定すると、1日に新しく買う銘柄数をその数までにする。log（リスト）を渡すと、実際に買った売買を足していく。
+    per_sym は同じ銘柄を同時に持てる数（2なら、持っている銘柄に別のルールの合図が出たときに2枠目で買い増す）。返り値の curve は毎日の資金（最初を1とする）。"""
     weight = weight or 1 / slots
     for sym in {t["sym"] for t in trades}:
         key = id(data[sym]["date"])
@@ -347,7 +348,7 @@ def portfolio(trades, cost, slots, days, data, weight=None, seed=None, cash_asse
         for t in sorted(by_in.get(d, []), key=order):
             if len(held) >= slots or (day_cap and taken - taken0 >= day_cap):
                 break
-            if any(h["sym"] == t["sym"] for h in held):
+            if sum(1 for h in held if h["sym"] == t["sym"]) >= per_sym:
                 continue
             if group_cap and sum(1 for h in held if group_of.get(h["sym"]) == group_of.get(t["sym"])) >= group_cap:
                 continue
