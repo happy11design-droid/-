@@ -1,0 +1,52 @@
+{
+ "trade_date": "2026-09-30",
+ "run_date": "2026-10-01",
+ "theme_stage": "【ステージ2】（テーマ指数が上昇する30週移動平均線の上にあるため、第2章・第3章）",
+ "candidates": [
+  {
+   "sym": "HPE",
+   "kind": "予約: 新高値（V2、担当: ミネルヴィニ）",
+   "pattern": "B",
+   "close": 63.89,
+   "limit": null,
+   "stop_buy": 65.65,
+   "limit_buy": null,
+   "verdict": "買い（予約）",
+   "author": "ミネルヴィニ"
+  },
+  {
+   "sym": "PANW",
+   "kind": "予約: ミネルヴィニ（ピボットの手前）",
+   "pattern": "B",
+   "close": 397.31,
+   "limit": 410.85,
+   "stop_buy": 398.88,
+   "limit_buy": null,
+   "verdict": "様子見",
+   "author": "ミネルヴィニ"
+  },
+  {
+   "sym": "KEYS",
+   "kind": "予約: ミネルヴィニ（ピボットの手前）",
+   "pattern": "B",
+   "close": 364.04,
+   "limit": 386.21,
+   "stop_buy": 374.96,
+   "limit_buy": null,
+   "verdict": "買い（予約）",
+   "author": "ミネルヴィニ"
+  },
+  {
+   "sym": "NVDA",
+   "kind": "予約: ミネルヴィニ（ピボットの手前）",
+   "pattern": "B",
+   "close": 228.38,
+   "limit": 243.08,
+   "stop_buy": 236.0,
+   "limit_buy": null,
+   "verdict": "買い（予約）",
+   "author": "ミネルヴィニ"
+  }
+ ],
+ "holdings": []
+}
