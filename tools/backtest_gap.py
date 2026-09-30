@@ -113,7 +113,7 @@ def main():
     G2 = E(lambda i, s: gap(i, s) <= -GAP and vix.get(s["date"][i], 0) >= 20)
     G3 = E(lambda i, s: gap(i, s) <= -GAP and spy_below.get(s["date"][i], False))
     G4 = E(lambda i, s: gap(i, s) >= GAP and s["vol50"][i] and s["v"][i] >= 2 * s["vol50"][i])
-    G5 = E(lambda i, s: s["gscore"][i] is not None and s["gscore"][i] >= cut70)
+    G5 = E(lambda i, s: abs(gap(i, s)) >= GAP and s["gscore"][i] is not None and s["gscore"][i] >= cut70)
     after = lambda n: (lambda j, s, k, px: k >= n)
     rules = {
         "G1 下の窓": (G1, after(5)),
