@@ -39,6 +39,7 @@ SEEDS = range(10)
 STOP = 0.15
 IS_END, OOS_START = cb.IS_END, cb.OOS_START
 GAP = 0.03
+SCORE_GAP = 0.02   # 点数は2%以上の窓の日に付ける（両隣の値の確認で2%の窓も試すため）
 
 
 def add_scores(data, cache):
@@ -59,7 +60,7 @@ def add_scores(data, cache):
     for n_done, (sym, s) in enumerate(data.items()):
         n = len(s["c"])
         s["gscore"] = [None] * n
-        gaps = [i for i in range(261, n) if abs(s["o"][i] / s["c"][i - 1] - 1) >= GAP]
+        gaps = [i for i in range(261, n) if abs(s["o"][i] / s["c"][i - 1] - 1) >= SCORE_GAP]
         if not gaps:
             continue
         f = so.stock_features(s, spy_c, earn.get(sym))
@@ -94,8 +95,11 @@ def main():
     m150 = sma(spy["c"], 150)
     spy_below = {d: m150[i] is not None and spy["c"][i] < m150[i] for i, d in enumerate(spy["date"])}
     # G5 の境目: 設計期間の窓の日（監視銘柄に限らず S&P500 全体）の点数の70パーセンタイル
-    sc = [s["gscore"][i] for s in data.values() for i in range(len(s["c"])) if s["gscore"][i] is not None and s["date"][i] <= IS_END]
-    cut70 = float(np.percentile(sc, 70))
+    def cut_of(g, q):
+        sc = [s["gscore"][i] for s in data.values() for i in range(261, len(s["c"]))
+              if s["gscore"][i] is not None and s["date"][i] <= IS_END and abs(s["o"][i] / s["c"][i - 1] - 1) >= g]
+        return float(np.percentile(sc, q))
+    cut70 = cut_of(GAP, 70)
 
     gap = lambda i, s: s["o"][i] / s["c"][i - 1] - 1
     rank = lambda i, s: -(s["rs"][i] or 0)
@@ -192,6 +196,31 @@ def main():
     for k, t in tr_w.items():
         if line(f"今のルール＋{k}", evaluate(srt(base + t))):
             oks.append(k)
+    # 4. G5 の両隣の値（窓の大きさ・点数の境目・窓の向き）
+    def G5v(g, q, side=0):
+        c = cut_of(g, q)
+        def f(i, s):
+            x = gap(i, s)
+            if abs(x) < g or (side > 0 and x < 0) or (side < 0 and x > 0):
+                return None
+            return rank(i, s) if s["gscore"][i] is not None and s["gscore"][i] >= c else None
+        return f
+    variants = {
+        "窓2%・上位30%": G5v(0.02, 70), "窓4%・上位30%": G5v(0.04, 70),
+        "窓3%・上位20%": G5v(0.03, 80), "窓3%・上位40%": G5v(0.03, 60),
+        "窓3%・上位30%・上の窓だけ": G5v(0.03, 70, 1), "窓3%・上位30%・下の窓だけ": G5v(0.03, 70, -1),
+    }
+    tr_v = {k: gen_trades(data, members, e, after(5), cb.START, end, ok=ok_rot, fill="open", max_hold=30, stop_pct=STOP)
+            for k, e in variants.items()}
+    single("4. G5 の両隣の値（単独・1回ごと、後知恵なしの監視銘柄、5日）", tr_v)
+    w("\n組み合わせ（4銘柄の枠を共有）:\n")
+    w("| 形 | 年率 | 最大下落率 | 設計期間 | 確認期間 | 2018 | 2020 | 2022 | 2024 | 2025 | 両方の期間で上回ったか |")
+    w("|---|---|---|---|---|---|---|---|---|---|---|")
+    line("今のルール", cur, False)
+    nv = 0
+    for k, t in tr_v.items():
+        nv += line(f"今のルール＋G5（{k}）", evaluate(srt(base + t)))
+    w(f"\n両隣の値6通りのうち、両方の期間で今のルールを上回ったのは {nv}通り。")
     w("\n## まとめ\n")
     w(f"- 今のルール: 設計 {pct(cur['is'])}、確認 {pct(cur['oos'])}、最大下落率 {pct(cur['mdd'])}")
     w(f"- 設計期間・確認期間の両方で今のルールを上回った形: {len(oks)}通り" + (f"（{'、'.join(oks)}）" if oks else ""))
