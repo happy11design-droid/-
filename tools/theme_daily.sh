@@ -93,9 +93,28 @@ if os.path.exists(news):
             body.append(line.rstrip())
     if body:
         theme += "\n\nテーマ全体のニュース（サブエージェントの調査）:\n" + "\n".join(body)
-p = open(tpl, encoding="utf-8").read().replace("{{THEME}}", theme)
-if len(p) > 12000:
-    p = p[:12000]
+# NotebookLM の1回の送信は8,000文字まで（2026-09-30 実測、tools/build_theme_prompt.py の LIMIT）。
+# 超えるときは雛形（出力形式の指示）を削らず、テーマ全体のニュース → ヒートマップ（3節）の下位の行の順に縮める
+LIMIT, CUT = 8000, "（文字数の上限のため、ここから後を省略）"
+t = open(tpl, encoding="utf-8").read()
+fill = lambda th: t.replace("{{THEME}}", th)
+over = len(fill(theme)) - LIMIT
+if over > 0 and "テーマ全体のニュース" in theme:
+    i = theme.index("テーマ全体のニュース")
+    keep = max(i, len(theme) - over - len(CUT))
+    theme = theme[:keep] + CUT
+    over = len(fill(theme)) - LIMIT
+if over > 0 and "## 3." in theme:
+    a = theme.index("## 3.")
+    b = theme.find("\n## ", a + 1)
+    rows = theme[a:b].split("\n")
+    while over > 0 and len(rows) > 3 and rows[-1].startswith("| "):
+        over -= len(rows.pop()) + 1
+    theme = theme[:a] + "\n".join(rows) + theme[b:]
+    over = len(fill(theme)) - LIMIT
+if over > 0:   # ここで止めると他の著者への送信まで止まるので、警告だけ出して送る（送信失敗は report.md に残る）
+    print(f"テーマの局面のプロンプトが{LIMIT}文字を超えます（{len(fill(theme))}文字）", file=sys.stderr)
+p = fill(theme)
 open(os.path.join(d, "prompt_theme.txt"), "w", encoding="utf-8").write(p)
 PY
 
