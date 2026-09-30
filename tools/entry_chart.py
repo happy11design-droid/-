@@ -10,8 +10,8 @@
   M  ミネルヴィニ（トレンドテンプレート＋ベース（最高値から3週以上・調整幅35%以内）の高値を出来高2倍で上抜け）→ 50日線割れで手じまい …採用中
   W  ワインスタイン10週（週足で直前10週の高値を出来高2倍で上抜け、10週線が上向き）→ 週足の終値が10週線割れ …採用中
   C  急落の底（急落の前に50日線>200日線、5日で−15%以上、RSI(2)≦10）→ 終値が5日線を上回ったら手じまい（コナーズ） …採用中（2026-09-27、RSI(2)は2026-09-29に≦5から≦10）
-  E1 大陽線の反発（強い銘柄・押し・出来高の減少の後の大陽線）→ 上のバンドで手じまい           …検証中（採用していない）
-  E2 包み足（強い銘柄・押しの後）→ 上のバンドで手じまい                                         …検証中（採用していない）
+  N  新高値V2（トレンドテンプレート・RS≧90・直前20日の最高値の上抜け・上げ下げの出来高比≧1.3・終値が直前2年の最高値以上）→ 50日線割れ …採用中
+     （監視銘柄の中のRS上位10の条件は、1銘柄のチャートでは再現しない）
 RSランキングはS&P500の構成銘柄の中での百分位（キャッシュの株価で計算）。
 """
 import argparse
@@ -38,17 +38,28 @@ RULES = [  # 記号, 名前, 仕掛け, 手じまい, 手じまいの名前, 色
     ("M", "ミネルヴィニ（採用中）", bm2.E_base(2.0), bt.X_BELOW50, "50日線割れ", "#eb6834"),
     ("W", "ワインスタイン10週（採用中）", bt.E_weinstein(10, ma="10"), bt.X_weekly_below("10"), "10週線割れ", "#1baf7a"),
     ("C", "急落の底（採用中）", lambda i, s: bcr.C3R10(i, s), lambda j, s, k, px: s["ma5"][j] is not None and s["c"][j] > s["ma5"][j], "5日線を上回る", "#e34948"),
-    ("N", "新高値V2（採用中）", lambda i, s: c2.V2(i, s), bt.X_BELOW50, "50日線割れ", "#4a3aa7"),
-    ("E1", "大陽線の反発（検証中）", bcd.E1, BAND, "上のバンド", "#eda100"),
-    ("E2", "包み足（検証中）", bcd.E2, BAND, "上のバンド", "#e87ba4"),
+    ("N", "新高値V2（採用中）", lambda i, s: c2.V2(i, s) if s["c"][i] >= max(s["h"][max(0, i - 500):i]) else None, bt.X_BELOW50, "50日線割れ", "#4a3aa7"),
 ]
+# 新高値V2 は「終値が直前2年の最高値以上」（2026-09-28 採用、theme_scan.hi2y と同じ）を含む。
+# 「監視銘柄の中でその日のRSが上位10」は監視銘柄全体の順位が要るため、1銘柄のチャートでは再現しない（実際のツールより印が多くなることがある）。
+# 検証中で採用しなかった E1 大陽線の反発・E2 包み足は 2026-09-30 に外した。
+
+
+def safe(entry):
+    """データが短い銘柄で、指標がまだ計算できない日（None）はシグナルなしとして扱う"""
+    def f(i, s):
+        try:
+            return entry(i, s)
+        except TypeError:
+            return None
+    return f
 
 
 def trades_of(s, entry, exit_fn, start):
     """1銘柄の売買。まだ手じまっていない建玉も「保有中」として返す"""
-    out, n, i = [], len(s["c"]), 200
+    out, n, i = [], len(s["c"]), 30
     while i < n - 1:
-        if s["date"][i] < start or entry(i, s) is None:
+        if s["date"][i] < start or safe(entry)(i, s) is None:
             i += 1
             continue
         e, px = i + 1, s["o"][i + 1]
@@ -84,8 +95,15 @@ def main():
     a = ap.parse_args()
     sym = a.ticker.upper()
     s = load_prices(a.cache, sym)
-    if not s or len(s["c"]) < 260:
-        sys.exit(f"{sym} の株価が足りません（1年分以上が必要）。先に backtest_lib のキャッシュを更新してください")
+    try:   # キャッシュより新しい日足があれば使う（毎朝の scan と同じ取得方法）
+        from theme_scan import fetch_daily
+        f = fetch_daily(sym)
+        if f and (not s or f["date"][-1] > s["date"][-1]):
+            s = f
+    except Exception:
+        pass
+    if not s or len(s["c"]) < 120:
+        sys.exit(f"{sym} の株価が足りません（半年分以上が必要）")
     bt.prepare(s)
     bs.prepare(s)
     bm2.add_pivot(s)
@@ -119,28 +137,41 @@ def main():
         p.plot(x, [s[key][i] for i in rng], color=muted if key.startswith("bb_") else ("#5b5b57" if key == "ma50" else "#b0b0aa"),
                lw=1.2 if key == "ma50" else 1, ls=ls)
     span = max(H) - min(Lo)
-    handles = []
+    logy = max(H) / min(Lo) > 3   # 値動きが大きい銘柄は縦軸を対数にする（上昇率が同じなら同じ高さに見える）
+    handles, notes = [], []
     for n, (r, trs) in enumerate(res):
         tag, name, _, _, xname, color = r
-        for t in trs:
+        for m, t in enumerate(trs, 1):
+            lab = f"{tag}{m}"   # 買いと売りの印に同じ番号を付け、損益は右下の一覧に書く（ラベルの重なりを避ける）
             ke = t["ie"] - i0
-            yb = Lo[ke] - span * (0.03 + 0.035 * n)
+            yb = Lo[ke] * (1 - 0.035 * (n + 1)) if logy else Lo[ke] - span * (0.03 + 0.035 * n)
             p.scatter(ke, yb, s=170, facecolor=color, edgecolor="white", lw=2, zorder=5)
-            p.annotate(tag, (ke, yb), xytext=(0, -17), textcoords="offset points", ha="center", fontsize=11, color=ink, weight="bold")
+            p.annotate(lab, (ke, yb), xytext=(0, -17), textcoords="offset points", ha="center", fontsize=10.5, color=ink, weight="bold")
             if t["io"] is not None:
                 ko = t["io"] - i0
-                ys = H[ko] + span * (0.03 + 0.035 * n)
+                ys = H[ko] * (1 + 0.035 * (n + 1)) if logy else H[ko] + span * (0.03 + 0.035 * n)
                 p.scatter(ko, ys, s=150, marker="X", facecolor=color, edgecolor="white", lw=1.5, zorder=5)
-                p.annotate(f"{tag} {t['ret'] * 100:+.0f}%", (ko, ys), xytext=(9, -4), textcoords="offset points", ha="left",
-                           fontsize=10, color=ink)
+                p.annotate(lab, (ko, ys), xytext=(0, 9), textcoords="offset points", ha="center", fontsize=10, color=ink)
+            notes.append(f"{lab}  {t['in'][5:]} 買い {t['px']:,.0f} → " + (f"{t['out'][5:]} 売り {t['sell']:,.0f}  {t['ret'] * 100:+.0f}%" if t["out"]
+                                                                            else f"保有中  {t['ret'] * 100:+.0f}%（含み）"))
         handles.append(Line2D([], [], marker="o", ls="", markerfacecolor=color, markeredgecolor="white", markersize=12,
                               label=f"{tag} {name}・{xname}（{len(trs)}回）"))
     handles += [Line2D([], [], marker="o", ls="", color=muted, markersize=11, label="丸＝買い（シグナルの翌日の寄り付き。下の文字はルール）"),
-                Line2D([], [], marker="X", ls="", color=muted, markersize=11, label="バツ＝売り（翌日の寄り付き。数字は損益）")]
+                Line2D([], [], marker="X", ls="", color=muted, markersize=11, label="バツ＝売り（翌日の寄り付き。同じ番号が対になる売買）")]
     p.legend(handles=handles, loc="upper left", fontsize=10.5, framealpha=0.9)
-    p.set_ylim(min(Lo) - span * 0.25, max(H) + span * 0.25)
+    if notes:
+        p.text(0.99, 0.02, "\n".join(notes), transform=p.transAxes, ha="right", va="bottom", fontsize=10, color=ink,
+               bbox=dict(boxstyle="round,pad=0.4", fc="white", ec="#d0d0cc", alpha=0.92), zorder=6)
+    if logy:
+        p.set_yscale("log")
+        p.set_ylim(min(Lo) * 0.7, max(H) * 1.35)
+        from matplotlib.ticker import FuncFormatter
+        p.yaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:,.0f}"))
+        p.yaxis.set_minor_formatter(FuncFormatter(lambda v, _: f"{v:,.0f}" if str(int(v))[0] in "25" else ""))
+    else:
+        p.set_ylim(min(Lo) - span * 0.25, max(H) + span * 0.25)
     p.grid(alpha=0.2)
-    p.set_title(f"{sym} 直近{a.months}カ月（{s['date'][i0]}〜{s['date'][-1]}）の各ルールの買い・売り（ルールの機械的な再現）",
+    p.set_title(f"{sym} 直近{a.months}カ月（{s['date'][i0]}〜{s['date'][-1]}）の各ルールの買い・売り（ルールの機械的な再現）" + ("　縦軸は対数" if logy else ""),
                 loc="left", fontsize=14, color=ink)
     V, V50 = [s["v"][i] / 1e6 for i in rng], [(s["vol50"][i] or 0) / 1e6 for i in rng]
     pv.bar(x, V, color=[up_c if C[k] >= O[k] else dn_c for k in x], width=0.7)
