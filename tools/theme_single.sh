@@ -44,10 +44,18 @@ p = os.path.join(d, f"{t}_data.txt")
 if os.path.exists(p):
     data = open(p, encoding="utf-8").read().strip()
 n = os.path.join(d, "news.md")
-data += "\n\nニュース（サブエージェントの調査）:\n" + (open(n, encoding="utf-8").read().strip() if os.path.exists(n) else "調査なし")
-out = open(tpl, encoding="utf-8").read().replace("{{RULES}}", rules).replace("{{DATA}}", data)
-if len(out) > 12000:
-    out = out[:12000]
+news = open(n, encoding="utf-8").read().strip() if os.path.exists(n) else "調査なし"
+# NotebookLM の1回の送信は8,000文字まで（2026-09-30 実測、tools/build_theme_prompt.py の LIMIT）。
+# 超えるときは雛形（出力形式の指示）・ルールの当てはめ・数値データを削らず、ニュースを末尾から縮める
+LIMIT, CUT = 8000, "（文字数の上限のため、ここから後を省略）"
+fill = lambda nw: open(tpl, encoding="utf-8").read().replace("{{RULES}}", rules).replace("{{DATA}}", data + "\n\nニュース（サブエージェントの調査）:\n" + nw)
+over = len(fill(news)) - LIMIT
+if over > 0:
+    if len(news) <= over + len(CUT):
+        sys.exit(f"ニュースを除いても{LIMIT}文字を超えます（{len(fill(''))}文字）。rules.md か数値データを短くしてください")
+    news = news[:len(news) - over - len(CUT)] + CUT
+    print(f"{LIMIT}文字を超えるため、ニュースを縮めました", file=sys.stderr)
+out = fill(news)
 open(os.path.join(d, "prompt.txt"), "w", encoding="utf-8").write(out)
 PY
 
