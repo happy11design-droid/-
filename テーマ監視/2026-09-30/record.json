@@ -11,8 +11,8 @@
    "limit": 410.85,
    "stop_buy": 398.88,
    "limit_buy": null,
-   "verdict": "未判定",
-   "author": ""
+   "verdict": "様子見",
+   "author": "ミネルヴィニ"
   },
   {
    "sym": "KEYS",
@@ -22,8 +22,8 @@
    "limit": 386.21,
    "stop_buy": 374.96,
    "limit_buy": null,
-   "verdict": "未判定",
-   "author": ""
+   "verdict": "買い（予約）",
+   "author": "ミネルヴィニ"
   },
   {
    "sym": "NVDA",
@@ -33,8 +33,8 @@
    "limit": 243.08,
    "stop_buy": 236.0,
    "limit_buy": null,
-   "verdict": "未判定",
-   "author": ""
+   "verdict": "買い（予約）",
+   "author": "ミネルヴィニ"
   },
   {
    "sym": "JCI",
@@ -44,8 +44,8 @@
    "limit": 161.32,
    "stop_buy": 156.62,
    "limit_buy": null,
-   "verdict": "未判定",
-   "author": ""
+   "verdict": "買い（予約）",
+   "author": "ミネルヴィニ"
   },
   {
    "sym": "AMZN",
