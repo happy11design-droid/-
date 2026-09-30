@@ -13,6 +13,7 @@
   G5 窓＋点数の上位30%: 上か下に3%以上の窓の日で、`swing_odds.py` の点数（5日・翌寄り→引け、全部）が、
      設計期間（2015〜2021年）の窓の日の点数の上位30%に入る
   G6 G5 を3日で売る
+  5節: 今の採用ルールを使わず、資金をすべて点数を使う形（G5・G6と両隣の値）で運用した場合
 今の採用ルール: 4つのルール、4銘柄・1銘柄25%、損切り15%、急落の底RSI(2)≦10、同じ業種2銘柄まで。
 後知恵なしの監視銘柄（S&P500）。設計期間 2015〜2021年 / 確認期間 2022年〜。
 点数（G5・G6）の作り方は2015〜2021年のS&P500だけで決めたもの（`tools/swing_odds_model.json`）。
@@ -137,16 +138,19 @@ def main():
     def seg(c, lo, hi):
         return c[di[hi]] / (c[di[lo] - 1] if di[lo] > 0 else 1.0)
 
-    def evaluate(tr):
+    def evaluate(tr, slots=SLOTS):
         rs = []
         for k in SEEDS:
-            p = portfolio(tr, COST, SLOTS, days, data, weight=1 / SLOTS, seed=k, group_of=ind, group_cap=2)
+            p = portfolio(tr, COST, slots, days, data, weight=1 / slots, seed=k, group_of=ind, group_cap=2)
             c = p["curve"]
             yr = {y: seg(c, min(d for d in days if d[:4] == y), max(d for d in days if d[:4] == y)) - 1 for y in years}
             rs.append({"all": p["cagr"], "mdd": p["mdd"], "is": seg(c, days[0], is_hi) ** (1 / span(days[0], is_hi)) - 1,
-                       "oos": seg(c, oos_lo, days[-1]) ** (1 / span(oos_lo, days[-1])) - 1, "yr": yr})
+                       "oos": seg(c, oos_lo, days[-1]) ** (1 / span(oos_lo, days[-1])) - 1, "yr": yr,
+                       "taken": p["taken"] / (len(days) / 252), "exposure": p["exposure"]})
         m = lambda key: cb.med([x[key] for x in rs])
-        return {"all": m("all"), "mdd": m("mdd"), "is": m("is"), "oos": m("oos"),
+        return {"all": m("all"), "mdd": m("mdd"), "is": m("is"), "oos": m("oos"), "taken": m("taken"), "exposure": m("exposure"),
+                "mdd_rng": (min(x["mdd"] for x in rs), max(x["mdd"] for x in rs)),
+                "all_rng": (min(x["all"] for x in rs), max(x["all"] for x in rs)),
                 "yr": {y: cb.med([x["yr"][y] for x in rs]) for y in years}}
 
     L = []
@@ -221,6 +225,34 @@ def main():
     for k, t in tr_v.items():
         nv += line(f"今のルール＋G5（{k}）", evaluate(srt(base + t)))
     w(f"\n両隣の値6通りのうち、両方の期間で今のルールを上回ったのは {nv}通り。")
+    # 5. 資金をすべて点数を使う形で運用する（今の採用ルールは使わない）
+    w("\n## 5. 資金をすべて点数を使う形で運用した場合（今の採用ルールの代わり）\n")
+    w("今のルールと同じ資金管理（1銘柄に資金÷銘柄数、損切り15%、同じ業種は2銘柄まで）。今の採用ルールの合図は使わない。"
+      "年率の幅はランダム順10通りの最小〜最大。\n")
+    w("| 形 | 銘柄数 | 年率（幅） | 最大下落率（幅） | 設計期間 | 確認期間 | 買った件数/年 | 資金を使っていた割合 | "
+      + " | ".join(years) + " |")
+    w("|---|---|---|---|---|---|---|---|" + "---|" * len(years))
+    alone = {"今のルール（参考）": (base, "")}
+    for k in ("G5 窓＋点数の上位30%（5日）", "G6 窓＋点数の上位30%（3日）"):
+        alone[k] = (tr_w[k], "")
+    for k in ("窓2%・上位30%", "窓3%・上位40%", "窓3%・上位20%", "窓3%・上位30%・下の窓だけ"):
+        alone[f"G5（{k}）"] = (tr_v[k], "")
+    alone["G5（S&P500全体から選ぶ）"] = (tr_all["G5 窓＋点数の上位30%（5日）"], "")
+    res5 = {}
+    for k, (t, _) in alone.items():
+        for sl in ((4,) if k.startswith("今の") else (4, 7)):
+            e = evaluate(t, sl)
+            res5[(k, sl)] = e
+            w(f"| {k} | {sl} | {pct(e['all'])}（{pct(e['all_rng'][0])}〜{pct(e['all_rng'][1])}） | {pct(e['mdd'])}（{pct(e['mdd_rng'][0])}〜{pct(e['mdd_rng'][1])}） | "
+              f"{pct(e['is'])} | {pct(e['oos'])} | {e['taken']:.0f} | {pct(e['exposure'], 0)} | "
+              + " | ".join(pct(e["yr"][y], 0) for y in years) + " |")
+            print("単独", k, sl, file=sys.stderr)
+    g = res5[("G5 窓＋点数の上位30%（5日）", 4)]
+    both = [f"{k}（{sl}銘柄）" for (k, sl), e in res5.items() if not k.startswith("今の") and e["is"] > cur["is"] and e["oos"] > cur["oos"]]
+    w(f"\n今のルール（4銘柄）を設計・確認の両方の期間で上回った形: {len(both)}通り" + (f"（{'、'.join(both)}）" if both else "") + "。")
+    w(f"G5（4銘柄）: 年率 {pct(g['all'])}、最大下落率 {pct(g['mdd'])}、設計 {pct(g['is'])}、確認 {pct(g['oos'])}。"
+      f"今のルール: 年率 {pct(cur['all'])}、最大下落率 {pct(cur['mdd'])}、設計 {pct(cur['is'])}、確認 {pct(cur['oos'])}。")
+
     w("\n## まとめ\n")
     w(f"- 今のルール: 設計 {pct(cur['is'])}、確認 {pct(cur['oos'])}、最大下落率 {pct(cur['mdd'])}")
     w(f"- 設計期間・確認期間の両方で今のルールを上回った形: {len(oks)}通り" + (f"（{'、'.join(oks)}）" if oks else ""))
