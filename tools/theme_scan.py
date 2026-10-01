@@ -399,12 +399,55 @@ def main():
     rs_sorted = sorted(((d["rs"][-1] or 0), s) for s, d in data.items())[::-1]
     v2_top = {s for _, s in rs_sorted[:V2_TOP]}
     v2_rank = {s: k + 1 for k, (_, s) in enumerate(rs_sorted)}
-    for s, d in data.items():
+    # テーマの外の強い銘柄（空き枠の候補。2026-10-01 ユーザー決定。`バックテスト結果/半導体・AIに特化した場合.md` の形3'）:
+    # S&P500の今の構成銘柄のうち監視銘柄でないもので、RS≧90、30週線（150日線）の局面が上昇、流動性あり、
+    # 業種（Yahoo）の3カ月の騰落率の中央値が上位20%（後知恵なしの監視銘柄 `backtest_rotation.build_lists` と同じ考え方）
+    inds_all = load_industries()
+    free = max(0, SLOTS - len(load_holdings()))
+    outside, out_rank, out_top = {}, {}, set()
+    if free and not a.asof:
+        rows = {}
+        for s_ in sp:
+            d = got.get(s_)
+            if s_ in wl or not d or d["date"][-1] != day or len(d["c"]) < 260:
+                continue
+            c_ = d["c"]
+            m150 = sum(c_[-150:]) / 150
+            m150p = sum(c_[-170:-20]) / 150
+            v50 = sum(d["v"][-51:-1]) / 50
+            rs_ = 99 * bisect.bisect_left(pool, rs_raw(c_)) / (len(pool) - 1) if len(pool) > 50 else None
+            rows[s_] = (rs_, c_[-1] > m150 > m150p, c_[-1] / c_[-64] - 1, c_[-1] >= 5 and v50 >= 250_000)
+        by = {}
+        for s_, x in rows.items():
+            if inds_all.get(s_):
+                by.setdefault(inds_all[s_], []).append(x[2])
+        medr = {k: sorted(v)[len(v) // 2] for k, v in by.items() if len(v) >= 3}
+        top_ind = set(sorted(medr, key=lambda k: -medr[k])[:max(1, len(medr) // 5)])
+        for s_, (rs_, up, _, liq) in rows.items():
+            if rs_ is not None and rs_ >= 90 and up and liq and inds_all.get(s_) in top_ind:
+                d = got[s_]
+                bt.prepare(d)
+                bs.prepare(d)
+                add_pivot(d)
+                d["rsi2"] = rsi_wilder(d["c"], 2)
+                c2.add_udvr(d)
+                d["sym"] = s_
+                d["rs"][-1] = rs_
+                outside[s_] = d
+        o_sorted = sorted(((d["rs"][-1] or 0), s_) for s_, d in outside.items())[::-1]
+        out_top = {s_ for _, s_ in o_sorted[:V2_TOP]}
+        out_rank = {s_: k + 1 for k, (_, s_) in enumerate(o_sorted)}
+    universe = [(s, d, wl[s], False) for s, d in data.items()] + [(s, d, f"テーマの外（{inds_all.get(s, '業種不明')}）", True) for s, d in outside.items()]
+    for s, d, grp, is_out in universe:
         i = len(d["c"]) - 1
         if not bt.liquid(d, i, [("0000", "9999")]):
             continue
         rs = d["rs"][i]
-        base = {"sym": s, "group": wl[s], "close": d["c"][i], "rs": rs, "chg": d["c"][i] / d["c"][i - 1] - 1,
+        if is_out:   # 新高値V2のRS上位10は、テーマの外の候補の中で数える
+            v2_top_, v2_rank_, where = out_top, out_rank, "テーマの外の強い銘柄"
+        else:
+            v2_top_, v2_rank_, where = v2_top, v2_rank, "監視銘柄"
+        base = {"sym": s, "group": grp, "outside": is_out, "close": d["c"][i], "rs": rs, "chg": d["c"][i] / d["c"][i - 1] - 1,
                 "regime": "上昇相場" if regime_up(i, d) else "レンジ"}
         pb, ii = d["pctb"][i], d["ii21"][i]
         lvl05 = d["bb_dn"][i] + 0.05 * (d["bb_up"][i] - d["bb_dn"][i])
@@ -434,13 +477,13 @@ def main():
         uv, h20 = d["udvr"][i], d["hi20c"][i]
         h2y = hi2y(d, i)
         trig = max(h20 or 0, h2y or 0)
-        if s in v2_top and c2.V2(i, d) is not None and h2y is not None and d["c"][i] >= h2y:
+        if s in v2_top_ and c2.V2(i, d) is not None and h2y is not None and d["c"][i] >= h2y:
             cands.append({**base, "pat": "A", "kind": "順張り: 新高値（V2、担当: ミネルヴィニ）",
-                          "why": f"監視銘柄のRS上位{V2_TOP}以内（{v2_rank[s]}位）、トレンドテンプレート8条件、RS {rs:.0f}（≧90）、終値が直前20日の最高値（終値）{h20:.2f}を上回る、上げ下げの出来高比（50日）{uv:.2f}（≧1.3）、終値が直前2年の最高値{h2y:.2f}以上（上値のレジスタンスなし）",
+                          "why": f"{where}のRS上位{V2_TOP}以内（{v2_rank_[s]}位）、トレンドテンプレート8条件、RS {rs:.0f}（≧90）、終値が直前20日の最高値（終値）{h20:.2f}を上回る、上げ下げの出来高比（50日）{uv:.2f}（≧1.3）、終値が直前2年の最高値{h2y:.2f}以上（上値のレジスタンスなし）",
                           "order": "翌日の寄り付きで買い。損切り: 買値の15%下。手じまい: 引けで50日線を割った翌日の寄り付き"})
-        elif s in v2_top and h20 and h2y and uv and uv >= 1.3 and (rs or 0) >= 90 and bt.trend_template(d, i) and trig * 0.97 <= d["c"][i] < trig:
+        elif s in v2_top_ and h20 and h2y and uv and uv >= 1.3 and (rs or 0) >= 90 and bt.trend_template(d, i) and trig * 0.97 <= d["c"][i] < trig:
             cands.append({**base, "pat": "B", "kind": "予約: 新高値（V2、担当: ミネルヴィニ）",
-                          "why": f"監視銘柄のRS上位{V2_TOP}以内（{v2_rank[s]}位）、トレンドテンプレート8条件、RS {rs:.0f}、上げ下げの出来高比 {uv:.2f}、直前20日の最高値（終値）{h20:.2f}・直前2年の最高値{h2y:.2f}の高い方まで{(trig / d['c'][i] - 1) * 100:.1f}%",
+                          "why": f"{where}のRS上位{V2_TOP}以内（{v2_rank_[s]}位）、トレンドテンプレート8条件、RS {rs:.0f}、上げ下げの出来高比 {uv:.2f}、直前20日の最高値（終値）{h20:.2f}・直前2年の最高値{h2y:.2f}の高い方まで{(trig / d['c'][i] - 1) * 100:.1f}%",
                           "order": f"逆指値買い {trig:.2f}（直前20日の最高値（終値）と直前2年の最高値の高い方。本来は終値で判定するルールなので近似）。損切り: 買値の15%下。手じまい: 引けで50日線割れ"})
         if bcr.C3R10(i, d) is not None:
             cands.append({**base, "pat": "A", "kind": "逆張り: 急落の底（担当: コナーズ）",
@@ -460,10 +503,24 @@ def main():
     if not cands:
         w("本日は該当なし（著者への送信は不要）。\n")
     else:
-        cands.sort(key=lambda x: (x["pat"], -(x["rs"] or 0)))
+        # 監視銘柄（テーマ）の候補を先に、テーマの外の候補は後に並べる
+        cands.sort(key=lambda x: (x["outside"], x["pat"], -(x["rs"] or 0)))
+        # テーマの外の候補は、空き枠の数（同時保有の上限 − 保有銘柄の数）まで（Aを先に、RSの高い順）
+        n_out, kept_ = 0, []
+        for x in cands:
+            if x["outside"]:
+                n_out += 1
+                if n_out > free:
+                    continue
+            kept_.append(x)
+        out_dropped = n_out - min(n_out, free)
+        cands = kept_
         # Bはルールごとに RSの高い順で5件まで（NotebookLMの1日の上限とニュース調査の時間のため）
         nb, kept = {}, []
         for x in cands:
+            if x["outside"]:
+                kept.append(x)
+                continue
             if x["pat"] == "B" or "急落" in x["kind"] or "新高値" in x["kind"]:
                 k = x["kind"].split("（")[0]
                 nb[k] = nb.get(k, 0) + 1
@@ -506,6 +563,10 @@ def main():
               + "、".join(f"{x['sym']}（{x['pat']}・{x['kind'].split('（')[0]}。{g}: {'・'.join(c)}）" for x, g, c in capped))
         if dropped:
             w(f"\n- パターンBは各ルールでRSの高い順に{B_MAX}件まで、急落の底・新高値のAは{CRASH_MAX}件（同時保有の上限）までとし、{dropped}件を省いた。")
+        w(f"\n- テーマの外の候補（グループが「テーマの外」）: 監視銘柄の候補で枠が埋まらないときに使う（監視銘柄の候補を先に買う）。"
+          f"S&P500の今の構成銘柄のうち監視銘柄でない銘柄から、RS≧90・30週線が上向きで終値がその上・業種の3カ月の強さが上位20%の{len(outside)}銘柄を調べ、"
+          f"空き枠{free}つ分まで出した" + (f"（ほかに{out_dropped}件を省いた）" if out_dropped else "") +
+          "。バックテストでは、テーマの外の強い銘柄で空き枠を埋めると、テーマが弱い時期の成績が支えられた（`バックテスト結果/半導体・AIに特化した場合.md`。2026-10-01 ユーザー決定）。")
         w("\n- RS≧80の押し目（ボリンジャーIII）は、バックテストで成績がより安定していた（PF3.27、最大下落20%）。")
     text = "\n".join(L) + "\n"
     today_pat = {}
