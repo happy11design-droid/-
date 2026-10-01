@@ -40,8 +40,11 @@ def main():
     sub = ap.add_subparsers(dest="cmd", required=True)
     r = sub.add_parser("run")
     r.add_argument("--cache", default=DEFAULT_CACHE)
-    r.add_argument("--out", default="新分析ツール/バックテスト結果/リスクを足して年率を上げる.md")
+    r.add_argument("--out", default=None)
+    r.add_argument("--set", default="vol", choices=("vol", "slots"),
+                   help="vol: 値動きに合わせた建玉にリスクを足す／slots: 今のルール（株）のまま銘柄数と信用取引を変える")
     a = ap.parse_args()
+    a.out = a.out or ("新分析ツール/バックテスト結果/リスクを足して年率を上げる.md" if a.set == "vol" else "新分析ツール/バックテスト結果/銘柄数と信用取引.md")
     ctx = cb.setup(a.cache, with_parts=False)
     data, members, ind, days, G, end = (ctx[k] for k in ("data", "members", "ind", "days", "G", "end"))
     pos = {}
@@ -204,9 +207,9 @@ def main():
 
     L = []
     w = L.append
-    w("---\ntype: backtest\ntitle: リスクを足して年率を上げる\n"
+    w("---\ntype: backtest\ntitle: " + ("リスクを足して年率を上げる" if a.set == "vol" else "銘柄数と信用取引") + "\n"
       f"created: {dt.date.today()}\nscript: tools/backtest_leverage.py\n---\n")
-    w("# 値動きに合わせた建玉で損失を小さくした分、リスクを足して年率を上げられるか\n")
+    w("# 値動きに合わせた建玉で損失を小さくした分、リスクを足して年率を上げられるか\n" if a.set == "vol" else "# 今のルール（株）のまま、銘柄数と信用取引を変える\n")
     w(__doc__.split("\n", 5)[5].strip() + "\n")
     w("| 形 | 年率 | 最大下落率 | 最大下落率（50通りの最悪） | 設計期間 | 確認期間 | 一番良い年 | 一番悪い年 | 倍になった年 | −40%以下の年 | 18,000ドルが最後にいくら |")
     w("|---|---|---|---|---|---|---|---|---|---|---|")
@@ -224,6 +227,17 @@ def main():
         ("順張りだけ2倍ETF、ほかは株", sized(to2x(stock, ("M", "V")), vol=False), {}),
         ("今のルールを2倍ETF・3銘柄（33%）", sized(etf, 4 / 3, vol=False), {"slots": 3}),
     ]
+    if a.set == "slots":
+        p = sized(stock, vol=False)
+        rows = [("今のルール（4銘柄・25%）", p, {})]
+        for n in (3, 2):
+            rows.append((f"{n}銘柄（1銘柄{100 // n}%）", sized(stock, 4 / n, vol=False), {"slots": n}))
+        for lev in (1.2, 1.3, 1.5):
+            rows.append((f"4銘柄・信用取引{lev}倍（1銘柄{25 * lev:.1f}%）", sized(stock, lev, vol=False), {"lev": lev}))
+        for lev in (1.2, 1.5):
+            rows.append((f"3銘柄・信用取引{lev}倍（1銘柄{100 / 3 * lev:.0f}%）", sized(stock, 4 / 3 * lev, vol=False), {"slots": 3, "lev": lev}))
+        rows.append(("5銘柄・信用取引1.25倍（1銘柄25%）", sized(stock, vol=False), {"slots": 5, "lev": 1.25}))
+        rows.append(("6銘柄・信用取引1.5倍（1銘柄25%）", sized(stock, vol=False), {"slots": 6, "lev": 1.5}))
     for lab, trs, kw in rows:
         e = evaluate(trs, **kw)
         best = max(e["yr"], key=e["yr"].get)
