@@ -256,6 +256,11 @@ def report(sym, d, pool_series, asof=None, hold=None, earn=None, wl_rs10=None):
             w(f"- 手じまい条件（引けで50日線割れ）: {mark(c < m50)}（50日線 {m50:.2f}）")
         elif "ワインスタイン" in rule:
             w(f"- 手じまい条件（週足の終値が10週線割れ、週の最終取引日に判定）: {mark(wk and d['w_c'][i] < d['w_ma10'][i])}（10週線 {d['w_ma10'][i]:.2f}）")
+        if "新高値" in rule or "ミネルヴィニ" in rule:
+            import theme_scan as ts_
+            hd = ts_.half_signal(d, bd)
+            w("- 半分売りの合図（反転のローソク足＋出来高1.5倍＋RSI70。2026-10-01 採用）: "
+              + ("まだ出ていない" if not hd else f"**{hd} に出た**（半分売っていなければ、次の寄り付きで半分売る。残りはルールの手じまいまで持つ）"))
         w("")
     return "\n".join(L) + "\n"
 
