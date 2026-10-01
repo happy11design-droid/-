@@ -259,6 +259,9 @@ def report(sym, d, pool_series, asof=None, hold=None, earn=None, wl_rs10=None):
         if "新高値" in rule or "ミネルヴィニ" in rule:
             import theme_scan as ts_
             hd = ts_.half_signal(d, bd)
+            dc = ts_.dark_cloud_signal(d, bd)
+            w("- 全部売りの合図＝かぶせ線（2026-10-01 採用。半分売りより優先）: "
+              + ("まだ出ていない" if not dc else f"**{dc} に出た**（まだ持っていれば、次の寄り付きで全部売る）"))
             w("- 半分売りの合図（反転のローソク足＋出来高1.5倍＋RSI70。2026-10-01 採用）: "
               + ("まだ出ていない" if not hd else f"**{hd} に出た**（半分売っていなければ、次の寄り付きで半分売る。残りはルールの手じまいまで持つ）"))
         w("")
