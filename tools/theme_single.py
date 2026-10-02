@@ -256,6 +256,11 @@ def report(sym, d, pool_series, asof=None, hold=None, earn=None, wl_rs10=None):
             w(f"- 手じまい条件（引けで50日線割れ）: {mark(c < m50)}（50日線 {m50:.2f}）")
         elif "ワインスタイン" in rule:
             w(f"- 手じまい条件（週足の終値が10週線割れ、週の最終取引日に判定）: {mark(wk and d['w_c'][i] < d['w_ma10'][i])}（10週線 {d['w_ma10'][i]:.2f}）")
+        if "ボリンジャー" in rule or "急落" in rule:
+            import theme_scan as ts_
+            bb_ = ts_.big_bear_signal(d, bd)
+            w("- 全部売りの合図＝出来高2倍の大陰線（2026-10-02 採用）: "
+              + ("まだ出ていない" if not bb_ else f"**{bb_} に出た**（まだ持っていれば、次の寄り付きで全部売る）"))
         if "新高値" in rule or "ミネルヴィニ" in rule:
             import theme_scan as ts_
             hd = ts_.half_signal(d, bd)
