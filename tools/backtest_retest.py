@@ -5,7 +5,7 @@
   tools/backtest_retest.py run --stage {sell,combo,half,filter,rule,all} [--out FILE]
 
 今の採用ルール（4つのルール、4銘柄・1銘柄25%、損切り15%、急落の底RSI(2)≦10、同じ業種2銘柄まで、押し目は前日の上部バンドに指値で売る、
-順張りは反転の合図で半分売り・かぶせ線で全部売る〔2026-10-01 採用〕）を土台に:
+順張りは反転の合図で半分売り・かぶせ線で全部売る〔2026-10-01 採用〕、押し目・急落の底は出来高2倍の大陰線で全部売る〔2026-10-02 採用〕）を土台に:
   sell  : 売りの合図（これまでの約30種類＋まだ試していない酒田五法・ボリンジャー・その他の指標・週足）を1つずつ足す。
           合図の翌日の寄り付きで全部売り、空いた枠で次の合図を買う。対象は順張り（ミネルヴィニ・新高値V2）／逆張り（押し目・急落の底）
   combo : sell で良かった合図を2つ組み合わせる（どちらかが出たら売る）
@@ -343,7 +343,7 @@ def main():
     sub = ap.add_subparsers(dest="cmd", required=True)
     r = sub.add_parser("run")
     r.add_argument("--cache", default=DEFAULT_CACHE)
-    r.add_argument("--stage", default="all", choices=("sell", "combo", "half", "filter", "rule", "all"))
+    r.add_argument("--stage", default="all", choices=("sell", "combo", "half", "filter", "rule", "stats", "all"))
     a = ap.parse_args()
     ctx = cb.setup(a.cache, with_parts=False)
     data, members, ind, days, G, end = (ctx[k] for k in ("data", "members", "ind", "days", "G", "end"))
@@ -407,7 +407,7 @@ def main():
 
     TREND, REV = ("M", "V"), ("B", "C")
 
-    def sim(t, extra=(), extra_rules=(), half="c1", half_rules=TREND, full_dc=True, dc_half=False):
+    def sim(t, extra=(), extra_rules=(), half="c1", half_rules=TREND, full_dc=True, dc_half=False, bear_rev=True):
         """1つの枠の価値の推移（最初を1）。extra の合図は extra_rules の売買に当て、翌日の寄り付きで全部売って枠を空ける"""
         s = data[t["sym"]]
         o, c = s["o"], s["c"]
@@ -441,6 +441,9 @@ def main():
                 if not dc_half:
                     pend = "sell"
                     continue
+            if bear_rev and not trend and safe(rb.big_bear, s, j):     # 逆張りの大陰線（2026-10-02 採用）
+                pend = "sell"
+                continue
             if any(safe(f, s, j) for f in fns):
                 pend = "sell"
             elif not half_done and half and safe(half, s, j):
@@ -455,7 +458,7 @@ def main():
             if drop and drop(t):
                 continue
             p = sim(t, extra, extra_rules, half=hf, **kw)
-            out.append({"sym": t["sym"], "in": data[t["sym"]]["date"][t["i0"]], "out": max(p), "path": p, "prio": t["prio"]})
+            out.append({"sym": t["sym"], "in": data[t["sym"]]["date"][t["i0"]], "out": max(p), "path": p, "prio": t["prio"], "rule": t["rule"]})
         return out
 
     is_hi = max(d for d in days if d <= cb.IS_END)
@@ -555,6 +558,8 @@ def main():
                 print(title, lab, "確か" if ok else "×", file=sys.stderr)
         return res, sure
 
+    if a.stage == "stats":
+        return rule_stats(cur_tr, days, port, ev, CUR, CONF1, is_hi, oos_lo)
     stages = ("sell", "combo", "half", "filter", "rule") if a.stage == "all" else (a.stage,)
     groups = (("順張り", TREND), ("逆張り", REV))
     sell_all = [(nm, f) for nm, f in OLD_SELLS] + [(nm, f) for nm, f in NEW_SELLS] + [(nm, weekly(nm)) for nm, _ in WEEKLY]
@@ -611,6 +616,50 @@ def main():
         os.makedirs(OUTDIR, exist_ok=True)
         open(out, "w", encoding="utf-8").write("\n".join(L) + "\n")
         print(f"書き出し: {out}", file=sys.stderr)
+
+
+def rule_stats(trs, days, port, ev, CUR, seeds, is_hi, oos_lo):
+    """今のルール（売りの改善後）で、ルールごとの成績を出す。毎朝のレポートの「過去の成績」の列に使う（`新分析ツール/ルールの成績.json`）"""
+    import json
+    yrs = (dt.date.fromisoformat(days[-1]) - dt.date.fromisoformat(days[0])).days / 365.25
+    names = {"B": "押し目（ボリンジャーIII）", "C": "急落の底", "M": "ミネルヴィニ（ベースの上抜け）", "V": "新高値V2"}
+    out, L = {}, []
+    w = L.append
+    w(f"---\ntype: backtest\ntitle: ルールごとの成績（今のルール）\ncreated: {dt.date.today()}\nscript: tools/backtest_retest.py --stage stats\n---\n")
+    w("# ルールごとの成績（売りの改善後の今のルール）\n")
+    w("後知恵なしの監視銘柄、2015年〜。今の売りのルール（押し目の指値売り・押し目と急落の底の大陰線、順張りのかぶせ線・半分売り、損切り15%）で計算した、"
+      "全部の合図の1回ごとの成績（枠に入らなかった合図も含む）。片道0.1%込み。「設計／確認」は 2015〜2021年／2022年〜 に買った合図の1回平均。\n")
+    w("| 順位 | ルール | 合図の数（年あたり） | 勝率 | 1回平均 | PF（利益÷損失） | 1回平均 設計／確認 | 保有日数（中央値） |")
+    w("|---|---|---|---|---|---|---|---|")
+    rows = []
+    for k, nm in names.items():
+        ts = [t for t in trs if t["rule"] == k]
+        rets = [t["path"][t["out"]] - 1 for t in ts]
+        win = [x for x in rets if x > 0]
+        loss = [-x for x in rets if x <= 0]
+        des = [t["path"][t["out"]] - 1 for t in ts if t["in"] <= is_hi]
+        con = [t["path"][t["out"]] - 1 for t in ts if t["in"] >= oos_lo]
+        hold = sorted((dt.date.fromisoformat(t["out"]) - dt.date.fromisoformat(t["in"])).days for t in ts)
+        r = {"name": nm, "n_per_year": round(len(ts) / yrs, 1), "win": round(len(win) / len(rets), 3), "avg": round(sum(rets) / len(rets), 4),
+             "pf": round(sum(win) / sum(loss), 2) if loss else None, "avg_design": round(sum(des) / len(des), 4) if des else None,
+             "avg_confirm": round(sum(con) / len(con), 4) if con else None, "hold_days": hold[len(hold) // 2]}
+        rows.append((k, r))
+    rows.sort(key=lambda x: -x[1]["avg"])
+    for rank, (k, r) in enumerate(rows, 1):
+        r["rank"] = rank
+        out[k] = r
+        w(f"| {rank} | {r['name']} | {r['n_per_year']} | {pct(r['win'], 0)} | {pct(r['avg'], 2)} | {r['pf']} | "
+          f"{pct(r['avg_design'], 2)}／{pct(r['avg_confirm'], 2)} | {r['hold_days']}日 |")
+    c = CUR[seeds]
+    w(f"\n資金全体（4銘柄・25%、乱数50通りの中央値）: 年率 {pct(c['all'])}、最大下落率 {pct(c['mdd'])}、設計期間 {pct(c['is'])}、確認期間 {pct(c['oos'])}\n")
+    w("順位は1回平均（1回の売買で平均いくら増えるか）の順。勝率だけでは、勝つと大きいルール（新高値V2など）を低く見てしまうため。")
+    w("保有日数は暦日。最大下落率は、期間全体（2015年〜）で資金全体が直前の最高値から一番下がった割合。")
+    w("\n- この結果はルールの条件どおりに機械的に計算したもので、Claudeによる個別銘柄の売買判断ではない。")
+    out["_meta"] = {"updated": str(dt.date.today()), "source": "新分析ツール/バックテスト結果/ルールごとの成績.md",
+                    "cagr": round(c["all"], 4), "mdd": round(c["mdd"], 4)}
+    open("新分析ツール/ルールの成績.json", "w", encoding="utf-8").write(json.dumps(out, ensure_ascii=False, indent=1) + "\n")
+    open(OUTDIR + "ルールごとの成績.md", "w", encoding="utf-8").write("\n".join(L) + "\n")
+    print("書き出し: 新分析ツール/ルールの成績.json・ルールごとの成績.md", file=sys.stderr)
 
 
 if __name__ == "__main__":

@@ -183,6 +183,27 @@ def big_bear_signal(d, since):
     return None
 
 
+def rule_stats():
+    """ルールごとの過去の成績（今のルールで計算。`tools/backtest_retest.py --stage stats` が書く `新分析ツール/ルールの成績.json`）"""
+    p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "新分析ツール", "ルールの成績.json")
+    try:
+        return json.load(open(p, encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def rule_key(kind):
+    if "ボリンジャー" in kind:
+        return "B"
+    if "急落" in kind:
+        return "C"
+    if "新高値" in kind:
+        return "V"
+    if "ミネルヴィニ" in kind:
+        return "M"
+    return None
+
+
 def load_industries():
     """{ティッカー: 業種}。テーマ監視銘柄.md の表の3列目（Yahoo Financeの業種）。監視銘柄にない銘柄はバックテストのキャッシュから補う"""
     out = {}
@@ -623,11 +644,22 @@ def main():
                 n = (dt.date.fromisoformat(v) - dt.date.fromisoformat(day)).days
                 eds[k_] = f"{v}（{n}日後）" + ("**決算が近い**" if 0 <= n <= 14 else "")
         w("パターン: A＝最新の足で採用ルールの条件が成立（翌日の寄り付きで成行）、B＝条件の成立が目前（引け後に予約注文を置く）。\n")
-        w("| 銘柄 | グループ | パターン | 種類 | 終値 | 前日比 | RS | 局面 | 当てはまった条件 | 次回決算予定日 | 注文の目安 |")
-        w("|---|---|---|---|---|---|---|---|---|---|---|")
-        for x in cands:
+        st_ = rule_stats()
+        def perf(x):
+            r = st_.get(rule_key(x["kind"]) or "")
+            return f"{r['rank']}位（勝率{r['win'] * 100:.0f}%・1回平均{r['avg'] * 100:+.1f}%）" if r else "成績なし（バックテストの組み合わせ外）"
+        # 表示の順番だけ、ルールの過去の成績（1回平均）の良い順にする。買う順番・件数の上限・同じ業種の上限は上の並び（RSの高い順）で決めたまま
+        show = sorted(cands, key=lambda x: (x["outside"], x["pat"], (st_.get(rule_key(x["kind"]) or "") or {}).get("rank", 9), -(x["rs"] or 0)))
+        w("| 銘柄 | グループ | パターン | 種類 | ルールの過去の成績 | 終値 | 前日比 | RS | 局面 | 当てはまった条件 | 次回決算予定日 | 注文の目安 |")
+        w("|---|---|---|---|---|---|---|---|---|---|---|---|")
+        for x in show:
             rs_ = "取得不可" if x["rs"] is None else f"{x['rs']:.0f}"
-            w(f"| {x['sym']} | {x['group']} | {x['pat']} | {x['kind']} | {x['close']:.2f} | {pct(x['chg'])} | {rs_} | {x['regime']} | {x['why']} | {eds[x['sym']]} | {x['order']} |")
+            w(f"| {x['sym']} | {x['group']} | {x['pat']} | {x['kind']} | {perf(x)} | {x['close']:.2f} | {pct(x['chg'])} | {rs_} | {x['regime']} | {x['why']} | {eds[x['sym']]} | {x['order']} |")
+        if st_:
+            m_ = st_.get("_meta", {})
+            w(f"\n- ルールの過去の成績: 今の売りのルールで、後知恵なしの監視銘柄・2015年〜の全部の合図の1回ごとの成績（{m_.get('updated', '?')}計算、`{m_.get('source', '')}`）。"
+              "順位は1回平均（1回の売買で平均いくら増えるか）の順。表はパターン（A→B）ごとに、この順位の良い順に並べた（表示の順番だけ。買う順番・件数の上限は変えていない。"
+              "候補の選び方を変えても成績は変わらなかったため。2026-10-02 ユーザーの指示）。著者には渡さない。")
         if capped:
             w(f"\n- 同じ業種は同時に{GROUP_CAP}銘柄まで（ユーザー決定 2026-09-28）のため見送った候補（保有中の銘柄と、RSの高い順に先に残した候補で数える）: "
               + "、".join(f"{x['sym']}（{x['pat']}・{x['kind'].split('（')[0]}。{g}: {'・'.join(c)}）" for x, g, c in capped))

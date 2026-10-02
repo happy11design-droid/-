@@ -1,0 +1,52 @@
+{
+ "V": {
+  "name": "新高値V2",
+  "n_per_year": 35.9,
+  "win": 0.447,
+  "avg": 0.0208,
+  "pf": 1.53,
+  "avg_design": -0.0033,
+  "avg_confirm": 0.0672,
+  "hold_days": 41,
+  "rank": 1
+ },
+ "C": {
+  "name": "急落の底",
+  "n_per_year": 46.1,
+  "win": 0.654,
+  "avg": 0.0207,
+  "pf": 1.81,
+  "avg_design": -0.0028,
+  "avg_confirm": 0.0391,
+  "hold_days": 5,
+  "rank": 2
+ },
+ "B": {
+  "name": "押し目（ボリンジャーIII）",
+  "n_per_year": 184.9,
+  "win": 0.68,
+  "avg": 0.0151,
+  "pf": 1.5,
+  "avg_design": 0.0128,
+  "avg_confirm": 0.0176,
+  "hold_days": 27,
+  "rank": 3
+ },
+ "M": {
+  "name": "ミネルヴィニ（ベースの上抜け）",
+  "n_per_year": 10.2,
+  "win": 0.417,
+  "avg": 0.0007,
+  "pf": 1.02,
+  "avg_design": -0.0006,
+  "avg_confirm": 0.0024,
+  "hold_days": 33,
+  "rank": 4
+ },
+ "_meta": {
+  "updated": "2026-10-02",
+  "source": "新分析ツール/バックテスト結果/ルールごとの成績.md",
+  "cagr": 0.2842,
+  "mdd": 0.3093
+ }
+}
