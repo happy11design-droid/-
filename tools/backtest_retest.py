@@ -343,7 +343,7 @@ def main():
     sub = ap.add_subparsers(dest="cmd", required=True)
     r = sub.add_parser("run")
     r.add_argument("--cache", default=DEFAULT_CACHE)
-    r.add_argument("--stage", default="all", choices=("sell", "combo", "half", "filter", "rule", "stats", "dd", "robust", "earn", "realized", "all"))
+    r.add_argument("--stage", default="all", choices=("sell", "combo", "half", "filter", "rule", "stats", "dd", "robust", "earn", "realized", "etf2x", "all"))
     a = ap.parse_args()
     ctx = cb.setup(a.cache, with_parts=False)
     data, members, ind, days, G, end = (ctx[k] for k in ("data", "members", "ind", "days", "G", "end"))
@@ -564,6 +564,8 @@ def main():
                 print(title, lab, "確か" if ok else "×", file=sys.stderr)
         return res, sure
 
+    if a.stage == "etf2x":
+        return etf2x_stage(build, port, ev, CUR, (SCREEN, CONF1, CONF2), days, is_hi, oos_lo)
     if a.stage == "realized":
         import statistics
         tr = build()
@@ -953,6 +955,111 @@ def robust(stage, data, base, build, port, ev, CUR, CONF, days, is_hi, oos_lo, s
     w("- この結果はルールの条件どおりに機械的に計算したもので、Claudeによる個別銘柄の売買判断ではない。")
     open(OUTDIR + "頑健さの確認.md", "w", encoding="utf-8").write("\n".join(L) + "\n")
     print("書き出し: 頑健さの確認.md", file=sys.stderr)
+
+
+def etf2x_stage(build, port, ev, CUR, SEEDSETS, days, is_hi, oos_lo):
+    """2倍ETFがある銘柄だけ2倍ETFにした場合（今のルール、2026-10-03）。株の値動きの2倍で再現（毎日合わせ直し、経費 年1%、0より下にならない）"""
+    import backtest_2x as b2
+    FEE = 0.01 / 252
+
+    def to2x(trs, only):
+        out = []
+        for t in trs:
+            if only is not None and t["sym"] not in only:
+                out.append(t)
+                continue
+            ds = sorted(t["path"])
+            e, prev, pv = 1 - COST, 1 - COST, {}
+            for d in ds:
+                g_ = t["path"][d]
+                e = max(0.0, e * (1 + 2 * (g_ / prev - 1)) * (1 - FEE))
+                prev = g_
+                pv[d] = e
+            out.append({**t, "path": pv})
+        return out
+
+    base = build()
+    forms = [("株（今のルール）", base), (f"2倍ETFがある銘柄（{len(b2.HAS_2X)}銘柄）だけ2倍ETF、ほかは株", to2x(base, b2.HAS_2X)),
+             ("（参考）全部の銘柄を2倍ETF", to2x(base, None))]
+    n_etf = sum(1 for t in base if t["sym"] in b2.HAS_2X)
+    yrs = (dt.date.fromisoformat(days[-1]) - dt.date.fromisoformat(days[0])).days / 365.25
+    years = sorted({d[:4] for d in days})
+    di = {d: k for k, d in enumerate(days)}
+    L = []
+    w = L.append
+    w(f"---\ntype: backtest\ntitle: 2倍ETFがある銘柄だけ2倍ETFにする（今のルール）\ncreated: {dt.date.today()}\nscript: tools/backtest_retest.py --stage etf2x\n---\n")
+    w("# 2倍ETFがある銘柄だけ2倍ETFにする（今のルール）\n")
+    w("買い・売りの合図と日付は今のルールのまま（元の株で判定）。2倍ETFがある銘柄（Claudeが把握している2026年時点の個別株2倍ETFの対象: "
+      + "・".join(sorted(b2.HAS_2X)) + "。実際に買えるかは証券会社で確認が必要）だけ、株の代わりに2倍ETFを持つ。"
+      "2倍ETFは元の株の日々の値動きの2倍で再現（毎日合わせ直し、経費 年1%、0より下にならない）。損切りは株の15%下のまま（ETFでは約30%下）。"
+      f"1枠は資金の25%。全部の合図 {len(base)}件のうち、2倍ETFがある銘柄の合図は {n_etf}件。片道0.1%。\n")
+    w("## 1. 乱数3組の結果（含み損を入れた最大下落率）\n")
+    w("| 形 | 組 | 年率 | 最大下落率 | 設計期間 | 確認期間 |")
+    w("|---|---|---|---|---|---|")
+    res = {}
+    for lab, trs in forms:
+        for sd in SEEDSETS:
+            e = ev(trs, sd)
+            res[(lab, sd)] = e
+            w(f"| {lab} | {sd[0]}番台・{sd[1]}通り | {pct(e['all'])} | {pct(e['mdd'])} | {pct(e['is'])} | {pct(e['oos'])} |")
+        print("ETF", lab, file=sys.stderr)
+    w("\n## 2. 確定した損益だけの最大下落率・年ごとの成績・モンテカルロ（乱数50通り）\n")
+    S0, NS = SEEDSETS[1]
+    w("| 形 | 確定した損益だけの最大下落率（中央値／最悪） | 含み損込み（中央値／最悪） | 一番悪い年 | 2022年 | モンテカルロ 年率の悪い方5% | 最大下落率が50%を超える確率 | 60%を超える確率 |")
+    w("|---|---|---|---|---|---|---|---|")
+    ytab = {}
+    for lab, trs in forms:
+        rm, mm, cs = [], [], []
+        for k in range(NS):
+            c, rc = [], []
+            port(trs, S0 + k, days[0], days[-1], curve=c, rcurve=rc)
+            cs.append(c)
+            for arr, x in ((mm, c), (rm, rc)):
+                pk, m = x[0], 0.0
+                for v in x:
+                    pk = max(pk, v)
+                    m = max(m, 1 - v / pk)
+                arr.append(m)
+        yr = {}
+        for y in years:
+            ks = [di[d] for d in days if d[:4] == y]
+            vals = sorted(c[ks[-1]] / (c[ks[0] - 1] if ks[0] > 0 else 1.0) - 1 for c in cs)
+            yr[y] = vals[len(vals) // 2]
+        ytab[lab] = yr
+        rets = [[c[i] / (c[i - 1] if i else 1.0) - 1 for i in range(len(c))] for c in cs]
+        R, n, B, sims = random.Random(42), len(days), 20, []
+        for _ in range(5000):
+            r_ = rets[R.randrange(NS)]
+            eq, pk, md, k = 1.0, 1.0, 0.0, 0
+            while k < n:
+                st = R.randrange(0, n - B)
+                for x in r_[st:st + B]:
+                    eq *= 1 + x
+                    pk = max(pk, eq)
+                    md = max(md, 1 - eq / pk)
+                k += B
+            sims.append((max(eq, 1e-9) ** (1 / yrs) - 1, md))
+        ca = sorted(x[0] for x in sims)
+        md_ = [x[1] for x in sims]
+        med = lambda v: sorted(v)[len(v) // 2]
+        worst_y = min(yr, key=yr.get)
+        w(f"| {lab} | {pct(med(rm))}／{pct(max(rm))} | {pct(med(mm))}／{pct(max(mm))} | {worst_y} {pct(yr[worst_y], 0)} | {pct(yr['2022'], 0)} | "
+          f"{pct(ca[int(len(ca) * 0.05)])} | {pct(sum(1 for x in md_ if x > 0.5) / len(md_), 1)} | {pct(sum(1 for x in md_ if x > 0.6) / len(md_), 1)} |")
+        print("ETF2", lab, file=sys.stderr)
+    w("\n## 3. 年ごとの成績（乱数50通りの中央値）\n")
+    w("| 形 | " + " | ".join(years) + " |")
+    w("|---|" + "---|" * len(years))
+    for lab, _ in forms:
+        w(f"| {lab} | " + " | ".join(pct(ytab[lab][y], 0) for y in years) + " |")
+    st_ = forms[0][0]
+    e0 = res[(forms[1][0], SEEDSETS[1])]
+    w(f"\n18,000ドルが最後にいくらになるか（組2の年率で計算）: 株 {18000 * (1 + res[(st_, SEEDSETS[1])]['all']) ** yrs:,.0f}ドル、"
+      f"2倍ETFがある銘柄だけETF {18000 * (1 + e0['all']) ** yrs:,.0f}ドル（約{yrs:.1f}年）。\n")
+    w("- 2倍ETFの多くは2022年以降の上場で、それより前は実在しない。元の株の値動きから作った仮の値。")
+    w("- 実物の2倍ETFは、値段の差（スプレッド）や、毎日の合わせ直しのずれで、ここより少し悪くなることがある。")
+    w("- この結果はルールの条件どおりに機械的に計算したもので、Claudeによる個別銘柄の売買判断ではない。")
+    open(OUTDIR + "2倍ETFがある銘柄だけ2倍ETF（今のルール）.md", "w", encoding="utf-8").write("\n".join(L) + "\n")
+    print("書き出し", file=sys.stderr)
 
 
 def earnings_stage(data, base, build, ev, CUR, CONF, safe):
