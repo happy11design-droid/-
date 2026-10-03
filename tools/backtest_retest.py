@@ -343,7 +343,7 @@ def main():
     sub = ap.add_subparsers(dest="cmd", required=True)
     r = sub.add_parser("run")
     r.add_argument("--cache", default=DEFAULT_CACHE)
-    r.add_argument("--stage", default="all", choices=("sell", "combo", "half", "filter", "rule", "stats", "dd", "robust", "earn", "all"))
+    r.add_argument("--stage", default="all", choices=("sell", "combo", "half", "filter", "rule", "stats", "dd", "robust", "earn", "realized", "all"))
     a = ap.parse_args()
     ctx = cb.setup(a.cache, with_parts=False)
     data, members, ind, days, G, end = (ctx[k] for k in ("data", "members", "ind", "days", "G", "end"))
@@ -464,7 +464,7 @@ def main():
     is_hi = max(d for d in days if d <= cb.IS_END)
     oos_lo = min(d for d in days if d >= cb.OOS_START)
 
-    def port(trs, seed, lo, hi, curve=None):
+    def port(trs, seed, lo, hi, curve=None, rcurve=None, closed=None):
         dd = [d for d in days if lo <= d <= hi]
         by_in = {}
         for t in trs:
@@ -480,6 +480,8 @@ def main():
                     h["v"] = v
                 if h["t"]["out"] == d:
                     cash += h["size"] * h["v"]
+                    if closed is not None:
+                        closed.append((d, h["t"]["path"][d] - 1, h["size"] * (h["v"] - 1)))
                 else:
                     still.append(h)
             held = still
@@ -505,6 +507,8 @@ def main():
             mdd = max(mdd, 1 - eq / peak)
             if curve is not None:
                 curve.append(eq)
+            if rcurve is not None:
+                rcurve.append(cash + sum(h["size"] for h in held))   # 持っている株は買った額のまま（確定した損益だけ）
         yrs = (dt.date.fromisoformat(dd[-1]) - dt.date.fromisoformat(dd[0])).days / 365.25
         return eq ** (1 / yrs) - 1, mdd
 
@@ -560,6 +564,55 @@ def main():
                 print(title, lab, "確か" if ok else "×", file=sys.stderr)
         return res, sure
 
+    if a.stage == "realized":
+        import statistics
+        tr = build()
+        S0, NS = CONF1
+        rows = []
+        for k in range(NS):
+            c, rc, cl = [], [], []
+            port(tr, S0 + k, days[0], days[-1], curve=c, rcurve=rc, closed=cl)
+            def mdd_of(x):
+                pk, m, start, worst = x[0], 0.0, 0, (0, 0, 0)
+                for i, v in enumerate(x):
+                    if v > pk:
+                        pk, start = v, i
+                    if 1 - v / pk > m:
+                        m, worst = 1 - v / pk, (start, i)
+                return m, worst
+            m1, w1 = mdd_of(c)
+            m2, w2 = mdd_of(rc)
+            loss = [x for x in cl if x[1] < 0]
+            stop = [x for x in cl if x[1] <= -0.14]
+            rows.append({"mtm": m1, "real": m2, "w1": w1, "w2": w2, "n": len(cl), "loss": len(loss), "stop": len(stop),
+                         "loss_amt": -sum(x[2] for x in loss), "stop_amt": -sum(x[2] for x in stop)})
+        med = lambda key: statistics.median(r[key] for r in rows)
+        srt_ = sorted(rows, key=lambda r: r["mtm"])
+        mid = srt_[len(srt_) // 2]
+        yrs = (dt.date.fromisoformat(days[-1]) - dt.date.fromisoformat(days[0])).days / 365.25
+        L = []
+        w = L.append
+        w(f"---\ntype: backtest\ntitle: 含み損を入れた下落率と、確定した損益だけの下落率\ncreated: {dt.date.today()}\nscript: tools/backtest_retest.py --stage realized\n---\n")
+        w("# 含み損を入れた最大下落率と、売って確定した損益だけの最大下落率\n")
+        w("今のルール、2015年〜、乱数50通り。\n")
+        w("- 含み損を入れた下落率: 毎日の引け値で「現金＋持っている株の時価」を計算し、それまでの最高から一番下がった割合（今までの表の最大下落率）。")
+        w("- 確定した損益だけの下落率: 持っている株は買った額のまま数え、売って損益が確定したときだけ資金が増減するとした場合の、最高から一番下がった割合。"
+          "損切りだけでなく、ルールの売り（50日線割れ・かぶせ線・大陰線など）で損が出た売買も含む。利益が出た売買は資金を増やす。\n")
+        w("| | 中央値 | 50通りの中で一番悪い |")
+        w("|---|---|---|")
+        w(f"| 含み損を入れた最大下落率 | {pct(med('mtm'))} | {pct(max(r['mtm'] for r in rows))} |")
+        w(f"| 確定した損益だけの最大下落率 | {pct(med('real'))} | {pct(max(r['real'] for r in rows))} |")
+        d_ = lambda ij: f"{days[ij[0]]}〜{days[ij[1]]}"
+        w(f"\n中央値の1通りで、一番大きく下がった期間: 含み損を入れると {d_(mid['w1'])}（{pct(mid['mtm'])}）、確定した損益だけだと {d_(mid['w2'])}（{pct(mid['real'])}）。\n")
+        w("## 売買の内訳（50通りの中央値、11.7年の合計）\n")
+        w(f"- 実際に買えた売買: {med('n'):.0f}回（年{med('n') / yrs:.0f}回）")
+        w(f"- そのうち損で終わった売買: {med('loss'):.0f}回（年{med('loss') / yrs:.0f}回）")
+        w(f"- そのうち損切り（買値の約15%下）: {med('stop'):.0f}回（年{med('stop') / yrs:.1f}回）")
+        w(f"- 損で終わった売買の損の合計のうち、損切りの分: {pct(med('stop_amt') / med('loss_amt'), 0)}")
+        w("\n- この結果はルールの条件どおりに機械的に計算したもので、Claudeによる個別銘柄の売買判断ではない。")
+        open(OUTDIR + "含み損と確定した損益の下落率.md", "w", encoding="utf-8").write("\n".join(L) + "\n")
+        print("書き出し", file=sys.stderr)
+        return
     if a.stage in ("robust", "earn"):
         return robust(a.stage, data, base, build, port, ev, CUR, CONF1, days, is_hi, oos_lo, sim, TREND, REV, safe)
     if a.stage == "dd":
