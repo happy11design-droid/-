@@ -343,7 +343,7 @@ def main():
     sub = ap.add_subparsers(dest="cmd", required=True)
     r = sub.add_parser("run")
     r.add_argument("--cache", default=DEFAULT_CACHE)
-    r.add_argument("--stage", default="all", choices=("sell", "combo", "half", "filter", "rule", "stats", "dd", "all"))
+    r.add_argument("--stage", default="all", choices=("sell", "combo", "half", "filter", "rule", "stats", "dd", "robust", "earn", "all"))
     a = ap.parse_args()
     ctx = cb.setup(a.cache, with_parts=False)
     data, members, ind, days, G, end = (ctx[k] for k in ("data", "members", "ind", "days", "G", "end"))
@@ -464,7 +464,7 @@ def main():
     is_hi = max(d for d in days if d <= cb.IS_END)
     oos_lo = min(d for d in days if d >= cb.OOS_START)
 
-    def port(trs, seed, lo, hi):
+    def port(trs, seed, lo, hi, curve=None):
         dd = [d for d in days if lo <= d <= hi]
         by_in = {}
         for t in trs:
@@ -503,6 +503,8 @@ def main():
             eq = cash + sum(h["size"] * h["v"] for h in held)
             peak = max(peak, eq)
             mdd = max(mdd, 1 - eq / peak)
+            if curve is not None:
+                curve.append(eq)
         yrs = (dt.date.fromisoformat(dd[-1]) - dt.date.fromisoformat(dd[0])).days / 365.25
         return eq ** (1 / yrs) - 1, mdd
 
@@ -558,6 +560,8 @@ def main():
                 print(title, lab, "確か" if ok else "×", file=sys.stderr)
         return res, sure
 
+    if a.stage in ("robust", "earn"):
+        return robust(a.stage, data, base, build, port, ev, CUR, CONF1, days, is_hi, oos_lo, sim, TREND, REV, safe)
     if a.stage == "dd":
         # 銘柄の直近1年（252取引日）の最大下落率（合図の日まで。後知恵なし）
         def dd1y(t):
@@ -723,6 +727,256 @@ def rule_stats(trs, days, port, ev, CUR, seeds, is_hi, oos_lo):
     open("新分析ツール/ルールの成績.json", "w", encoding="utf-8").write(json.dumps(out, ensure_ascii=False, indent=1) + "\n")
     open(OUTDIR + "ルールごとの成績.md", "w", encoding="utf-8").write("\n".join(L) + "\n")
     print("書き出し: 新分析ツール/ルールの成績.json・ルールごとの成績.md", file=sys.stderr)
+
+
+def robust(stage, data, base, build, port, ev, CUR, CONF, days, is_hi, oos_lo, sim, TREND, REV, safe):
+    """Geminiの指摘に応える頑健さの確認（2026-10-03）: 1 取引コスト 2 モンテカルロ 3 年ごと・ウォークフォワード 4 生存者バイアス ／ earn: 5 決算"""
+    import json
+    import math
+    g = globals()
+    L = []
+    w = L.append
+    years = sorted({d[:4] for d in days})
+    yrs_all = (dt.date.fromisoformat(days[-1]) - dt.date.fromisoformat(days[0])).days / 365.25
+    S0, NS = CONF
+    if stage == "earn":
+        return earnings_stage(data, base, build, ev, CUR, CONF, safe)
+
+    def curves(trs):
+        out = []
+        for k in range(NS):
+            c = []
+            port(trs, S0 + k, days[0], days[-1], curve=c)
+            out.append(c)
+        return out
+
+    def yearly(cs):
+        di = {d: k for k, d in enumerate(days)}
+        res = {}
+        for y in years:
+            ks = [di[d] for d in days if d[:4] == y]
+            vals = sorted(c[ks[-1]] / (c[ks[0] - 1] if ks[0] > 0 else 1.0) - 1 for c in cs)
+            res[y] = (vals[len(vals) // 2], vals[0], vals[-1])
+        return res
+
+    w(f"---\ntype: backtest\ntitle: 頑健さの確認（コスト・モンテカルロ・年ごと・生存者バイアス）\ncreated: {dt.date.today()}\nscript: tools/backtest_retest.py --stage robust\n---\n")
+    w("# 頑健さの確認（Geminiの第三者検証の指摘に応える）\n")
+    w("Gemini ディープリサーチの検証（2026-10-03）で勧められた追加の検証。土台は今のルール（2026-10-02 時点）。乱数50通り。\n")
+
+    # ---- 1. 取引コスト ----
+    w("## 1. 取引コスト（片道）を上げたらどうなるか\n")
+    w("| 片道のコスト | 年率 | 最大下落率 | 設計期間 | 確認期間 |")
+    w("|---|---|---|---|---|")
+    old = g["COST"]
+    be = None
+    try:
+        for c_ in (0.001, 0.002, 0.003, 0.005, 0.0075, 0.01, 0.015):
+            g["COST"] = c_
+            e = ev(build(), CONF)
+            w(f"| {c_ * 100:.2f}% | {pct(e['all'])} | {pct(e['mdd'])} | {pct(e['is'])} | {pct(e['oos'])} |")
+            if be is None and e["is"] <= 0:
+                be = c_
+            print("コスト", c_, file=sys.stderr)
+    finally:
+        g["COST"] = old
+    w(f"\n設計期間（2015〜2021年）の年率が0以下になる片道コスト: {'1.5%でもプラス' if be is None else f'{be * 100:.2f}%'}。"
+      "片道0.1%は、手数料0〜0.05%＋値段のずれ（スリッページ）を見込んだ仮定。\n")
+
+    # ---- 2. モンテカルロ ----
+    base_tr = build()
+    cs = curves(base_tr)
+    rets = [[c[i] / (c[i - 1] if i else 1.0) - 1 for i in range(len(c))] for c in cs]
+    n, B, R = len(days), 20, random.Random(42)
+    sims = []
+    for _ in range(10000):
+        r_ = rets[R.randrange(NS)]
+        eq, pk, mdd, k = 1.0, 1.0, 0.0, 0
+        while k < n:
+            st = R.randrange(0, n - B)
+            for x in r_[st:st + B]:
+                eq *= 1 + x
+                pk = max(pk, eq)
+                mdd = max(mdd, 1 - eq / pk)
+            k += B
+        sims.append((eq ** (1 / yrs_all) - 1, mdd))
+    ca = sorted(x[0] for x in sims)
+    md = sorted(x[1] for x in sims)
+    q = lambda v, p: v[min(len(v) - 1, int(len(v) * p))]
+    w("## 2. モンテカルロ（日々の損益の順番をばらばらにして10,000通りの11.7年を作る）\n")
+    w("今のルールの資金の推移（乱数50通り）から、20日ずつのかたまりを、ランダムに選んでつなぎ直した（ブロック・ブートストラップ）。"
+      "連敗の続き方・大きな下げの重なり方が変わったとき、年率と最大下落率がどこまでぶれるかを見る。\n")
+    w("| | 5%の確率でこれより悪い | 中央値 | 5%の確率でこれより良い |")
+    w("|---|---|---|---|")
+    w(f"| 年率 | {pct(q(ca, 0.05))} | {pct(q(ca, 0.5))} | {pct(q(ca, 0.95))} |")
+    w(f"| 最大下落率 | {pct(q(md, 0.95))} | {pct(q(md, 0.5))} | {pct(q(md, 0.05))} |")
+    w("")
+    for th in (0.3, 0.4, 0.5, 0.6):
+        w(f"- 最大下落率が{int(th * 100)}%を超える確率: {pct(sum(1 for x in md if x > th) / len(md), 1)}")
+    w(f"- 11.7年の年率がマイナスになる確率: {pct(sum(1 for x in ca if x < 0) / len(ca), 1)}")
+    w(f"- 年率が10%に届かない確率: {pct(sum(1 for x in ca if x < 0.10) / len(ca), 1)}\n")
+    print("モンテカルロ", file=sys.stderr)
+
+    # ---- 3. 年ごと・ウォークフォワード ----
+    yr = yearly(cs)
+    w("## 3-1. 年ごとの成績（乱数50通りの中央値と、一番悪い・良い通り）\n")
+    w("| 年 | 中央値 | 一番悪い通り | 一番良い通り |")
+    w("|---|---|---|---|")
+    for y in years:
+        m_, lo_, hi_ = yr[y]
+        w(f"| {y}{'（9月まで）' if y == years[-1] else ''} | {pct(m_, 0)} | {pct(lo_, 0)} | {pct(hi_, 0)} |")
+    neg = [y for y in years if yr[y][0] < 0]
+    w(f"\nマイナスの年（中央値）: {'、'.join(neg) if neg else 'なし'}。\n")
+    roll = []
+    for k in range(len(years) - 3):
+        g3 = 1.0
+        for y in years[k:k + 3]:
+            g3 *= 1 + yr[y][0]
+        roll.append((f"{years[k]}〜{years[k + 2]}", g3 ** (1 / 3) - 1))
+    w("3年ずつの年率（中央値の年の成績をつないだもの）: " + "、".join(f"{a_} {pct(b_, 0)}" for a_, b_ in roll) + "\n")
+
+    variants = [("今のルール", {}), ("かぶせ線なし", {"full_dc": False}), ("半分売りなし", {"half": None}),
+                ("大陰線なし", {"bear_rev": False}), ("3つともなし（10-01より前の売り）", {"full_dc": False, "half": None, "bear_rev": False})]
+    vy = {}
+    for lab, kw in variants:
+        vy[lab] = yearly(curves(build(**kw)))
+        print("ウォークフォワード", lab, file=sys.stderr)
+    w("## 3-2. ウォークフォワード（その時点で分かっていた成績だけで、売りの改善を使うかを毎年選び直す）\n")
+    w("毎年の初めに、直前3年の成績が一番良かった形（今のルール／かぶせ線なし／半分売りなし／大陰線なし／3つともなし）を選び、その年に使う。"
+      "後から見て一番良い形を選ぶのではなく、その時点で選べた形の成績になる。\n")
+    w("| 年 | 選ばれた形（直前3年で一番） | その年の成績 | 今のルールのその年の成績 |")
+    w("|---|---|---|---|")
+    wf, cur_g, chosen = 1.0, 1.0, {}
+    for k, y in enumerate(years):
+        if k < 3:
+            continue
+        best = max(vy, key=lambda lb: math.prod(1 + vy[lb][yy][0] for yy in years[k - 3:k]))
+        chosen[best] = chosen.get(best, 0) + 1
+        r1, r0 = vy[best][y][0], vy["今のルール"][y][0]
+        wf *= 1 + r1
+        cur_g *= 1 + r0
+        w(f"| {y} | {best} | {pct(r1, 0)} | {pct(r0, 0)} |")
+    span = (dt.date.fromisoformat(days[-1]) - dt.date.fromisoformat(f"{years[3]}-01-01")).days / 365.25
+    w(f"\n{years[3]}年〜の年率: ウォークフォワード {pct(wf ** (1 / span) - 1)}、今のルールをずっと使う {pct(cur_g ** (1 / span) - 1)}。"
+      "選ばれた回数: " + "、".join(f"{a_} {b_}回" for a_, b_ in chosen.items()) + "\n")
+    w("各形の年ごとの成績（中央値）:\n")
+    w("| 形 | " + " | ".join(years) + " |")
+    w("|---|" + "---|" * len(years))
+    for lab, _ in variants:
+        w(f"| {lab} | " + " | ".join(pct(vy[lab][y][0], 0) for y in years) + " |")
+
+    # ---- 4. 生存者バイアス ----
+    w("\n## 4. 生存者バイアス\n")
+    w("過去のS&P500構成銘柄のうち、Yahooから株価が取れない約150銘柄の多くは、買収（買収価格で上場廃止。損は小さい）か、ティッカーの変更（新しいティッカーでデータがある。例: ABC→COR、ANTM→ELV）。"
+      "Claudeの知識で、構成銘柄の期間（2015年〜）に倒産・株価の崩壊があった銘柄を挙げると: SVB（SIVB、2023年3月）、シグネチャー銀行（SBNY、2023年3月）、ファースト・リパブリック（FRC、2023年5月）、"
+      "エンド（ENDP）、マリンクロット（MNK）、フロンティア（FTR）、チェサピーク（CHK）、ダイヤモンド・オフショア（DO）、サウスウエスタン（SWN）、ウィンドストリーム（WIN）、デンベリー（DNR）など。"
+      "このうち **FRC（OTCのFRCBの株価）とセンチュリーリンク（CTL、今のLUMEN）は、2026-10-03に株価を取れたのでデータに加えた**。ほかは取れない。\n")
+    fx = [t for t in base_tr if t["sym"] in ("FRC", "CTL")]
+    w(f"- 加えたFRC・CTLの合図: {len(fx)}件" + ("（" + "、".join(f"{t['sym']} {t['in']}〜{t['out']} {pct(t['path'][t['out']] - 1, 1)}" for t in fx[:10]) + "）" if fx else "") + "。")
+    e_with = CUR[CONF]
+    e_wo = ev(build(drop=lambda t: t["sym"] in ("FRC", "CTL")), CONF)
+    w(f"- FRC・CTLを入れた年率 {pct(e_with['all'])}（最大下落率 {pct(e_with['mdd'])}）、入れない年率 {pct(e_wo['all'])}（{pct(e_wo['mdd'])}）。\n")
+    w("**取れない倒産銘柄の影響の見積もり（ストレステスト）**: 倒産で1枠（資金の25%）を丸ごと失う出来事が、11.7年の間にランダムな日に起きたとしたら。"
+      "実際には損切り（買値の15%下）があるので、丸ごと失うのは、取引が止まって売れない場合（2023年のSVB・シグネチャー銀行）だけ。\n")
+    w("| 1枠を丸ごと失う回数 | 年率 | 最大下落率 |")
+    w("|---|---|---|")
+    R2 = random.Random(7)
+    for kk in (0, 1, 2, 3):
+        cag, mds = [], []
+        for c in cs:
+            hits = sorted(R2.randrange(len(c)) for _ in range(kk))
+            eq_, pk, md_, f = 1.0, 1.0, 0.0, 1.0
+            for i, v in enumerate(c):
+                while hits and hits[0] == i:
+                    f *= 0.75
+                    hits.pop(0)
+                eq_ = v * f
+                pk = max(pk, eq_)
+                md_ = max(md_, 1 - eq_ / pk)
+            cag.append(eq_ ** (1 / yrs_all) - 1)
+            mds.append(md_)
+        w(f"| {kk}回 | {pct(sorted(cag)[len(cag) // 2])} | {pct(sorted(mds)[len(mds) // 2])} |")
+    w("\n- 2023年の銀行の破綻（SVB・シグネチャー・FRC）は、どれも2022年から株価が大きく下がり（RSが低く、30週線も下向き）、後知恵なしの監視銘柄の条件（RS≧90・上昇トレンド）から外れていた可能性が高い（FRCはデータで確認できる）。"
+      "2015〜2017年の製薬・エネルギーの崩壊（ENDP・MNK・CHKなど）も、崩壊の前から下げていた銘柄が多い。")
+    w("- この結果はルールの条件どおりに機械的に計算したもので、Claudeによる個別銘柄の売買判断ではない。")
+    open(OUTDIR + "頑健さの確認.md", "w", encoding="utf-8").write("\n".join(L) + "\n")
+    print("書き出し: 頑健さの確認.md", file=sys.stderr)
+
+
+def earnings_stage(data, base, build, ev, CUR, CONF, safe):
+    """5. 決算をまたぐか（Nasdaqの決算カレンダーから取った過去の決算日。`tools/fetch_earnings_history.py`）"""
+    import json
+    earn = json.load(open(os.path.join(DEFAULT_CACHE, "earnings.json")))
+    nd = 0
+    for sym, s in data.items():
+        ev_ = earn.get(sym) or earn.get(sym.replace(".", "-")) or []
+        pos = {d: k for k, d in enumerate(s["date"])}
+        rset = set()
+        for d, tm in ev_:
+            # 反応する日: 寄り付き前・時刻不明はその日、引け後は翌営業日
+            k = pos.get(d)
+            if k is None:
+                import bisect
+                k = bisect.bisect_right(s["date"], d)
+                if k >= len(s["date"]) or k == 0:
+                    continue
+            elif tm == "time-after-hours":
+                k += 1
+            rset.add(k)
+        s["earn_r"] = rset
+        nd += bool(rset)
+    have = sum(1 for t in base if data[t["sym"]]["earn_r"])
+    L = []
+    w = L.append
+    w(f"---\ntype: backtest\ntitle: 決算をまたぐかどうか\ncreated: {dt.date.today()}\nscript: tools/backtest_retest.py --stage earn\n---\n")
+    w("# 決算をまたぐかどうか\n")
+    w(f"過去の決算日は Nasdaq の決算カレンダー（1日ごと、2015年〜）から取った（`tools/fetch_earnings_history.py`）。決算日のある銘柄 {nd}、"
+      f"決算日が分かる銘柄の合図 {have}件 / {len(base)}件。決算が寄り付き前・時刻不明ならその日、引け後なら翌営業日を「決算で株価が動く日」とした。\n")
+    tr = build()
+    cross, nocross = [], []
+    for t0, t1 in zip(base, tr):
+        rs_ = data[t0["sym"]]["earn_r"]
+        i1 = data[t0["sym"]]["date"].index(t1["out"])
+        r = t1["path"][t1["out"]] - 1
+        (cross if any(t0["i0"] <= k <= i1 for k in rs_) else nocross).append((t0["rule"], r))
+    w("## 決算をまたいだ売買と、またがなかった売買（今のルール、全部の合図）\n")
+    w("| | 件数 | 勝率 | 1回平均 | 15%以上の損の割合 |")
+    w("|---|---|---|---|---|")
+    for lab, xs_ in (("決算をまたいだ", cross), ("またがなかった", nocross)):
+        r_ = [x for _, x in xs_]
+        if r_:
+            w(f"| {lab} | {len(r_)} | {pct(sum(1 for x in r_ if x > 0) / len(r_), 0)} | {pct(sum(r_) / len(r_), 2)} | {pct(sum(1 for x in r_ if x <= -0.15) / len(r_), 0)} |")
+    w("")
+
+    def soon(t, n_):
+        rs_ = data[t["sym"]]["earn_r"]
+        return any(t["i0"] <= k <= t["i0"] + n_ for k in rs_)
+
+    def pre_earn(s, j):
+        return (j + 2) in s.get("earn_r", ())
+
+    items = [("決算の5営業日前までに入る合図は買わない", lambda: build(drop=lambda t: soon(t, 5))),
+             ("決算の10営業日前までに入る合図は買わない", lambda: build(drop=lambda t: soon(t, 10))),
+             ("決算の20営業日前までに入る合図は買わない", lambda: build(drop=lambda t: soon(t, 20))),
+             ("保有中は決算の前日の寄り付きで全部売る（全部のルール）", lambda: build(extra=(pre_earn,), extra_rules=TREND_ALL)),
+             ("保有中は決算の前日の寄り付きで全部売る（順張りだけ）", lambda: build(extra=(pre_earn,), extra_rules=("M", "V"))),
+             ("保有中は決算の前日の寄り付きで全部売る（押し目・急落の底だけ）", lambda: build(extra=(pre_earn,), extra_rules=("B", "C")))]
+    w("## 決算の前に買わない・決算の前に売る\n")
+    c0 = CUR[CONF]
+    w(f"今のルール: 年率 {pct(c0['all'])}、最大下落率 {pct(c0['mdd'])}、設計期間 {pct(c0['is'])}、確認期間 {pct(c0['oos'])}（乱数50通り）\n")
+    w("| 形 | 年率 | 最大下落率 | 設計期間 | 確認期間 | 両方の期間で上回ったか |")
+    w("|---|---|---|---|---|---|")
+    for lab, mk in items:
+        e = ev(mk(), CONF)
+        ok = e["is"] > c0["is"] and e["oos"] > c0["oos"]
+        w(f"| {lab} | {pct(e['all'])} | {pct(e['mdd'])} | {pct(e['is'])} | {pct(e['oos'])} | {'はい' if ok else ''} |")
+        print("決算", lab, file=sys.stderr)
+    w("\n- 決算の前日の寄り付きで売る形は、決算の2営業日前の引けで判定する（引け後の決算なら決算日の寄り付き、寄り付き前の決算なら前日の寄り付きで売ることになる）。")
+    w("- この結果はルールの条件どおりに機械的に計算したもので、Claudeによる個別銘柄の売買判断ではない。")
+    open(OUTDIR + "決算をまたぐかどうか.md", "w", encoding="utf-8").write("\n".join(L) + "\n")
+    print("書き出し: 決算をまたぐかどうか.md", file=sys.stderr)
+
+
+TREND_ALL = ("B", "C", "M", "V")
 
 
 if __name__ == "__main__":
