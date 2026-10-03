@@ -343,7 +343,7 @@ def main():
     sub = ap.add_subparsers(dest="cmd", required=True)
     r = sub.add_parser("run")
     r.add_argument("--cache", default=DEFAULT_CACHE)
-    r.add_argument("--stage", default="all", choices=("sell", "combo", "half", "filter", "rule", "stats", "all"))
+    r.add_argument("--stage", default="all", choices=("sell", "combo", "half", "filter", "rule", "stats", "dd", "all"))
     a = ap.parse_args()
     ctx = cb.setup(a.cache, with_parts=False)
     data, members, ind, days, G, end = (ctx[k] for k in ("data", "members", "ind", "days", "G", "end"))
@@ -458,7 +458,7 @@ def main():
             if drop and drop(t):
                 continue
             p = sim(t, extra, extra_rules, half=hf, **kw)
-            out.append({"sym": t["sym"], "in": data[t["sym"]]["date"][t["i0"]], "out": max(p), "path": p, "prio": t["prio"], "rule": t["rule"]})
+            out.append({"sym": t["sym"], "in": data[t["sym"]]["date"][t["i0"]], "out": max(p), "path": p, "prio": t["prio"], "rule": t["rule"], "w": t.get("w", 1.0)})
         return out
 
     is_hi = max(d for d in days if d <= cb.IS_END)
@@ -491,7 +491,7 @@ def main():
                     break
                 if sum(1 for h in held if ind.get(h["t"]["sym"]) == ind.get(t["sym"])) >= 2:
                     continue
-                size = min(eq / SLOTS, cash)
+                size = min(eq / SLOTS * t.get("w", 1.0), cash)
                 if size <= 0:
                     break
                 cash -= size
@@ -558,6 +558,69 @@ def main():
                 print(title, lab, "確か" if ok else "×", file=sys.stderr)
         return res, sure
 
+    if a.stage == "dd":
+        # 銘柄の直近1年（252取引日）の最大下落率（合図の日まで。後知恵なし）
+        def dd1y(t):
+            c = data[t["sym"]]["c"]
+            i = t["i0"] - 1
+            pk, mx = 0.0, 0.0
+            for k in range(max(0, i - 251), i + 1):
+                pk = max(pk, c[k])
+                mx = max(mx, 1 - c[k] / pk)
+            return mx
+        for t in base:
+            t["dd"] = dd1y(t)
+        des = sorted(t["dd"] for t in base if data[t["sym"]]["date"][t["i0"]] <= is_hi)
+        q = lambda p_: des[int(len(des) * p_)]        # 区切りは設計期間の合図だけで決める（後知恵なし）
+        t70, t80, med = q(0.7), q(0.8), q(0.5)
+
+        def with_(fn):
+            saved = [(t, t["prio"], t.get("w")) for t in base]
+            try:
+                for t in base:
+                    fn(t)
+                return build()
+            finally:
+                for t, pr, w_ in saved:
+                    t["prio"] = pr
+                    if w_ is None:
+                        t.pop("w", None)
+                    else:
+                        t["w"] = w_
+        L = []
+        w = L.append
+        w(f"---\ntype: backtest\ntitle: 銘柄の下落率で見送る・優先する・額を変える\ncreated: {dt.date.today()}\nscript: tools/backtest_retest.py --stage dd\n---\n")
+        w("# 銘柄の直近1年の最大下落率で、見送る・優先する・額を変える\n")
+        w("合図の日までの直近1年（252取引日）で、その銘柄が高値から一番下がった割合（最大下落率）を使う。区切りの値は設計期間（2015〜2021年）の合図だけで決めた"
+          f"（中央値 {pct(med, 0)}、上位30%の境 {pct(t70, 0)}、上位20%の境 {pct(t80, 0)}）。土台は今のルール。判定は乱数3組（20通り・50通り×2）。\n")
+        items = [
+            (f"1. 下落率が上位20%（{pct(t80, 0)}以上）の合図を見送る", lambda: build(drop=lambda t: t["dd"] >= t80)),
+            (f"1. 下落率が上位30%（{pct(t70, 0)}以上）の合図を見送る", lambda: build(drop=lambda t: t["dd"] >= t70)),
+            ("1'. 押し目・急落の底だけ、上位20%を見送る", lambda: build(drop=lambda t: t["rule"] in REV and t["dd"] >= t80)),
+            ("1'. 順張りだけ、上位20%を見送る", lambda: build(drop=lambda t: t["rule"] in TREND and t["dd"] >= t80)),
+            ("2. 枠が足りない日は、下落率の小さい銘柄を先に買う", lambda: with_(lambda t: t.__setitem__("prio", t["dd"]))),
+            ("2'. （比較）枠が足りない日は、下落率の大きい銘柄を先に買う", lambda: with_(lambda t: t.__setitem__("prio", -t["dd"]))),
+            (f"3. 下落率が上位20%の銘柄は額を半分（12.5%）", lambda: with_(lambda t: t.__setitem__("w", 0.5 if t["dd"] >= t80 else 1.0))),
+            (f"3. 下落率が上位30%の銘柄は額を3分の2（約17%）", lambda: with_(lambda t: t.__setitem__("w", 2 / 3 if t["dd"] >= t70 else 1.0))),
+        ]
+        screen_and_confirm("銘柄の下落率で見送る・優先する・額を変える", items, w)
+        # 下落率ごとの1回の成績
+        tr = build()
+        by = {}
+        for t0, t1 in zip(base, tr):
+            b = "上位20%" if t0["dd"] >= t80 else "上位20〜30%" if t0["dd"] >= t70 else "中央値〜上位30%" if t0["dd"] >= med else "中央値より下"
+            by.setdefault(b, []).append(t1["path"][t1["out"]] - 1)
+        w("\n## 下落率ごとの1回の成績（全部の合図）\n")
+        w("| 直近1年の最大下落率 | 件数 | 勝率 | 1回平均 | 15%以上の損の割合 |")
+        w("|---|---|---|---|---|")
+        for b in ("中央値より下", "中央値〜上位30%", "上位20〜30%", "上位20%"):
+            r_ = by.get(b, [])
+            if r_:
+                w(f"| {b} | {len(r_)} | {pct(sum(1 for x in r_ if x > 0) / len(r_), 0)} | {pct(sum(r_) / len(r_), 2)} | {pct(sum(1 for x in r_ if x <= -0.15) / len(r_), 0)} |")
+        w("\n- この結果はルールの条件どおりに機械的に計算したもので、Claudeによる個別銘柄の売買判断ではない。")
+        open(OUTDIR + "銘柄の下落率で見送る・優先する.md", "w", encoding="utf-8").write("\n".join(L) + "\n")
+        print("書き出し", file=sys.stderr)
+        return
     if a.stage == "stats":
         return rule_stats(cur_tr, days, port, ev, CUR, CONF1, is_hi, oos_lo)
     stages = ("sell", "combo", "half", "filter", "rule") if a.stage == "all" else (a.stage,)
