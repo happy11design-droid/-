@@ -35,6 +35,7 @@ import backtest_crash as bcr
 import backtest_compare2 as c2
 
 SLOTS, STOP = 4, 0.15   # 同時保有4銘柄・1銘柄に資金÷4（2026-09-29 ユーザー決定。以前はリスク2%→13.3%×7銘柄）
+BUY_USD = 4500          # 1銘柄に買う金額（資金18,000ドル÷4）。株数の目安に使う。資金が変わったらここを直す（2026-10-04 ユーザーの指示）
 NDX_URL = "https://api.nasdaq.com/api/quote/list-type/nasdaq100"
 OUT_MAX = 5   # 監視外の注目銘柄（ニュースを調べる）はRSの高い順にこの件数まで
 V2_TOP = 10   # 新高値V2を当てる銘柄: 監視銘柄のうちその日のRSが上位この数まで
@@ -234,6 +235,20 @@ def etf2x_of(sym):
     if not x or -x["drag"] >= ETF_MAX_DRAG:
         return None
     return x["etf"], -x["drag"]
+
+
+def shares_note(x, ex_):
+    """4,500ドル分の株数の目安。値段は、予約注文ならその価格、寄り付きの成行なら今日の終値（寄り付きの値段で変わる）"""
+    m = re.match(r"(逆指値買い|指値買い) ([\d.]+)", x["order"])
+    p = float(m.group(2)) if m else x["close"]
+    basis = "注文の価格" if m else "今日の終値。寄り付きの値段で変わる"
+    if ex_:
+        e = fetch_daily(ex_[0])
+        if not e or not e["c"]:
+            return f"。**株数の目安: {ex_[0]}の値段が取れず計算できない**"
+        ep = e["c"][-1] * (1 + 2 * (p / x["close"] - 1))     # 元の株の注文価格を、2倍ETFの値段に直す
+        return f"。**株数の目安: {ex_[0]} {int(BUY_USD // ep)}株**（{BUY_USD:,}ドル÷{ep:.2f}。{basis}をETFの値段に直した近似）"
+    return f"。**株数の目安: {int(BUY_USD // p)}株**（{BUY_USD:,}ドル÷{p:.2f}。{basis}）"
 
 
 def rule_key(kind):
@@ -704,7 +719,7 @@ def main():
         for x in show:
             rs_ = "取得不可" if x["rs"] is None else f"{x['rs']:.0f}"
             ex_ = etf2x_of(x["sym"])
-            od_ = x["order"] + (f"。**2倍ETFで買う: {ex_[0]}**（目減り 年{ex_[1] * 100:.0f}%。株と同じ金額。合図・損切り・手じまいは元の株 {x['sym']} の値段で判定）" if ex_ else "")
+            od_ = x["order"] + (f"。**2倍ETFで買う: {ex_[0]}**（目減り 年{ex_[1] * 100:.0f}%。株と同じ金額。合図・損切り・手じまいは元の株 {x['sym']} の値段で判定）" if ex_ else "") + shares_note(x, ex_)
             w(f"| {x['sym']} | {x['group']} | {x['pat']} | {x['kind']} | {perf(x)} | {x['close']:.2f} | {pct(x['chg'])} | {rs_} | {x['regime']} | {x['why']} | {eds[x['sym']]} | {od_} |")
         w("\n- 2倍ETF: 2倍ETFがある銘柄（ユーザーがムームー証券で買えることを確認した38銘柄のうち、目減りが年15%未満のもの）は、株の代わりに2倍ETFを買う（2026-10-04 ユーザー決定。"
           "`バックテスト結果/2倍ETFを使う決まり.md`。年率 約27%→約33%、確定した損益だけの最大下落率 約30%→約31%、含み損込みは約33%→約45%）。"
