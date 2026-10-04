@@ -52,7 +52,8 @@ def who(rules):
     m = re.search(r"ボリンジャーIII: (\S+?)／ミネルヴィニ: (\S+?)／ワインスタイン10週: (\S+?)(?:／急落の底: (\S+?))?(?:／新高値: (\S+?))?（", rules)
     if m:
         pats = dict(zip(("ボリンジャー", "ミネルヴィニ", "ワインスタイン", "コナーズ", "新高値"), m.groups()))   # 急落の底はコナーズ、新高値はミネルヴィニ
-        out = [a for a in authors if pats[a] in ("A", "B") or (a == "ミネルヴィニ" and pats["新高値"] in ("A", "B"))]
+        # ワインスタイン10週の合図だけでは送らない（参考の表示だけ。2026-10-04 ユーザー決定）。保有中なら下で加える
+        out = [a for a in authors if a != "ワインスタイン" and (pats[a] in ("A", "B") or (a == "ミネルヴィニ" and pats["新高値"] in ("A", "B")))]
     else:
         out = list(authors)
     h = re.search(r"## \d\. 保有中の確認\n\n- ルール: ([^／]+)", rules)
@@ -176,7 +177,7 @@ def report(sym, d, pool_series, asof=None, hold=None, earn=None, wl_rs10=None):
     # ワインスタイン10週
     wk = dt.date.fromisoformat(day).weekday() == 4
     w10 = bt.E_weinstein(10, ma="10")(i, d) is not None if wk else False
-    w("## 3. 上抜け: ワインスタイン10週\n")
+    w("## 3. 参考: ワインスタイン10週（売買には使わない・著者には送らない。後知恵なしのバックテストで成績が下がったため。2026-10-04）\n")
     w(f"- 週足の終値 {d['w_c'][i] or c:.2f}、直前10週の高値 {d['w_hi_prev'][10][i] or float('nan'):.2f}、10週線 {d['w_ma10'][i] or float('nan'):.2f}（前週 {d['w_ma10_1'][i] or float('nan'):.2f}）、30週線 {d['w_ma30'][i] or float('nan'):.2f}")
     w(f"- 条件（週足の終値が直前10週の高値を出来高2倍で上抜け、10週線が上向き）: **{mark(w10)}**" + ("" if wk else "（判定は週の最終取引日だけ。今日の値は週の途中の参考）"))
     h10, m10, m10p = d["w_hi_prev"][10][i], d["w_ma10"][i], d["w_ma10_1"][i]
