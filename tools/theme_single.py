@@ -26,7 +26,7 @@ import backtest_crash as bcr
 import backtest_compare2 as c2
 from fundamentals import text as fund_text
 from backtest_lib import MEMBERS_URL, curl, rsi_wilder
-from theme_scan import cut, earnings_date, fetch_daily, pct
+from theme_scan import BUY_USD, cut, earnings_date, etf2x_of, fetch_daily, pct, shares_note
 
 STOP = 0.15
 
@@ -271,7 +271,28 @@ def report(sym, d, pool_series, asof=None, hold=None, earn=None, wl_rs10=None):
             w("- 半分売りの合図（反転のローソク足＋出来高1.5倍＋RSI70。2026-10-01 採用）: "
               + ("まだ出ていない" if not hd else f"**{hd} に出た**（半分売っていなければ、次の寄り付きで半分売る。残りはルールの手じまいまで持つ）"))
         w("")
+    if not asof:
+        L += shares_section(sym, c, L)
     return "\n".join(L) + "\n"
+
+
+SHARES_HEAD = "## 株数の目安"   # theme_single.sh send はこの見出しから後を著者に渡さない
+
+
+def shares_section(sym, close, lines):
+    """合図（A・B）が出ているルールごとに、BUY_USD で買える株数の目安（2026-10-04 ユーザーの指示）。参考のワインスタイン10週は除く"""
+    out, sec = [], ""
+    ex_ = etf2x_of(sym)
+    for l in lines:
+        if l.startswith("## "):
+            sec = l[3:].split("（")[0].strip()
+        m = re.match(r"- (?:予約)?注文の目安（([AB])）: (.*)", l)
+        if m and "ワインスタイン" not in sec:
+            out.append(f"- {sec}（{m.group(1)}）: {shares_note({'order': m.group(2), 'close': close}, ex_).lstrip('。')}")
+    if not out:
+        return []
+    return [f"\n{SHARES_HEAD}（{BUY_USD:,}ドル分。著者には渡さない）\n"] + out + (
+        [f"- 2倍ETFで買う銘柄（{ex_[0]}）なので、ETFの株数。合図・損切り・手じまいは元の株 {sym} の値段で判定する"] if ex_ else [])
 
 
 if __name__ == "__main__":
