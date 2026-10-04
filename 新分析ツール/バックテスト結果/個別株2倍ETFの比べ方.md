@@ -95,10 +95,14 @@ Yahoo Finance の直近1年の日足で、ETFごとに次を出す。
 | UBER | UBRL | GraniteShares 2x Long UBER Daily ETF | 252 | 3.3百万ドル | 1.99 | 1.00 | -7.3% | 2倍ETF（売買が少ない） |
 | LLY | ELIL | Direxion Daily LLY Bull 2X Shares | 252 | 2.5百万ドル | 1.97 | 1.00 | -8.9% | 2倍ETF（売買が少ない） |
 | BA | BOEU | Direxion Daily BA Bull 2X Shares | 252 | 1.6百万ドル | 1.99 | 1.00 | -10.3% | 2倍ETF（売買が少ない） |
+| WDC | WDCX | Tradr 2X Long WDC Daily ETF | 173 | 38.7百万ドル | 2.02 | 1.00 | -9.9% | **おすすめ** |
+| WDC | WDCC | Corgi WDC 2x Daily ETF | 60 | 0.3百万ドル | 2.01 | 1.00 | -11.7% | 2倍ETF（売買が少ない） |
+| STX | STXX | Tradr 2X Long STX Daily ETF | 112 | 3.9百万ドル | 2.01 | 1.00 | -7.4% | 2倍ETF（売買が少ない） |
+| STX | STXU | Leverage Shares 2X Long STX Daily ETF | 100 | 1.1百万ドル | 1.99 | 1.00 | -13.9% | 2倍ETF（売買が少ない） |
 
 ## おすすめの一覧（元の株 → ETF）
 
-NVDA→NVDU, AVGO→AVL, MU→MUU, AMD→AMUU, INTC→LINT, ARM→ARMG, MRVL→MRVU, SMCI→SMCL, DELL→DLLL, AAPL→AAPU, VRT→VRTL, GOOGL→GGLL, MSFT→MSFL, META→FBL, AMZN→AMZU, ORCL→ORCU, PLTR→PLTU, NBIS→NBIL, CRWV→CWVX, TSLA→TSLR, APP→APPX, CRWD→CRWL, PANW→PALU, RDDT→RDTL, TSM→TSMX, COIN→CONL, MSTR→MSTU, SNDK→SNXX, NOW→NOWL, CRM→CRMG, LITE→LITX, ADBE→ADBG, HOOD→ROBN, NFLX→NFXL
+NVDA→NVDU, AVGO→AVL, MU→MUU, AMD→AMUU, INTC→LINT, ARM→ARMG, MRVL→MRVU, SMCI→SMCL, DELL→DLLL, AAPL→AAPU, VRT→VRTL, GOOGL→GGLL, MSFT→MSFL, META→FBL, AMZN→AMZU, ORCL→ORCU, PLTR→PLTU, NBIS→NBIL, CRWV→CWVX, TSLA→TSLR, APP→APPX, CRWD→CRWL, PANW→PALU, RDDT→RDTL, TSM→TSMX, COIN→CONL, MSTR→MSTU, SNDK→SNXX, NOW→NOWL, CRM→CRMG, LITE→LITX, ADBE→ADBG, HOOD→ROBN, NFLX→NFXL, WDC→WDCX
 
 - 目減りは、経費率・借入のコスト・毎日の合わせ直しのずれをまとめた、直近1年の実際の差。マイナスが小さいほど資金効率が良い。
 - 売買代金が多いほど、買値と売値の差（スプレッド）が小さく、寄り付きで売買しても値段がずれにくい。

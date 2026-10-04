@@ -169,6 +169,11 @@
   "drag": -0.1032,
   "dollar_volume": 21653320
  },
+ "WDC": {
+  "etf": "WDCX",
+  "drag": -0.099,
+  "dollar_volume": 38681776
+ },
  "_meta": {
   "updated": "2026-10-04",
   "max_drag": 0.15

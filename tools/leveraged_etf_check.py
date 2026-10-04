@@ -23,7 +23,8 @@ import sys
 # ユーザーがムームー証券で2倍ETFを買えることを確認した元の株（2026-10-04）。対応表に載せるのはこの中だけ
 CONFIRMED = {"AAPL", "AMD", "AMZN", "AVGO", "ARM", "ASML", "BABA", "AFRM", "NVDA", "TSLA", "MSFT", "GOOGL", "META", "COIN", "PLTR",
              "MSTR", "MU", "TSM", "INTC", "MRVL", "SMCI", "DELL", "VRT", "ORCL", "APP", "CRWD", "PANW", "NOW", "CRM", "ADBE", "HOOD",
-             "NFLX", "RDDT", "NBIS", "CRWV", "SNDK", "LITE"}
+             "NFLX", "RDDT", "NBIS", "CRWV", "SNDK", "LITE",
+             "WDC", "ANET"}   # 2026-10-04 追加（ユーザーがWDCX・WDCC・ANELを買えることを確認。ANELは売買代金が少なく、今は使わない）
 MAX_DRAG = 0.15     # theme_scan.ETF_MAX_DRAG と同じ（目減りが年15%以上は使わない）
 
 CANDS = {
@@ -36,7 +37,7 @@ CANDS = {
     "CRWD": ["CRWL", "CRWU"], "PANW": ["PALU"], "SHOP": ["SHPU"], "RDDT": ["RDTL", "RDTX"], "TSM": ["TSMX", "TSMU", "TSMG"],
     "COIN": ["CONL", "CONX"], "MSTR": ["MSTU", "MSTX"], "SNDK": ["SNXX", "SNDU"], "NOW": ["NOWL"], "CRM": ["CRMG"],
     "LITE": ["LITX"], "IBM": ["IBMX"], "ADBE": ["ADBG"], "HOOD": ["ROBN", "HOOG"], "NFLX": ["NFXL"], "UBER": ["UBRL"],
-    "LLY": ["ELIL"], "BA": ["BOEU"],
+    "LLY": ["ELIL"], "BA": ["BOEU"], "WDC": ["WDCX", "WDCC"], "STX": ["STXX", "STXU"],
 }
 
 
