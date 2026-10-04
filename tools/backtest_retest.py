@@ -344,6 +344,7 @@ def main():
     r = sub.add_parser("run")
     r.add_argument("--cache", default=DEFAULT_CACHE)
     r.add_argument("--etf", default=None, help="etf2x: 2倍ETFにする銘柄（カンマ区切り）。省略すると backtest_2x.HAS_2X")
+    r.add_argument("--drag", default=None, help="etf2x: 2倍ETFの目減り（年率）。数値なら全部同じ、'measured' なら 新分析ツール/2倍ETFの対応表.json の実測（ないものは0.12）")
     r.add_argument("--tag", default="", help="etf2x: 結果のファイル名と見出しに付ける名前（例: ムームー証券）")
     r.add_argument("--stage", default="all", choices=("sell", "combo", "half", "filter", "rule", "stats", "dd", "robust", "earn", "realized", "etf2x", "all"))
     a = ap.parse_args()
@@ -568,7 +569,7 @@ def main():
 
     if a.stage == "etf2x":
         return etf2x_stage(build, port, ev, CUR, (SCREEN, CONF1, CONF2), days, is_hi, oos_lo,
-                           set(a.etf.split(",")) if a.etf else None, a.tag)
+                           set(a.etf.split(",")) if a.etf else None, a.tag, a.drag)
     if a.stage == "realized":
         import statistics
         tr = build()
@@ -960,10 +961,15 @@ def robust(stage, data, base, build, port, ev, CUR, CONF, days, is_hi, oos_lo, s
     print("書き出し: 頑健さの確認.md", file=sys.stderr)
 
 
-def etf2x_stage(build, port, ev, CUR, SEEDSETS, days, is_hi, oos_lo, only_set=None, tag=""):
+def etf2x_stage(build, port, ev, CUR, SEEDSETS, days, is_hi, oos_lo, only_set=None, tag="", drag=None):
     """2倍ETFがある銘柄だけ2倍ETFにした場合（今のルール、2026-10-03）。株の値動きの2倍で再現（毎日合わせ直し、経費 年1%、0より下にならない）"""
     import backtest_2x as b2
-    FEE = 0.01 / 252
+    import json
+    meas = {}
+    if drag == "measured":
+        meas = {u: -x["drag"] for u, x in json.load(open(os.path.join(os.path.dirname(OUTDIR.rstrip("/")), "2倍ETFの対応表.json"), encoding="utf-8")).items()}
+    dflt = 0.01 if drag is None else 0.12 if drag == "measured" else float(drag)
+    fee_of = lambda sym: meas.get(sym, dflt) / 252
 
     def to2x(trs, only):
         out = []
@@ -973,6 +979,7 @@ def etf2x_stage(build, port, ev, CUR, SEEDSETS, days, is_hi, oos_lo, only_set=No
                 continue
             ds = sorted(t["path"])
             e, prev, pv = 1 - COST, 1 - COST, {}
+            FEE = fee_of(t["sym"])
             for d in ds:
                 g_ = t["path"][d]
                 e = max(0.0, e * (1 + 2 * (g_ / prev - 1)) * (1 - FEE))
@@ -995,7 +1002,7 @@ def etf2x_stage(build, port, ev, CUR, SEEDSETS, days, is_hi, oos_lo, only_set=No
     w(f"# 2倍ETFがある銘柄だけ2倍ETFにする（今のルール{'・' + tag if tag else ''}）\n")
     w("買い・売りの合図と日付は今のルールのまま（元の株で判定）。2倍ETFがある銘柄（Claudeが把握している2026年時点の個別株2倍ETFの対象: "
       + "・".join(sorted(HAS)) + "。実際に買えるかは証券会社で確認が必要）だけ、株の代わりに2倍ETFを持つ。"
-      "2倍ETFは元の株の日々の値動きの2倍で再現（毎日合わせ直し、経費 年1%、0より下にならない）。損切りは株の15%下のまま（ETFでは約30%下）。"
+      f"2倍ETFは元の株の日々の値動きの2倍で再現（毎日合わせ直し、0より下にならない）。目減り（経費・借入のコストなど）は{'直近1年の実測（`個別株2倍ETFの比べ方.md`、ないものは年12%）' if meas else f'年{dflt * 100:.0f}%'}。損切りは株の15%下のまま（ETFでは約30%下）。"
       f"1枠は資金の25%。全部の合図 {len(base)}件のうち、2倍ETFがある銘柄の合図は {n_etf}件。片道0.1%。\n")
     w("## 1. 乱数3組の結果（含み損を入れた最大下落率）\n")
     w("| 形 | 組 | 年率 | 最大下落率 | 設計期間 | 確認期間 |")

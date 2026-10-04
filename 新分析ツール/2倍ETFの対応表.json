@@ -1,0 +1,172 @@
+{
+ "NVDA": {
+  "etf": "NVDU",
+  "drag": -0.1005,
+  "dollar_volume": 43580552
+ },
+ "AVGO": {
+  "etf": "AVL",
+  "drag": -0.0992,
+  "dollar_volume": 34193536
+ },
+ "MU": {
+  "etf": "MUU",
+  "drag": -0.1241,
+  "dollar_volume": 1043728016
+ },
+ "AMD": {
+  "etf": "AMUU",
+  "drag": -0.0965,
+  "dollar_volume": 15495999
+ },
+ "INTC": {
+  "etf": "LINT",
+  "drag": -0.105,
+  "dollar_volume": 14675437
+ },
+ "ARM": {
+  "etf": "ARMG",
+  "drag": -0.1331,
+  "dollar_volume": 22028588
+ },
+ "MRVL": {
+  "etf": "MRVU",
+  "drag": -0.1052,
+  "dollar_volume": 19200960
+ },
+ "SMCI": {
+  "etf": "SMCL",
+  "drag": -0.2279,
+  "dollar_volume": 12798030
+ },
+ "DELL": {
+  "etf": "DLLL",
+  "drag": -0.0771,
+  "dollar_volume": 52230008
+ },
+ "AAPL": {
+  "etf": "AAPU",
+  "drag": -0.0865,
+  "dollar_volume": 72252795
+ },
+ "VRT": {
+  "etf": "VRTL",
+  "drag": -0.1533,
+  "dollar_volume": 5085834
+ },
+ "GOOGL": {
+  "etf": "GGLL",
+  "drag": -0.0943,
+  "dollar_volume": 145394981
+ },
+ "MSFT": {
+  "etf": "MSFL",
+  "drag": -0.0835,
+  "dollar_volume": 16709611
+ },
+ "META": {
+  "etf": "FBL",
+  "drag": -0.0949,
+  "dollar_volume": 29497969
+ },
+ "AMZN": {
+  "etf": "AMZU",
+  "drag": -0.1021,
+  "dollar_volume": 90416715
+ },
+ "ORCL": {
+  "etf": "ORCU",
+  "drag": -0.1138,
+  "dollar_volume": 41634753
+ },
+ "PLTR": {
+  "etf": "PLTU",
+  "drag": -0.0909,
+  "dollar_volume": 70038083
+ },
+ "NBIS": {
+  "etf": "NBIL",
+  "drag": -0.1179,
+  "dollar_volume": 100160519
+ },
+ "CRWV": {
+  "etf": "CWVX",
+  "drag": -0.1188,
+  "dollar_volume": 19364042
+ },
+ "TSLA": {
+  "etf": "TSLR",
+  "drag": -0.1016,
+  "dollar_volume": 21948325
+ },
+ "APP": {
+  "etf": "APPX",
+  "drag": -0.106,
+  "dollar_volume": 20964115
+ },
+ "CRWD": {
+  "etf": "CRWL",
+  "drag": -0.1791,
+  "dollar_volume": 11790435
+ },
+ "PANW": {
+  "etf": "PALU",
+  "drag": -0.0998,
+  "dollar_volume": 6624089
+ },
+ "RDDT": {
+  "etf": "RDTL",
+  "drag": -0.148,
+  "dollar_volume": 11841602
+ },
+ "TSM": {
+  "etf": "TSMX",
+  "drag": -0.1086,
+  "dollar_volume": 44254259
+ },
+ "COIN": {
+  "etf": "CONL",
+  "drag": -0.1587,
+  "dollar_volume": 119738731
+ },
+ "MSTR": {
+  "etf": "MSTU",
+  "drag": -0.2742,
+  "dollar_volume": 237097486
+ },
+ "SNDK": {
+  "etf": "SNXX",
+  "drag": -0.1368,
+  "dollar_volume": 1226072935
+ },
+ "NOW": {
+  "etf": "NOWL",
+  "drag": -0.1525,
+  "dollar_volume": 64481533
+ },
+ "CRM": {
+  "etf": "CRMG",
+  "drag": -0.1214,
+  "dollar_volume": 22699294
+ },
+ "LITE": {
+  "etf": "LITX",
+  "drag": -0.1366,
+  "dollar_volume": 88197941
+ },
+ "ADBE": {
+  "etf": "ADBG",
+  "drag": -0.1268,
+  "dollar_volume": 18070743
+ },
+ "HOOD": {
+  "etf": "ROBN",
+  "drag": -0.1618,
+  "dollar_volume": 24152091
+ },
+ "NFLX": {
+  "etf": "NFXL",
+  "drag": -0.1032,
+  "dollar_volume": 21653320
+ }
+}
