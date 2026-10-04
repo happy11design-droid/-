@@ -346,7 +346,7 @@ def main():
     r.add_argument("--etf", default=None, help="etf2x: 2倍ETFにする銘柄（カンマ区切り）。省略すると backtest_2x.HAS_2X")
     r.add_argument("--drag", default=None, help="etf2x: 2倍ETFの目減り（年率）。数値なら全部同じ、'measured' なら 新分析ツール/2倍ETFの対応表.json の実測（ないものは0.12）")
     r.add_argument("--tag", default="", help="etf2x: 結果のファイル名と見出しに付ける名前（例: ムームー証券）")
-    r.add_argument("--stage", default="all", choices=("sell", "combo", "half", "filter", "rule", "stats", "dd", "robust", "earn", "realized", "etf2x", "etfrule", "weinstein", "all"))
+    r.add_argument("--stage", default="all", choices=("sell", "combo", "half", "filter", "rule", "stats", "dd", "robust", "earn", "realized", "etf2x", "etfrule", "weinstein", "rsi", "all"))
     a = ap.parse_args()
     ctx = cb.setup(a.cache, with_parts=False)
     data, members, ind, days, G, end = (ctx[k] for k in ("data", "members", "ind", "days", "G", "end"))
@@ -720,6 +720,8 @@ def main():
         open(OUTDIR + "銘柄の下落率で見送る・優先する.md", "w", encoding="utf-8").write("\n".join(L) + "\n")
         print("書き出し", file=sys.stderr)
         return
+    if a.stage == "rsi":
+        return rsi_stage(cur_tr, base, data, build, ev, CUR, screen_and_confirm, TREND, REV)
     if a.stage == "stats":
         return rule_stats(cur_tr, days, port, ev, CUR, CONF1, is_hi, oos_lo)
     stages = ("sell", "combo", "half", "filter", "rule") if a.stage == "all" else (a.stage,)
@@ -778,6 +780,77 @@ def main():
         os.makedirs(OUTDIR, exist_ok=True)
         open(out, "w", encoding="utf-8").write("\n".join(L) + "\n")
         print(f"書き出し: {out}", file=sys.stderr)
+
+
+def rsi_wilder(c, n):
+    """終値の列からワイルダーのRSI(n)を作る（moomooの既定はRSI 6/12/24）"""
+    out = [None] * len(c)
+    if len(c) <= n:
+        return out
+    g = [max(c[k] - c[k - 1], 0) for k in range(1, len(c))]
+    d = [max(c[k - 1] - c[k], 0) for k in range(1, len(c))]
+    ag, ad = sum(g[:n]) / n, sum(d[:n]) / n
+    for k in range(n, len(c)):
+        if k > n:
+            ag = (ag * (n - 1) + g[k - 1]) / n
+            ad = (ad * (n - 1) + d[k - 1]) / n
+        out[k] = 100.0 if ad == 0 else 100 - 100 / (1 + ag / ad)
+    return out
+
+
+def rsi_stage(cur_tr, base, data, build, ev, CUR, screen_and_confirm, TREND, REV):
+    """買う前の日（合図の日）のRSIが80を超えていた売買は、成績が悪いのか（2026-10-04 ユーザーの質問。HPEのRSI(6)が81.6）"""
+    for sym in {t["sym"] for t in base}:
+        s = data[sym]
+        for n in (6, 14):
+            if f"rsi{n}" not in s:
+                s[f"rsi{n}"] = rsi_wilder(s["c"], n)
+    key = {(t["sym"], data[t["sym"]]["date"][t["i0"]], t["rule"]): t for t in base}
+    names = {"B": "押し目", "C": "急落の底", "M": "ミネルヴィニ", "V": "新高値V2"}
+    is_hi, oos_lo = cb.IS_END, cb.OOS_START
+
+    def rsi_at(t, n):
+        b = key[(t["sym"], t["in"], t["rule"])]
+        return data[t["sym"]][f"rsi{n}"][b["i0"] - 1]
+
+    L = []
+    w = L.append
+    w(f"---\ntype: backtest\ntitle: 買う日のRSIが80を超えていたとき\ncreated: {dt.date.today()}\nscript: tools/backtest_retest.py --stage rsi\n---\n")
+    w("# 買う日のRSIが80を超えていたとき（過熱して見える日に買った成績）\n")
+    w("2026-10-04、HPE（新高値V2で【買い】、合図の日のRSI(6) 81.6）について、ユーザーから「RSIが80を超えていて、すぐ下がりそう。バックテストでは下がってもまた上がる方が多いのか」と質問があり、確かめた。")
+    w("RSIは合図の日（買う前の日）の終値で計算（ワイルダー方式。moomooの既定のRSI 6/12/24と同じ計算）。後知恵なしの監視銘柄、2015年〜、今の売りのルール、片道0.1%込み。\n")
+    for n in (6, 14):
+        w(f"## 1. ルールごと・RSI({n})の高さ別の成績（全部の合図、1回ごと）\n")
+        w("| ルール | RSI | 回数 | 勝率 | 1回平均 | 設計／確認の1回平均 | 途中で買値から5%以上下げた割合 | そのうち最後は勝った割合 |")
+        w("|---|---|---|---|---|---|---|---|")
+        for k in ("V", "M", "B", "C"):
+            ts = [t for t in cur_tr if t["rule"] == k and rsi_at(t, n) is not None]
+            for lab, f in ((f"{n}: 70未満", lambda x: x < 70), ("70〜80", lambda x: 70 <= x < 80), ("80以上", lambda x: x >= 80)):
+                g = [t for t in ts if f(rsi_at(t, n))]
+                if not g:
+                    continue
+                r = [t["path"][t["out"]] - 1 for t in g]
+                de = [t["path"][t["out"]] - 1 for t in g if t["in"] <= is_hi]
+                co = [t["path"][t["out"]] - 1 for t in g if t["in"] >= oos_lo]
+                dip = [t for t in g if min(t["path"].values()) <= 0.95]
+                dip_win = [t for t in dip if t["path"][t["out"]] > 1]
+                avg = lambda xs: pct(sum(xs) / len(xs), 2) if xs else "—"
+                w(f"| {names[k]} | {lab.split(': ')[-1]} | {len(g)} | {pct(sum(1 for x in r if x > 0) / len(r), 0)} | {avg(r)} | {avg(de)}／{avg(co)} | "
+                  f"{pct(len(dip) / len(g), 0)} | {pct(len(dip_win) / len(dip), 0) if dip else '—'} |")
+        w("")
+    w("「途中で買値から5%以上下げた」は、保有中の終値ベースの値（半分売った後は残りの分も含めた資金の値）が、一度でも買値の95%以下になった売買。\n")
+    w("## 2. RSIが80以上の日は買わない、を資金全体で試す（今のルールと比べる）\n")
+    items = []
+    for n in (6, 14):
+        for rl, lab in ((TREND, "順張り（ミネルヴィニ・新高値V2）"), (TREND + REV, "全部のルール")):
+            items.append((f"{lab}で、合図の日のRSI({n})が80以上なら買わない",
+                          (lambda n=n, rl=rl: build(drop=lambda t: t["rule"] in rl and data[t["sym"]][f"rsi{n}"][t["i0"] - 1] is not None
+                                                     and data[t["sym"]][f"rsi{n}"][t["i0"] - 1] >= 80))))
+    screen_and_confirm("RSIが80以上なら買わない", items, w)
+    w("\n- この結果はルールの条件どおりに機械的に計算したもので、Claudeによる個別銘柄の売買判断ではない。")
+    os.makedirs(OUTDIR, exist_ok=True)
+    open(OUTDIR + "買う日のRSIが80を超えていたとき.md", "w", encoding="utf-8").write("\n".join(L) + "\n")
+    print("書き出し", file=sys.stderr)
 
 
 def rule_stats(trs, days, port, ev, CUR, seeds, is_hi, oos_lo):
