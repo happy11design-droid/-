@@ -1,0 +1,85 @@
+{
+ "trade_date": "2026-10-02",
+ "run_date": "2026-10-05",
+ "theme_stage": "",
+ "candidates": [
+  {
+   "sym": "HPE",
+   "kind": "順張り: 新高値（V2、担当: ミネルヴィニ）",
+   "pattern": "A",
+   "close": 69.33,
+   "limit": null,
+   "stop_buy": null,
+   "limit_buy": null,
+   "verdict": "様子見",
+   "author": "ミネルヴィニ"
+  },
+  {
+   "sym": "LITE",
+   "kind": "予約: 新高値（V2、担当: ミネルヴィニ）",
+   "pattern": "B",
+   "close": 1085.42,
+   "limit": null,
+   "stop_buy": 1085.68,
+   "limit_buy": null,
+   "verdict": "買い（予約）",
+   "author": "ミネルヴィニ"
+  },
+  {
+   "sym": "WDC",
+   "kind": "予約: ボリンジャー メソッドIII（%bが0.05未満に近い）",
+   "pattern": "B",
+   "close": 415.29,
+   "limit": null,
+   "stop_buy": null,
+   "limit_buy": 412.85,
+   "verdict": "買い（予約）",
+   "author": "ボリンジャー"
+  },
+  {
+   "sym": "ANET",
+   "kind": "予約: ミネルヴィニ（ピボットの手前）",
+   "pattern": "B",
+   "close": 207.35,
+   "limit": 221.34,
+   "stop_buy": 214.89,
+   "limit_buy": null,
+   "verdict": "買い（予約）",
+   "author": "ミネルヴィニ"
+  },
+  {
+   "sym": "NVDA",
+   "kind": "予約: ミネルヴィニ（ピボットの手前）",
+   "pattern": "B",
+   "close": 233.95,
+   "limit": 243.08,
+   "stop_buy": 236.0,
+   "limit_buy": null,
+   "verdict": "買い（予約）",
+   "author": "ミネルヴィニ"
+  },
+  {
+   "sym": "APH",
+   "kind": "予約: ミネルヴィニ（ピボットの手前）",
+   "pattern": "B",
+   "close": 86.96,
+   "limit": 91.8,
+   "stop_buy": 89.12,
+   "limit_buy": null,
+   "verdict": "買い（予約）",
+   "author": "ミネルヴィニ"
+  },
+  {
+   "sym": "JCI",
+   "kind": "予約: ミネルヴィニ（ピボットの手前）",
+   "pattern": "B",
+   "close": 156.24,
+   "limit": 161.32,
+   "stop_buy": 156.62,
+   "limit_buy": null,
+   "verdict": "買い（予約）",
+   "author": "ミネルヴィニ"
+  }
+ ],
+ "holdings": []
+}
