@@ -238,17 +238,27 @@ def etf2x_of(sym):
 
 
 def shares_note(x, ex_):
-    """4,500ドル分の株数の目安。値段は、予約注文ならその価格、寄り付きの成行なら今日の終値（寄り付きの値段で変わる）"""
+    """BUY_USD 分の株数と購入金額の目安。値段は、予約注文ならその価格、寄り付きの成行なら今日の終値（寄り付きの値段で変わる）。
+    2倍ETFで買う銘柄は、注文の価格（逆指値・指値・指値の上限）もETFの値段に直して書く（2026-10-04 ユーザーの指示）"""
     m = re.match(r"(逆指値買い|指値買い) ([\d.]+)", x["order"])
     p = float(m.group(2)) if m else x["close"]
+    cap = re.search(r"指値の上限 ([\d.]+)", x["order"])
     basis = "注文の価格" if m else "今日の終値。寄り付きの値段で変わる"
-    if ex_:
-        e = fetch_daily(ex_[0])
-        if not e or not e["c"]:
-            return f"。**株数の目安: {ex_[0]}の値段が取れず計算できない**"
-        ep = e["c"][-1] * (1 + 2 * (p / x["close"] - 1))     # 元の株の注文価格を、2倍ETFの値段に直す
-        return f"。**株数の目安: {ex_[0]} {int(BUY_USD // ep)}株**（{BUY_USD:,}ドル÷{ep:.2f}。{basis}をETFの値段に直した近似）"
-    return f"。**株数の目安: {int(BUY_USD // p)}株**（{BUY_USD:,}ドル÷{p:.2f}。{basis}）"
+    if not ex_:
+        n = int(BUY_USD // p)
+        return f"。**株数の目安: {n}株**（{BUY_USD:,}ドル÷{p:.2f}。{basis}）、購入金額 約{n * p:,.0f}ドル"
+    e = fetch_daily(ex_[0])
+    if not e or not e["c"]:
+        return f"。**株数の目安: {ex_[0]}の値段が取れず計算できない**"
+    conv = lambda v: e["c"][-1] * (1 + 2 * (v / x["close"] - 1))     # 元の株の価格を、今日の終値からの値動きの2倍でETFの値段に直す
+    ep = conv(p)
+    n = int(BUY_USD // ep)
+    if m:
+        od = f"{m.group(1)} {ep:.2f}" + (f"（指値の上限 {conv(float(cap.group(1))):.2f}）" if cap else "")
+    else:
+        od = f"翌日の寄り付きで成行（今日の終値 {e['c'][-1]:.2f}）"
+    return (f"。**株数の目安: {ex_[0]} {n}株**（{BUY_USD:,}ドル÷{ep:.2f}）。**{ex_[0]}の注文: {od}、購入金額 約{n * ep:,.0f}ドル**"
+            f"（{'注文の価格をETFの値段に直した近似' if m else 'ETFの今日の終値で計算。寄り付きの値段で変わる'}。損切りは約定したETFの値段の約30%下）")
 
 
 def rule_key(kind):
