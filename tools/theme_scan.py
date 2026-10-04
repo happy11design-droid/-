@@ -192,6 +192,23 @@ def rule_stats():
         return {}
 
 
+ETF_MAX_DRAG = 0.15   # 目減りが年15%以上の2倍ETFは使わない（2026-10-04 ユーザー決定。`バックテスト結果/2倍ETFを使う決まり.md`）
+ETF_ALIAS = {"GOOG": "GOOGL"}
+
+
+def etf2x_of(sym):
+    """2倍ETFを使う銘柄なら (ETFのティッカー, 目減り) を返す。`新分析ツール/2倍ETFの対応表.json`（`tools/leveraged_etf_check.py` が作る、直近1年の実測）"""
+    p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "新分析ツール", "2倍ETFの対応表.json")
+    try:
+        tab = json.load(open(p, encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    x = tab.get(ETF_ALIAS.get(sym, sym))
+    if not x or -x["drag"] >= ETF_MAX_DRAG:
+        return None
+    return x["etf"], -x["drag"]
+
+
 def rule_key(kind):
     if "ボリンジャー" in kind:
         return "B"
@@ -441,6 +458,9 @@ def main():
                     ex += f"。半分売りの合図: {hd} に出た（半分売っていなければ、次の寄り付きで半分売る）"
                 else:
                     ex += "。半分売りの合図: まだ出ていない"
+            ex2 = etf2x_of(h["sym"])
+            if ex2:
+                ex += f"（2倍ETF {ex2[0]} で持っている場合も、判定は元の株 {h['sym']} の値段）"
             stop = h["price"] * (1 - STOP)
             if c <= stop:
                 ex = "**損切り価格を下回った** " + ex
@@ -654,7 +674,13 @@ def main():
         w("|---|---|---|---|---|---|---|---|---|---|---|---|")
         for x in show:
             rs_ = "取得不可" if x["rs"] is None else f"{x['rs']:.0f}"
-            w(f"| {x['sym']} | {x['group']} | {x['pat']} | {x['kind']} | {perf(x)} | {x['close']:.2f} | {pct(x['chg'])} | {rs_} | {x['regime']} | {x['why']} | {eds[x['sym']]} | {x['order']} |")
+            ex_ = etf2x_of(x["sym"])
+            od_ = x["order"] + (f"。**2倍ETFで買う: {ex_[0]}**（目減り 年{ex_[1] * 100:.0f}%。株と同じ金額。合図・損切り・手じまいは元の株 {x['sym']} の値段で判定）" if ex_ else "")
+            w(f"| {x['sym']} | {x['group']} | {x['pat']} | {x['kind']} | {perf(x)} | {x['close']:.2f} | {pct(x['chg'])} | {rs_} | {x['regime']} | {x['why']} | {eds[x['sym']]} | {od_} |")
+        w("\n- 2倍ETF: 2倍ETFがある銘柄（ユーザーがムームー証券で買えることを確認した38銘柄のうち、目減りが年15%未満のもの）は、株の代わりに2倍ETFを買う（2026-10-04 ユーザー決定。"
+          "`バックテスト結果/2倍ETFを使う決まり.md`。年率 約27%→約33%、確定した損益だけの最大下落率 約30%→約31%、含み損込みは約33%→約45%）。"
+          "買う金額は株と同じ（資金の25%）。合図・損切り（元の株の買値の15%下＝ETFでは約30%下）・手じまいはすべて元の株の値段で判定する。指値・逆指値はETFの値段に直して置く。"
+          "どのETFかは `新分析ツール/2倍ETFの対応表.json`（売買代金が1日500万ドル以上で、直近1年の目減りが一番小さいもの）。")
         if st_:
             m_ = st_.get("_meta", {})
             w(f"\n- ルールの過去の成績: 今の売りのルールで、後知恵なしの監視銘柄・2015年〜の全部の合図の1回ごとの成績（{m_.get('updated', '?')}計算、`{m_.get('source', '')}`）。"

@@ -346,7 +346,7 @@ def main():
     r.add_argument("--etf", default=None, help="etf2x: 2倍ETFにする銘柄（カンマ区切り）。省略すると backtest_2x.HAS_2X")
     r.add_argument("--drag", default=None, help="etf2x: 2倍ETFの目減り（年率）。数値なら全部同じ、'measured' なら 新分析ツール/2倍ETFの対応表.json の実測（ないものは0.12）")
     r.add_argument("--tag", default="", help="etf2x: 結果のファイル名と見出しに付ける名前（例: ムームー証券）")
-    r.add_argument("--stage", default="all", choices=("sell", "combo", "half", "filter", "rule", "stats", "dd", "robust", "earn", "realized", "etf2x", "all"))
+    r.add_argument("--stage", default="all", choices=("sell", "combo", "half", "filter", "rule", "stats", "dd", "robust", "earn", "realized", "etf2x", "etfrule", "all"))
     a = ap.parse_args()
     ctx = cb.setup(a.cache, with_parts=False)
     data, members, ind, days, G, end = (ctx[k] for k in ("data", "members", "ind", "days", "G", "end"))
@@ -567,6 +567,8 @@ def main():
                 print(title, lab, "確か" if ok else "×", file=sys.stderr)
         return res, sure
 
+    if a.stage == "etfrule":
+        return etf_rule_stage(build, port, ev, (SCREEN, CONF1, CONF2), days, set(a.etf.split(",")))
     if a.stage == "etf2x":
         return etf2x_stage(build, port, ev, CUR, (SCREEN, CONF1, CONF2), days, is_hi, oos_lo,
                            set(a.etf.split(",")) if a.etf else None, a.tag, a.drag)
@@ -1070,6 +1072,73 @@ def etf2x_stage(build, port, ev, CUR, SEEDSETS, days, is_hi, oos_lo, only_set=No
     w("- 実物の2倍ETFは、値段の差（スプレッド）や、毎日の合わせ直しのずれで、ここより少し悪くなることがある。")
     w("- この結果はルールの条件どおりに機械的に計算したもので、Claudeによる個別銘柄の売買判断ではない。")
     open(OUTDIR + f"2倍ETFがある銘柄だけ2倍ETF（今のルール{'・' + tag if tag else ''}）.md", "w", encoding="utf-8").write("\n".join(L) + "\n")
+    print("書き出し", file=sys.stderr)
+
+
+def etf_rule_stage(build, port, ev, SEEDSETS, days, HAS):
+    """2倍ETFを使う例外の決まり（ルールごと・目減りの大きいETFを除く）を比べる（2026-10-04）。目減りは実測（2倍ETFの対応表.json）"""
+    import json
+    tab = json.load(open(os.path.join(os.path.dirname(OUTDIR.rstrip("/")), "2倍ETFの対応表.json"), encoding="utf-8"))
+    drag = {u: -x["drag"] for u, x in tab.items()}
+
+    def to2x(trs, ok):
+        out = []
+        for t in trs:
+            if t["sym"] not in HAS or not ok(t):
+                out.append(t)
+                continue
+            FEE = drag.get(t["sym"], 0.12) / 252
+            ds = sorted(t["path"])
+            e, prev, pv = 1 - COST, 1 - COST, {}
+            for d in ds:
+                g_ = t["path"][d]
+                e = max(0.0, e * (1 + 2 * (g_ / prev - 1)) * (1 - FEE))
+                prev = g_
+                pv[d] = e
+            out.append({**t, "path": pv})
+        return out
+
+    base = build()
+    dg = lambda t: drag.get(t["sym"], 0.12)
+    forms = [("株だけ（今のルール）", lambda t: False),
+             ("A. 2倍ETFがある銘柄は全部ETF", lambda t: True),
+             ("B. 急落の底だけETF", lambda t: t["rule"] == "C"),
+             ("C. 押し目・急落の底（逆張り）だけETF", lambda t: t["rule"] in ("B", "C")),
+             ("D. 順張り（ミネルヴィニ・新高値V2）だけETF", lambda t: t["rule"] in ("M", "V")),
+             ("E. 目減りが年20%以上のETFは使わない", lambda t: dg(t) < 0.20),
+             ("F. 目減りが年15%以上のETFは使わない", lambda t: dg(t) < 0.15),
+             ("G. 逆張りだけETF、目減り年20%以上は使わない", lambda t: t["rule"] in ("B", "C") and dg(t) < 0.20)]
+    S0, NS = SEEDSETS[1]
+    L = []
+    w = L.append
+    w(f"---\ntype: backtest\ntitle: 2倍ETFを使う決まり\ncreated: {dt.date.today()}\nscript: tools/backtest_retest.py --stage etfrule\n---\n")
+    w("# 2倍ETFを使う決まり（ルールごと・目減りの大きいETFを除く）\n")
+    w(f"2倍ETFがある{len(HAS)}銘柄（ユーザーがムームー証券で買えることを確認）: " + "・".join(sorted(HAS)) + "。"
+      "目減りは直近1年の実測（`個別株2倍ETFの比べ方.md`、表にないものは年12%）。合図・売る日は今のルールのまま。乱数3組。\n")
+    w("| 形 | 年率（3組） | 設計期間（3組） | 確認期間（3組） | 含み損込みの最大下落率（組2） | 確定した損益だけの最大下落率（組2の中央値／最悪） | ETFで買った合図の数 |")
+    w("|---|---|---|---|---|---|---|")
+    rows = []
+    for lab, ok in forms:
+        trs = to2x(base, ok)
+        es = [ev(trs, sd) for sd in SEEDSETS]
+        rm = []
+        for k in range(NS):
+            rc = []
+            port(trs, S0 + k, days[0], days[-1], rcurve=rc)
+            pk, m = rc[0], 0.0
+            for v in rc:
+                pk = max(pk, v)
+                m = max(m, 1 - v / pk)
+            rm.append(m)
+        rm.sort()
+        n_ = sum(1 for t in base if t["sym"] in HAS and ok(t))
+        rows.append((lab, es, rm))
+        f3 = lambda key: "／".join(pct(e[key]) for e in es)
+        w(f"| {lab} | {f3('all')} | {f3('is')} | {f3('oos')} | {pct(es[1]['mdd'])} | {pct(rm[len(rm) // 2])}／{pct(rm[-1])} | {n_} |")
+        print("ETF決まり", lab, file=sys.stderr)
+    w("\n- 確定した損益だけの最大下落率は、持っている株（ETF）を買った額のまま数え、売って確定した損益だけで資金が増減するとした場合。")
+    w("- この結果はルールの条件どおりに機械的に計算したもので、Claudeによる個別銘柄の売買判断ではない。")
+    open(OUTDIR + "2倍ETFを使う決まり.md", "w", encoding="utf-8").write("\n".join(L) + "\n")
     print("書き出し", file=sys.stderr)
 
 
