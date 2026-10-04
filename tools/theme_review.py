@@ -235,6 +235,11 @@ def cmd_review(a):
     if not n_early:
         w("該当なし")
     actual_vs_expected(w)
+    slip_text, alert = slippage(a.dir)
+    if a.slip_out:
+        open(a.slip_out, "w", encoding="utf-8").write(slip_text)     # 記録はいつも残す
+    if alert:
+        w(alert)                                                      # レポートには、ずれが大きいときだけ出す
     text = "\n".join(L) + "\n"
     if a.out:
         open(a.out, "w", encoding="utf-8").write(text)
@@ -337,6 +342,87 @@ def actual_vs_expected(w):
     w("\n- 見込みはバックテストの数字で、実際はそれより低くなりやすい（多くの形を試して一番良いものを選んでいるため）。年率10〜20%、悪い年は−10〜−20%を目安にする。")
 
 
+SLIP_AVG, SLIP_ONE, SLIP_MIN_N = 0.003, 0.02, 5   # 直近10件の平均が0.3%超、または1件で2%超のずれで知らせる（バックテストは片道0.1%と仮定）
+
+
+def slippage(hist_dir):
+    """実際の約定の値段と、毎朝のレポートの注文の目安とのずれ（2026-10-04 ユーザーの指示）。
+    買い: パターンA＝買った日の寄り付き、B＝逆指値なら max(寄り付き, 逆指値)、指値なら min(寄り付き, 指値)。
+    売り: 売った日の寄り付き（指値で売った場合は、指値に届いた値段とずれがないものとして扱う）。
+    ずれはプラスが不利（高く買った・安く売った）。2倍ETFで買った売買も、保有銘柄.md には元の株の値段を書く決まりなので、元の株の値段で比べる。
+    戻り値: (記録の全文, ずれが大きいときだけレポートに足す文章)"""
+    base = os.path.join(TOOLS, "..", "新分析ツール")
+    trades = load_real(os.path.join(base, "保有銘柄.md")) + load_real(os.path.join(base, "売買記録.md"))
+    recs = []
+    for f in glob.glob(os.path.join(hist_dir, "**", "record.json"), recursive=True):
+        try:
+            recs.append(json.load(open(f, encoding="utf-8")))
+        except (ValueError, OSError):
+            pass
+    recs.sort(key=lambda r: r.get("trade_date", ""))
+    rows, cache = [], {}
+
+    def bar(sym, day):
+        if sym not in cache:
+            cache[sym] = fetch_daily(sym)
+        d = cache[sym]
+        if not d or day not in d["date"]:
+            return None
+        return d["o"][d["date"].index(day)]
+
+    def num(x):
+        try:
+            return float(x)
+        except (TypeError, ValueError):
+            return None
+
+    seen = set()
+    for t in trades:
+        key = (t["sym"], t["buy_date"])
+        if key in seen:
+            continue
+        seen.add(key)
+        o = bar(t["sym"], t["buy_date"])
+        if o is None:
+            continue
+        cand = None
+        for r in recs:
+            if r.get("trade_date", "") < t["buy_date"]:
+                for c in r.get("candidates", []):
+                    if c.get("sym") == t["sym"]:
+                        cand = c
+        exp, how = o, "寄り付き"
+        if cand and cand.get("pattern") == "B":
+            sb, lb = num(cand.get("stop_buy")), num(cand.get("limit_buy"))
+            if sb:
+                exp, how = max(o, sb), f"逆指値 {sb:.2f}"
+            elif lb:
+                exp, how = min(o, lb), f"指値 {lb:.2f}"
+        rows.append((t["buy_date"], t["sym"], "買い", how, exp, t["buy"], t["buy"] / exp - 1))
+        if t.get("sell_date"):
+            so = bar(t["sym"], t["sell_date"])
+            if so:
+                rows.append((t["sell_date"], t["sym"], "売り", "寄り付き", so, t["sell"], so / t["sell"] - 1))
+    rows.sort()
+    L = ["## 約定の値段のずれ（記録）\n", "プラスは不利（高く買った・安く売った）。バックテストは片道0.1%と仮定している。\n",
+         "| 日付 | 銘柄 | 売買 | 目安 | 目安の値段 | 実際の値段 | ずれ |", "|---|---|---|---|---|---|---|"]
+    for d, s, k, how, e, a_, x in rows:
+        L.append(f"| {d} | {s} | {k} | {how} | {e:.2f} | {a_:.2f} | {x * 100:+.2f}% |")
+    if not rows:
+        L.append("| 記録なし | | | | | | |")
+    recent = [x for *_, x in rows[-10:]]
+    alert = ""
+    if len(recent) >= SLIP_MIN_N:
+        avg = sum(recent) / len(recent)
+        big = [r for r in rows[-10:] if r[-1] > SLIP_ONE]
+        if avg > SLIP_AVG or big:
+            alert = ("\n## ⚠ 約定の値段のずれが大きくなっている\n\n"
+                     f"直近{len(recent)}件の平均のずれ {avg * 100:+.2f}%（バックテストの仮定は片道0.1%。0.1%増えるごとに年率が約2.7ポイント下がる）"
+                     + (f"。1件で2%を超えたもの: " + "、".join(f"{r[1]} {r[0]} {r[2]} {r[-1] * 100:+.1f}%" for r in big) if big else "")
+                     + "。同じ値段に注文が集まっている・売買の少ない2倍ETFを使っている、などが考えられる。\n\n" + "\n".join(L[2:]) + "\n")
+    return "\n".join(L) + "\n", alert
+
+
 def main():
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -346,6 +432,7 @@ def main():
     v.add_argument("dir")
     v.add_argument("--since")
     v.add_argument("--out")
+    v.add_argument("--slip-out", dest="slip_out", default=None, help="約定の値段のずれの記録（毎回書く。レポートにはずれが大きいときだけ出す）")
     a = ap.parse_args()
     (cmd_record if a.cmd == "record" else cmd_review)(a)
 
