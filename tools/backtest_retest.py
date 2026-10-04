@@ -346,7 +346,7 @@ def main():
     r.add_argument("--etf", default=None, help="etf2x: 2倍ETFにする銘柄（カンマ区切り）。省略すると backtest_2x.HAS_2X")
     r.add_argument("--drag", default=None, help="etf2x: 2倍ETFの目減り（年率）。数値なら全部同じ、'measured' なら 新分析ツール/2倍ETFの対応表.json の実測（ないものは0.12）")
     r.add_argument("--tag", default="", help="etf2x: 結果のファイル名と見出しに付ける名前（例: ムームー証券）")
-    r.add_argument("--stage", default="all", choices=("sell", "combo", "half", "filter", "rule", "stats", "dd", "robust", "earn", "realized", "etf2x", "etfrule", "weinstein", "rsi", "all"))
+    r.add_argument("--stage", default="all", choices=("sell", "combo", "half", "filter", "rule", "stats", "dd", "robust", "earn", "realized", "etf2x", "etfrule", "weinstein", "rsi", "pivot", "all"))
     a = ap.parse_args()
     ctx = cb.setup(a.cache, with_parts=False)
     data, members, ind, days, G, end = (ctx[k] for k in ("data", "members", "ind", "days", "G", "end"))
@@ -720,6 +720,8 @@ def main():
         open(OUTDIR + "銘柄の下落率で見送る・優先する.md", "w", encoding="utf-8").write("\n".join(L) + "\n")
         print("書き出し", file=sys.stderr)
         return
+    if a.stage == "pivot":
+        return pivot_stage(cur_tr, base, data, build, screen_and_confirm)
     if a.stage == "rsi":
         return rsi_stage(cur_tr, base, data, build, ev, CUR, screen_and_confirm, TREND, REV)
     if a.stage == "stats":
@@ -780,6 +782,58 @@ def main():
         os.makedirs(OUTDIR, exist_ok=True)
         open(out, "w", encoding="utf-8").write("\n".join(L) + "\n")
         print(f"書き出し: {out}", file=sys.stderr)
+
+
+def pivot_stage(cur_tr, base, data, build, screen_and_confirm):
+    """新高値V2で、ピボット（直前20日の最高値（終値）と直前2年の最高値の高い方）から離れすぎた買いを見送るか
+    （2026-10-05 ミネルヴィニがHPEを「ピボット67.10から+3.3%の高値追い（第10章）」で【様子見】にしたため。ユーザーの指示）"""
+    def trig(t):
+        s, j = data[t["sym"]], t["i0"] - 1
+        return max(max(s["c"][max(0, j - 20):j]), max(s["h"][max(0, j - 500):j]))
+    vb = [t for t in base if t["rule"] == "V"]
+    key = {(t["sym"], data[t["sym"]]["date"][t["i0"]]): t for t in vb}
+    L = []
+    w = L.append
+    w(f"---\ntype: backtest\ntitle: 新高値V2でピボットから離れた買いを見送るか\ncreated: {dt.date.today()}\nscript: tools/backtest_retest.py --stage pivot\n---\n")
+    w("# 新高値V2で、ピボットから離れすぎた買いを見送るか\n")
+    w("2026-10-05、ミネルヴィニがHPE（新高値V2、10/2の終値69.33）を「ピボット67.10から+3.3%の高値追い（第10章）」で【様子見】にした。"
+      "前日（10/4）の同じデータでは【買い】だった。ルールにこの見送りを入れた方が良いかを確かめた。"
+      "ピボット＝直前20日の最高値（終値）と直前2年の最高値（高値）の高い方（毎朝のツールの逆指値の価格と同じ）。後知恵なしの監視銘柄、2015年〜、今の売りのルール、片道0.1%込み。\n")
+    w("## 1. ピボットからの離れ具合ごとの成績（新高値V2の全部の合図、1回ごと）\n")
+    for basis, f in (("合図の日の終値", lambda t, b: data[t["sym"]]["c"][b["i0"] - 1]), ("買った値段（翌日の寄り付き）", lambda t, b: b["px"])):
+        w(f"### {basis}がピボットから何%上か\n")
+        w("| 離れ具合 | 回数 | 勝率 | 1回平均 | 設計／確認の1回平均 |")
+        w("|---|---|---|---|---|")
+        bins = (("+1%未満", -1, 0.01), ("+1〜2%", 0.01, 0.02), ("+2〜3%", 0.02, 0.03), ("+3〜5%", 0.03, 0.05), ("+5%以上", 0.05, 9))
+        for lab, lo, hi in bins:
+            g = []
+            for t in cur_tr:
+                if t["rule"] != "V":
+                    continue
+                b = key[(t["sym"], t["in"])]
+                x = f(t, b) / trig(b) - 1
+                if lo <= x < hi:
+                    g.append(t)
+            if not g:
+                continue
+            r = [t["path"][t["out"]] - 1 for t in g]
+            de = [t["path"][t["out"]] - 1 for t in g if t["in"] <= cb.IS_END]
+            co = [t["path"][t["out"]] - 1 for t in g if t["in"] >= cb.OOS_START]
+            avg = lambda xs: pct(sum(xs) / len(xs), 2) if xs else "—"
+            w(f"| {lab} | {len(g)} | {pct(sum(1 for x in r if x > 0) / len(r), 0)} | {avg(r)} | {avg(de)}／{avg(co)} |")
+        w("")
+    w("## 2. 見送りをルールに入れて、資金全体で試す（今のルールと比べる）\n")
+    items = []
+    for lim in (0.03, 0.05):
+        items.append((f"合図の日の終値がピボット+{lim * 100:.0f}%を超えたら見送り",
+                      (lambda lim=lim: build(drop=lambda t: t["rule"] == "V" and data[t["sym"]]["c"][t["i0"] - 1] > trig(t) * (1 + lim)))))
+        items.append((f"翌日の寄り付きがピボット+{lim * 100:.0f}%を超えたら見送り",
+                      (lambda lim=lim: build(drop=lambda t: t["rule"] == "V" and t["px"] > trig(t) * (1 + lim)))))
+    screen_and_confirm("新高値V2で、ピボットから離れた買いを見送る", items, w)
+    w("\n- この結果はルールの条件どおりに機械的に計算したもので、Claudeによる個別銘柄の売買判断ではない。")
+    os.makedirs(OUTDIR, exist_ok=True)
+    open(OUTDIR + "新高値V2でピボットから離れた買いを見送るか.md", "w", encoding="utf-8").write("\n".join(L) + "\n")
+    print("書き出し", file=sys.stderr)
 
 
 def rsi_wilder(c, n):

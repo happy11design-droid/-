@@ -9,6 +9,7 @@
 # - exit 8（stale-output）: 回答が流れている途中で書き直された。正しい回答は会話に保存されているので、
 #   `nlm chat show` から [ASSISTANT] 以降を取り出して回答ファイルにする。
 # - exit 3（認証切れ）: `チャート分析.txt` 手順Aで再認証し、1回だけ送り直す。
+# - exit 6（空の応答）: 1回だけ送り直す（2026-10-05 ユーザーの指示）。NLM_RETRY_EMPTY=0 なら送り直さない（短い版に切り替える呼び出し側が使う）。
 
 nlm_load_env() {
   [[ -f /root/.nlm/env ]] || return 0
@@ -47,6 +48,10 @@ nlm_chat() {
         rc=0
       fi
       rm -f "$out.show"
+    fi
+    if [[ $rc -eq 6 && $try -eq 1 && "${NLM_RETRY_EMPTY:-1}" != 0 ]]; then
+      sleep 20
+      continue
     fi
     if [[ $rc -eq 3 && $try -eq 1 ]]; then
       touch "$out.authmark"
