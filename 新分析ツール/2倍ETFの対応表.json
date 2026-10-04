@@ -168,5 +168,9 @@
   "etf": "NFXL",
   "drag": -0.1032,
   "dollar_volume": 21653320
+ },
+ "_meta": {
+  "updated": "2026-10-04",
+  "max_drag": 0.15
  }
 }

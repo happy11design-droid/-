@@ -196,12 +196,39 @@ ETF_MAX_DRAG = 0.15   # 目減りが年15%以上の2倍ETFは使わない（2026
 ETF_ALIAS = {"GOOG": "GOOGL"}
 
 
-def etf2x_of(sym):
-    """2倍ETFを使う銘柄なら (ETFのティッカー, 目減り) を返す。`新分析ツール/2倍ETFの対応表.json`（`tools/leveraged_etf_check.py` が作る、直近1年の実測）"""
-    p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "新分析ツール", "2倍ETFの対応表.json")
+_ETF_TAB = None
+
+
+def etf_table():
+    """2倍ETFの対応表。リポジトリの表が8日より古ければ、その場で測り直した表を使う（約2分、`tools/leveraged_etf_check.py`。
+    目減りが変わって条件を満たした銘柄は自動で復活する。2026-10-04 ユーザーの指示）"""
+    global _ETF_TAB
+    if _ETF_TAB is not None:
+        return _ETF_TAB
+    here = os.path.dirname(os.path.abspath(__file__))
+    p = os.path.join(here, "..", "新分析ツール", "2倍ETFの対応表.json")
     try:
         tab = json.load(open(p, encoding="utf-8"))
     except (OSError, ValueError):
+        tab = {}
+    upd = (tab.get("_meta") or {}).get("updated", "2000-01-01")
+    if (dt.date.today() - dt.date.fromisoformat(upd)).days > 8:
+        fresh = "/tmp/etf2x_table.json"
+        try:
+            if not (os.path.exists(fresh) and json.load(open(fresh)).get("_meta", {}).get("updated") == str(dt.date.today())):
+                subprocess.run([sys.executable, os.path.join(here, "leveraged_etf_check.py"), "--json", fresh, "--out", "/tmp/etf2x_table.md"],
+                               capture_output=True, timeout=600)
+            tab = json.load(open(fresh, encoding="utf-8"))
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            pass
+    _ETF_TAB = tab
+    return tab
+
+
+def etf2x_of(sym):
+    """2倍ETFを使う銘柄なら (ETFのティッカー, 目減り) を返す。`新分析ツール/2倍ETFの対応表.json`（`tools/leveraged_etf_check.py` が作る、直近1年の実測）"""
+    tab = etf_table()
+    if not tab:
         return None
     x = tab.get(ETF_ALIAS.get(sym, sym))
     if not x or -x["drag"] >= ETF_MAX_DRAG:

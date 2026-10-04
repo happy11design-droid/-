@@ -2,7 +2,9 @@
 """個別株の2倍ETFの候補を、実際の株価で確かめて比べる（どのETFが資金の目減りが小さいか）
 
 使い方:
-  tools/leveraged_etf_check.py [--out FILE]
+  tools/leveraged_etf_check.py [--out FILE] [--json FILE] [--prev FILE] [--changes FILE]
+    --json   : 対応表の書き出し先（既定 新分析ツール/2倍ETFの対応表.json）
+    --prev   : 前回の対応表。渡すと、復活・除外・ETFの変更を --changes に書く（週次レビュー用）
 
 Yahoo Finance の直近1年の日足で、ETFごとに次を出す。
   名前（Yahooの正式名）、取引日数、1日平均の売買代金、元の株の値動きに対する倍率（回帰の傾き）・相関、
@@ -17,6 +19,12 @@ import math
 import os
 import subprocess
 import sys
+
+# ユーザーがムームー証券で2倍ETFを買えることを確認した元の株（2026-10-04）。対応表に載せるのはこの中だけ
+CONFIRMED = {"AAPL", "AMD", "AMZN", "AVGO", "ARM", "ASML", "BABA", "AFRM", "NVDA", "TSLA", "MSFT", "GOOGL", "META", "COIN", "PLTR",
+             "MSTR", "MU", "TSM", "INTC", "MRVL", "SMCI", "DELL", "VRT", "ORCL", "APP", "CRWD", "PANW", "NOW", "CRM", "ADBE", "HOOD",
+             "NFLX", "RDDT", "NBIS", "CRWV", "SNDK", "LITE"}
+MAX_DRAG = 0.15     # theme_scan.ETF_MAX_DRAG と同じ（目減りが年15%以上は使わない）
 
 CANDS = {
     "NVDA": ["NVDL", "NVDU", "NVDX", "NVDB"], "AVGO": ["AVL", "AVGU", "AVGG", "AVGX"], "MU": ["MUU", "MULL"],
@@ -53,7 +61,11 @@ def fetch(sym):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default="新分析ツール/バックテスト結果/個別株2倍ETFの比べ方.md")
+    ap.add_argument("--json", default=None)
+    ap.add_argument("--prev", default=None)
+    ap.add_argument("--changes", default=None)
     a = ap.parse_args()
+    a.json = a.json or os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "新分析ツール", "2倍ETFの対応表.json")
     L = []
     w = L.append
     w(f"---\ntype: research\ntitle: 個別株2倍ETFの比べ方\ncreated: {dt.date.today()}\nscript: tools/leveraged_etf_check.py\n---\n")
@@ -89,7 +101,7 @@ def main():
             ok = 1.8 <= beta <= 2.2 and corr >= 0.95
             rows.append({"e": e, "name": ed["name"], "n": len(ds), "dv": dv, "beta": beta, "corr": corr, "drag": drag, "ok": ok})
             print(u, e, round(beta, 2), round(drag, 4), file=sys.stderr)
-        good = [r for r in rows if r["ok"] and r["dv"] >= 5e6]
+        good = [r for r in rows if r["ok"] and r["dv"] >= 5e6] if u in CONFIRMED else []
         pick = max(good, key=lambda r: (r["drag"], r["dv"])) if good else None
         if pick:
             best[u] = {"etf": pick["e"], "drag": round(pick["drag"], 4), "dollar_volume": round(pick["dv"])}
@@ -103,9 +115,41 @@ def main():
     w("- 目減りは、経費率・借入のコスト・毎日の合わせ直しのずれをまとめた、直近1年の実際の差。マイナスが小さいほど資金効率が良い。")
     w("- 売買代金が多いほど、買値と売値の差（スプレッド）が小さく、寄り付きで売買しても値段がずれにくい。")
     w("- ムームー証券で買えるかは、アプリで確かめる（取引可能な米国ETF一覧 https://www.moomoo.com/ja/quote/us-tradable-etf ）。")
-    json.dump(best, open(os.path.join(os.path.dirname(a.out), "..", "2倍ETFの対応表.json"), "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+    best["_meta"] = {"updated": str(dt.date.today()), "max_drag": MAX_DRAG}
+    json.dump(best, open(a.json, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+    if a.prev and a.changes:
+        write_changes(a.prev, best, a.changes)
     open(a.out, "w", encoding="utf-8").write("\n".join(L) + "\n")
     print("書き出し", a.out, file=sys.stderr)
+
+
+def usable(tab, u):
+    x = tab.get(u)
+    return x if x and isinstance(x, dict) and "etf" in x and -x["drag"] < MAX_DRAG else None
+
+
+def write_changes(prev_path, new, out):
+    """前回の対応表と比べて、使える／使えないが変わった銘柄と、ETFが替わった銘柄を書く（週次レビューの1節）"""
+    try:
+        old = json.load(open(prev_path, encoding="utf-8"))
+    except (OSError, ValueError):
+        old = {}
+    L = ["## 2倍ETFの対応表の変化（毎週測り直し。目減りが年15%未満の2倍ETFだけ使う）\n",
+         f"前回: {(old.get('_meta') or {}).get('updated', '不明')}、今回: {new['_meta']['updated']}。\n"]
+    ch = []
+    for u in sorted(CONFIRMED):
+        o, n = usable(old, u), usable(new, u)
+        if not o and n:
+            ch.append(f"- **{u}: 復活** → {n['etf']}（目減り 年{-n['drag'] * 100:.0f}%）")
+        elif o and not n:
+            x = new.get(u)
+            ch.append(f"- **{u}: 使わない**（{o['etf']}" + (f"の目減りが年{-x['drag'] * 100:.0f}%に増えた" if x else "の売買が減った・データなし") + "。株で買う）")
+        elif o and n and o["etf"] != n["etf"]:
+            ch.append(f"- {u}: ETFを変更 {o['etf']} → {n['etf']}（目減り 年{-n['drag'] * 100:.0f}%）")
+    L += ch if ch else ["- 変化なし"]
+    use = [f"{u}→{usable(new, u)['etf']}" for u in sorted(CONFIRMED) if usable(new, u)]
+    L.append(f"\n今使う2倍ETF（{len(use)}銘柄）: " + "、".join(use))
+    open(out, "w", encoding="utf-8").write("\n".join(L) + "\n")
 
 
 if __name__ == "__main__":
