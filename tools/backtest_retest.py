@@ -346,7 +346,7 @@ def main():
     r.add_argument("--etf", default=None, help="etf2x: 2倍ETFにする銘柄（カンマ区切り）。省略すると backtest_2x.HAS_2X")
     r.add_argument("--drag", default=None, help="etf2x: 2倍ETFの目減り（年率）。数値なら全部同じ、'measured' なら 新分析ツール/2倍ETFの対応表.json の実測（ないものは0.12）")
     r.add_argument("--tag", default="", help="etf2x: 結果のファイル名と見出しに付ける名前（例: ムームー証券）")
-    r.add_argument("--stage", default="all", choices=("sell", "combo", "half", "filter", "rule", "stats", "dd", "robust", "earn", "realized", "etf2x", "etfrule", "all"))
+    r.add_argument("--stage", default="all", choices=("sell", "combo", "half", "filter", "rule", "stats", "dd", "robust", "earn", "realized", "etf2x", "etfrule", "weinstein", "all"))
     a = ap.parse_args()
     ctx = cb.setup(a.cache, with_parts=False)
     data, members, ind, days, G, end = (ctx[k] for k in ("data", "members", "ind", "days", "G", "end"))
@@ -567,6 +567,40 @@ def main():
                 print(title, lab, "確か" if ok else "×", file=sys.stderr)
         return res, sure
 
+    if a.stage == "weinstein":
+        import backtest_trend as bt_
+        for d_ in data.values():
+            if "wend" not in d_:
+                bt_.weekly(d_)
+        wt = gen_trades(data, members, bt_.E_weinstein(10, ma="10"), bt_.X_weekly_below("10"), cb.START, end, ok=ctx["ok_rot"],
+                        fill="open", max_hold=500, stop_pct=STOP)
+        W_plain = from_gen(wt, "W")
+        W_trend = from_gen(wt, "M")            # 順張りと同じ売り（かぶせ線で全部・反転の合図で半分）も当てる
+        W_low = from_gen(wt, "M", prio=1)      # 空き枠だけ
+        for t in W_plain + W_trend + W_low:
+            prep_more(data[t["sym"]]) if "rsi14" not in data[t["sym"]] else None
+        L = []
+        w = L.append
+        w(f"---\ntype: backtest\ntitle: ワインスタイン10週を加えるか\ncreated: {dt.date.today()}\nscript: tools/backtest_retest.py --stage weinstein\n---\n")
+        w("# ワインスタイン10週を5つ目のルールとして加えるか（今の測り方）\n")
+        w("ワインスタイン10週: 金曜（週の最終取引日）の引けで、週足の終値が10週線より上・10週線が前週より上・直前10週の高値を上抜け・その週の出来高が直前4週の平均の2倍以上"
+          "→ 翌取引日の寄り付きで買う。手じまいは週足の終値が10週線割れ（翌取引日の寄り付き）、損切り15%。後知恵なしの監視銘柄（2015年〜）。"
+          f"合図 {len(wt)}件（年{len(wt) / 11.7:.0f}件）。以前は今の87銘柄（後知恵あり）の直近3年だけで試していた（`テーマ監視銘柄・直近3年.md`）。\n")
+        tr_ = build(add=W_plain)
+        wr = [t["path"][t["out"]] - 1 for t in tr_ if t["rule"] == "W"]
+        if wr:
+            des = [t["path"][t["out"]] - 1 for t in tr_ if t["rule"] == "W" and t["in"] <= is_hi]
+            con = [t["path"][t["out"]] - 1 for t in tr_ if t["rule"] == "W" and t["in"] >= oos_lo]
+            w(f"ワインスタイン10週の全部の合図: 勝率 {pct(sum(1 for x in wr if x > 0) / len(wr), 0)}、1回平均 {pct(sum(wr) / len(wr), 2)}"
+              f"（設計期間 {pct(sum(des) / len(des), 2) if des else '-'}／確認期間 {pct(sum(con) / len(con), 2) if con else '-'}）\n")
+        items = [("今の4つ＋ワインスタイン10週（売りは10週線割れだけ）", lambda: build(add=W_plain)),
+                 ("今の4つ＋ワインスタイン10週（順張りと同じく、かぶせ線・反転の合図でも売る）", lambda: build(add=W_trend)),
+                 ("今の4つ＋ワインスタイン10週を空き枠だけ（順張りと同じ売り）", lambda: build(add=W_low))]
+        screen_and_confirm("ワインスタイン10週を加える", items, w)
+        w("\n- この結果はルールの条件どおりに機械的に計算したもので、Claudeによる個別銘柄の売買判断ではない。")
+        open(OUTDIR + "ワインスタイン10週を加えるか.md", "w", encoding="utf-8").write("\n".join(L) + "\n")
+        print("書き出し", file=sys.stderr)
+        return
     if a.stage == "etfrule":
         return etf_rule_stage(build, port, ev, (SCREEN, CONF1, CONF2), days, set(a.etf.split(",")))
     if a.stage == "etf2x":
