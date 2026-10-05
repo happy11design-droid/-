@@ -89,8 +89,10 @@ def cmd_record(a):
                       "stop_buy": float(stp.group(1)) if stp else None, "limit_buy": float(lmt.group(1)) if lmt else None,
                       "verdict": vv[0], "author": vv[1]})
     holds = []
+    cand_syms = {c["sym"] for c in cands}
     for r in table_rows(scan, "## 5."):
-        vv = v.get((r["銘柄"], True), ("未判定", ""))
+        # 著者が見出しに「（保有中）」を付けずに答えることがある（2026-10-06 NVDA）。候補にない保有銘柄なら、その見出しの結論を使う
+        vv = v.get((r["銘柄"], True)) or (v.get((r["銘柄"], False)) if r["銘柄"] not in cand_syms else None) or ("未判定", "")
         holds.append({"sym": r["銘柄"], "rule": r["ルール"], "buy_date": r["買った日"], "buy_price": float(r["買値"]),
                       "verdict": vv[0], "author": vv[1]})
     rec = {"trade_date": trade_date, "run_date": dt.datetime.now(dt.timezone(dt.timedelta(hours=9))).date().isoformat(),

@@ -665,6 +665,12 @@ def main():
                     refs.append({**base, "pat": "B", "kind": "予約: ワインスタイン（10週の高値の手前）",
                                   "why": f"直前10週の高値{h10:.2f}まで{(h10 / d['c'][i] - 1) * 100:.1f}%、10週線が上向き",
                                   "order": f"逆指値買い {h10:.2f}（本のルールは週足の終値で判定するので近似。上抜けの週の出来高は直前4週の平均の2倍以上）。損切り: 買値の15%下。手じまい: 週足の終値が10週線割れ"})
+    # 保有中の銘柄は候補から外す（同じ銘柄を二重に買わない。バックテストも保有中の銘柄の合図は見送る。2026-10-06 LITEが保有中なのに【買い】で出たため）
+    held_syms = {h["sym"] for h in load_holdings()}
+    held_skip = sorted({x["sym"] for x in cands if x["sym"] in held_syms})
+    cands = [x for x in cands if x["sym"] not in held_syms]
+    if held_skip:
+        w(f"保有中のため候補から外した銘柄（合図は出ている）: {'、'.join(held_skip)}\n")
     if not cands:
         w("本日は該当なし（著者への送信は不要）。\n")
     else:
