@@ -256,7 +256,11 @@ def load_real(path):
         if len(c) < 5 or not re.match(r"^[A-Z][A-Z.]*$", c[0]) or not re.match(r"^\d{4}-\d{2}-\d{2}$", c[1]):
             continue
         try:
-            t = {"sym": c[0], "buy_date": c[1], "buy": float(c[2]), "shares": float(c[3]), "rule": c[4], "sell_date": None, "sell": None}
+            t = {"sym": c[0], "buy_date": c[1], "buy": float(c[2]), "shares": float(c[3]), "rule": c[4], "sell_date": None, "sell": None, "lev": 1}
+            m = re.search(r"2倍ETF ([A-Z]+) ([0-9.]+)株 ([0-9.]+)", line)
+            if m:   # 2倍ETFで買った: 払った金額を元の株の2倍の値動きで近似する（目減りは含まない。2026-10-05）
+                t["lev"] = 2
+                t["shares"] = 2 * float(m.group(2)) * float(m.group(3)) / t["buy"]
             if len(c) >= 7 and re.match(r"^\d{4}-\d{2}-\d{2}$", c[5]) and c[6]:
                 t["sell_date"], t["sell"] = c[5], float(c[6])
         except ValueError:
@@ -304,7 +308,7 @@ def actual_vs_expected(w):
         mdd = max(mdd, 1 - eq / peak)
     realized = sum(t["shares"] * (t["sell"] - t["buy"]) for t in closed)
     unreal = sum(t["shares"] * (last_close.get(t["sym"], t["buy"]) - t["buy"]) for t in opened)
-    rets = [t["sell"] / t["buy"] - 1 for t in closed]
+    rets = [t["lev"] * (t["sell"] / t["buy"] - 1) for t in closed]
     n = len(rets)
     win = sum(r > 0 for r in rets) / n if n else None
     avg = sum(rets) / n if n else None
