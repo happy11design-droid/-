@@ -1,0 +1,96 @@
+{
+ "trade_date": "2026-10-06",
+ "run_date": "2026-10-07",
+ "theme_stage": "【ステージ2】（テーマ指数が30週移動平均線の上に位置し、線自体も上昇基調にあるため。第2章・第3章）",
+ "candidates": [
+  {
+   "sym": "CRWD",
+   "kind": "順張り: 新高値（V2、担当: ミネルヴィニ）",
+   "pattern": "A",
+   "close": 278.86,
+   "limit": null,
+   "stop_buy": null,
+   "limit_buy": null,
+   "verdict": "買い",
+   "author": "ミネルヴィニ"
+  },
+  {
+   "sym": "STX",
+   "kind": "予約: ボリンジャー メソッドIII（%bが0.05未満に近い）",
+   "pattern": "B",
+   "close": 805.63,
+   "limit": null,
+   "stop_buy": null,
+   "limit_buy": 774.78,
+   "verdict": "買い（予約）",
+   "author": "ボリンジャー"
+  },
+  {
+   "sym": "WDC",
+   "kind": "予約: ボリンジャー メソッドIII（%bが0.05未満に近い）",
+   "pattern": "B",
+   "close": 411.04,
+   "limit": null,
+   "stop_buy": null,
+   "limit_buy": 408.21,
+   "verdict": "買い（予約）",
+   "author": "ボリンジャー"
+  },
+  {
+   "sym": "DDOG",
+   "kind": "予約: ミネルヴィニ（ピボットの手前）",
+   "pattern": "B",
+   "close": 278.24,
+   "limit": 301.5,
+   "stop_buy": 292.72,
+   "limit_buy": null,
+   "verdict": "買い（予約）",
+   "author": "ミネルヴィニ"
+  },
+  {
+   "sym": "APH",
+   "kind": "予約: ミネルヴィニ（ピボットの手前）",
+   "pattern": "B",
+   "close": 88.62,
+   "limit": 91.8,
+   "stop_buy": 89.12,
+   "limit_buy": null,
+   "verdict": "買い（予約）",
+   "author": "ミネルヴィニ"
+  }
+ ],
+ "holdings": [
+  {
+   "sym": "LITE",
+   "rule": "新高値V2",
+   "buy_date": "2026-10-05",
+   "buy_price": 1095.12,
+   "verdict": "保有継続",
+   "author": "ミネルヴィニ"
+  },
+  {
+   "sym": "NVDA",
+   "rule": "ミネルヴィニ",
+   "buy_date": "2026-10-05",
+   "buy_price": 237.47,
+   "verdict": "保有継続",
+   "author": "ミネルヴィニ"
+  },
+  {
+   "sym": "HPE",
+   "rule": "新高値V2",
+   "buy_date": "2026-10-06",
+   "buy_price": 70.38,
+   "verdict": "保有継続",
+   "author": "ミネルヴィニ"
+  },
+  {
+   "sym": "AMD",
+   "rule": "新高値V2",
+   "buy_date": "2026-10-06",
+   "buy_price": 648.43,
+   "verdict": "保有継続",
+   "author": "ミネルヴィニ"
+  }
+ ]
+}
