@@ -1,0 +1,74 @@
+{
+ "trade_date": "2026-10-07",
+ "run_date": "2026-10-08",
+ "theme_stage": "【ステージ2】（テーマ指数の30週線が上向きかつ株価が線より上にあるため。第2章・第8章）[1-3]",
+ "candidates": [
+  {
+   "sym": "NTAP",
+   "kind": "順張り: 新高値（V2、担当: ミネルヴィニ）",
+   "pattern": "A",
+   "close": 235.77,
+   "limit": null,
+   "stop_buy": null,
+   "limit_buy": null,
+   "verdict": "買い",
+   "author": "ミネルヴィニ"
+  },
+  {
+   "sym": "DELL",
+   "kind": "予約: 新高値（V2、担当: ミネルヴィニ）",
+   "pattern": "B",
+   "close": 578.96,
+   "limit": null,
+   "stop_buy": 595.51,
+   "limit_buy": null,
+   "verdict": "買い（予約）",
+   "author": "ミネルヴィニ"
+  },
+  {
+   "sym": "WDC",
+   "kind": "予約: ボリンジャー メソッドIII（%bが0.05未満に近い）",
+   "pattern": "B",
+   "close": 405.42,
+   "limit": null,
+   "stop_buy": null,
+   "limit_buy": 404.69,
+   "verdict": "買い（予約）",
+   "author": "ボリンジャー"
+  }
+ ],
+ "holdings": [
+  {
+   "sym": "LITE",
+   "rule": "新高値V2",
+   "buy_date": "2026-10-05",
+   "buy_price": 1095.12,
+   "verdict": "保有継続",
+   "author": "ミネルヴィニ"
+  },
+  {
+   "sym": "NVDA",
+   "rule": "ミネルヴィニ",
+   "buy_date": "2026-10-05",
+   "buy_price": 237.47,
+   "verdict": "保有継続",
+   "author": "ミネルヴィニ"
+  },
+  {
+   "sym": "HPE",
+   "rule": "新高値V2",
+   "buy_date": "2026-10-06",
+   "buy_price": 70.38,
+   "verdict": "保有継続",
+   "author": "ミネルヴィニ"
+  },
+  {
+   "sym": "AMD",
+   "rule": "新高値V2",
+   "buy_date": "2026-10-06",
+   "buy_price": 648.43,
+   "verdict": "保有継続",
+   "author": "ミネルヴィニ"
+  }
+ ]
+}
