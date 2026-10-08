@@ -346,7 +346,7 @@ def main():
     r.add_argument("--etf", default=None, help="etf2x: 2倍ETFにする銘柄（カンマ区切り）。省略すると backtest_2x.HAS_2X")
     r.add_argument("--drag", default=None, help="etf2x: 2倍ETFの目減り（年率）。数値なら全部同じ、'measured' なら 新分析ツール/2倍ETFの対応表.json の実測（ないものは0.12）")
     r.add_argument("--tag", default="", help="etf2x: 結果のファイル名と見出しに付ける名前（例: ムームー証券）")
-    r.add_argument("--stage", default="all", choices=("sell", "combo", "half", "filter", "rule", "stats", "dd", "robust", "earn", "realized", "etf2x", "etfrule", "weinstein", "rsi", "pivot", "exits", "all"))
+    r.add_argument("--stage", default="all", choices=("sell", "combo", "half", "filter", "rule", "stats", "dd", "robust", "earn", "realized", "etf2x", "etfrule", "weinstein", "rsi", "pivot", "exits", "pullback", "all"))
     a = ap.parse_args()
     ctx = cb.setup(a.cache, with_parts=False)
     data, members, ind, days, G, end = (ctx[k] for k in ("data", "members", "ind", "days", "G", "end"))
@@ -720,6 +720,8 @@ def main():
         open(OUTDIR + "銘柄の下落率で見送る・優先する.md", "w", encoding="utf-8").write("\n".join(L) + "\n")
         print("書き出し", file=sys.stderr)
         return
+    if a.stage == "pullback":
+        return pullback_stage(cur_tr, base, data, build, screen_and_confirm, rec, idx)
     if a.stage == "exits":
         return exits_stage(cur_tr)
     if a.stage == "pivot":
@@ -784,6 +786,71 @@ def main():
         os.makedirs(OUTDIR, exist_ok=True)
         open(out, "w", encoding="utf-8").write("\n".join(L) + "\n")
         print(f"書き出し: {out}", file=sys.stderr)
+
+
+def pullback_stage(cur_tr, base, data, build, screen_and_confirm, rec, idx):
+    """新高値V2の合図の後、すぐ買わずに、ピボット（抜けた高値）近くまで下がるのを待って指値で買うか（2026-10-08 ユーザーの指示）。
+    指値は合図の翌日から毎晩置き直し、待つ日数のうちに届かなければ見送る。手じまいは今と同じ（引けで50日線割れ・引けで買値の15%下→翌日の寄り付き、かぶせ線・半分売り）"""
+    def trig(t):
+        s, j = data[t["sym"]], t["i0"] - 1
+        return max(max(s["c"][max(0, j - 20):j]), max(s["h"][max(0, j - 500):j]))
+
+    def wait_trades(above, days):
+        out, info = [], {"signals": 0, "filled": 0, "miss": []}
+        vb = [t for t in base if t["rule"] == "V"]
+        cur = {(t["sym"], t["in"]): t for t in cur_tr if t["rule"] == "V"}
+        for t in vb:
+            s, sym = data[t["sym"]], t["sym"]
+            o, l, c, n = s["o"], s["l"], s["c"], len(s["c"])
+            lim = trig(t) * (1 + above)
+            info["signals"] += 1
+            k = next((k for k in range(t["i0"], min(n - 1, t["i0"] + days)) if l[k] <= lim), None)
+            if k is None:
+                ct = cur.get((sym, s["date"][t["i0"]]))
+                if ct:
+                    info["miss"].append(ct["path"][ct["out"]] - 1)
+                continue
+            px = min(o[k], lim)
+            floor, j = px * (1 - STOP), None
+            for jj in range(k, n - 1):
+                if c[jj] <= floor or (s["ma50"][jj] is not None and c[jj] < s["ma50"][jj]):
+                    j = jj
+                    break
+            if j is None:
+                continue
+            info["filled"] += 1
+            out.append(rec(sym, k, j + 1, px, o[j + 1], "V"))
+        return out, info
+
+    L = []
+    w = L.append
+    w(f"---\ntype: backtest\ntitle: 新高値V2で下がるのを待って買う\ncreated: {dt.date.today()}\nscript: tools/backtest_retest.py --stage pullback\n---\n")
+    w("# 新高値V2の合図の後、ピボット近くまで下がるのを待って買う\n")
+    w("2026-10-08、ユーザーの質問「損で終わる方が多い（下がる）なら、下がった時に買った方が効率が良いのでは」から確かめた。"
+      "今は合図の翌日の寄り付き（または逆指値）で買う。比べる形は、合図の後、ピボット（直前20日の最高値（終値）と直前2年の最高値の高い方）"
+      "の近くに指値の買いを置き、決めた日数のうちに届いたら買い、届かなければ見送る。手じまいは今と同じ。後知恵なしの監視銘柄、2015年〜、片道0.1%込み。\n")
+    combos = [(0.0, 10), (0.0, 20), (0.02, 10), (0.02, 20), (0.05, 10)]
+    w("## 1. 1回ごとの成績（新高値V2の全部の合図）\n")
+    r0 = [t["path"][t["out"]] - 1 for t in cur_tr if t["rule"] == "V"]
+    avg = lambda xs: pct(sum(xs) / len(xs), 2) if xs else "—"
+    w(f"今の買い方（合図の翌日に買う）: {len(r0)}回、勝率 {pct(sum(1 for x in r0 if x > 0) / len(r0), 0)}、1回平均 {avg(r0)}\n")
+    w("| 待つ形 | 買えた回数（合図に対する割合） | 勝率 | 1回平均 | 買えなかった合図を今の買い方で買った場合の1回平均 |")
+    w("|---|---|---|---|---|")
+    items = []
+    for above, days in combos:
+        tr, info = wait_trades(above, days)
+        lab = f"ピボット{'+' + str(int(above * 100)) + '%' if above else ''}まで下がったら買う（{days}日待つ）"
+        built = build(drop=lambda t: t["rule"] == "V", add=tr)
+        rr = [t["path"][t["out"]] - 1 for t in built if t["rule"] == "V"]
+        w(f"| {lab} | {len(rr)}（{pct(len(rr) / info['signals'], 0)}） | {pct(sum(1 for x in rr if x > 0) / len(rr), 0) if rr else '—'} | {avg(rr)} | {avg(info['miss'])}（{len(info['miss'])}回） |")
+        items.append((lab, (lambda tr=tr: build(drop=lambda t: t["rule"] == "V", add=tr))))
+    w("")
+    w("## 2. 資金全体（今の買い方と比べる）\n")
+    screen_and_confirm("新高値V2で下がるのを待って買う", items, w)
+    w("\n- この結果はルールの条件どおりに機械的に計算したもので、Claudeによる個別銘柄の売買判断ではない。")
+    os.makedirs(OUTDIR, exist_ok=True)
+    open(OUTDIR + "新高値V2で下がるのを待って買う.md", "w", encoding="utf-8").write("\n".join(L) + "\n")
+    print("書き出し", file=sys.stderr)
 
 
 def exits_stage(cur_tr):
