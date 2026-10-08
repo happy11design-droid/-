@@ -140,7 +140,8 @@ FEATURES = [
 ]
 
 
-def build(a):
+def build(a, all_months=False):
+    """all_months=True なら、3年後の株価がない最近の月も含める（資金の再現用。結果の o は空のことがある）"""
     members, data = load_universe(a.cache, min_bars=60)
     spy = data.pop("SPY", None) or load_prices(a.cache, "SPY")
     for k in ("QQQ", "^VIX"):
@@ -156,7 +157,7 @@ def build(a):
             fund[sym] = {k: [tuple(r) for r in v] for k, v in json.load(open(p)).items()}
     pos = {s: {d: k for k, d in enumerate(v["date"])} for s, v in data.items()}
     mas = {s: (sma(v["c"], 200), sma(v["c"], 150), sma(v["c"], 50)) for s, v in data.items()}
-    entries = [d for d in ob.first_days_of_month(spy["date"]) if d >= "2015-01-01" and spy_pos[d] + 3 * ob.TD <= len(spy_c) - 1]
+    entries = [d for d in ob.first_days_of_month(spy["date"]) if d >= "2015-01-01" and (all_months or spy_pos[d] + 3 * ob.TD <= len(spy_c) - 1)]
     recs = []
     for d in entries:
         mem = [s for s, sp in members.items() if is_member(sp, d) and s in data and d in pos[s] and s in shares]
