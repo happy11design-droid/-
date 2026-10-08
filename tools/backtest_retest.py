@@ -346,7 +346,7 @@ def main():
     r.add_argument("--etf", default=None, help="etf2x: 2倍ETFにする銘柄（カンマ区切り）。省略すると backtest_2x.HAS_2X")
     r.add_argument("--drag", default=None, help="etf2x: 2倍ETFの目減り（年率）。数値なら全部同じ、'measured' なら 新分析ツール/2倍ETFの対応表.json の実測（ないものは0.12）")
     r.add_argument("--tag", default="", help="etf2x: 結果のファイル名と見出しに付ける名前（例: ムームー証券）")
-    r.add_argument("--stage", default="all", choices=("sell", "combo", "half", "filter", "rule", "stats", "dd", "robust", "earn", "realized", "etf2x", "etfrule", "weinstein", "rsi", "pivot", "all"))
+    r.add_argument("--stage", default="all", choices=("sell", "combo", "half", "filter", "rule", "stats", "dd", "robust", "earn", "realized", "etf2x", "etfrule", "weinstein", "rsi", "pivot", "exits", "all"))
     a = ap.parse_args()
     ctx = cb.setup(a.cache, with_parts=False)
     data, members, ind, days, G, end = (ctx[k] for k in ("data", "members", "ind", "days", "G", "end"))
@@ -720,6 +720,8 @@ def main():
         open(OUTDIR + "銘柄の下落率で見送る・優先する.md", "w", encoding="utf-8").write("\n".join(L) + "\n")
         print("書き出し", file=sys.stderr)
         return
+    if a.stage == "exits":
+        return exits_stage(cur_tr)
     if a.stage == "pivot":
         return pivot_stage(cur_tr, base, data, build, screen_and_confirm)
     if a.stage == "rsi":
@@ -782,6 +784,35 @@ def main():
         os.makedirs(OUTDIR, exist_ok=True)
         open(out, "w", encoding="utf-8").write("\n".join(L) + "\n")
         print(f"書き出し: {out}", file=sys.stderr)
+
+
+def exits_stage(cur_tr):
+    """ルールごとに、損で終わった売買のうち損切り（買値の15%下）まで行った回数と割合（2026-10-08 ユーザーの質問）"""
+    names = {"V": "新高値V2", "M": "ミネルヴィニ（ベースの上抜け）", "B": "押し目（ボリンジャーIII）", "C": "急落の底"}
+    yrs = 11.7
+    L = []
+    w = L.append
+    w(f"---\ntype: backtest\ntitle: 損切りまで行った回数\ncreated: {dt.date.today()}\nscript: tools/backtest_retest.py --stage exits\n---\n")
+    w("# 損切り（買値の15%下）まで行った回数と、損で終わった売買の内訳\n")
+    w("後知恵なしの監視銘柄、2015年〜（約11.7年）、今の売りのルール、片道0.1%込み。ルールの全部の合図の1回ごと（資金の枠に入らなかった合図も含む）。"
+      "1回の損益が-14%以下を「損切りまで行った」とした（損切り15%に、手数料と、損切り前に半分売った分のずれを見込んだ近似。窓を開けて15%より大きく下げた回も入る）。\n")
+    w("| ルール | 合図の数 | 勝ち | 損で終わった | 0〜-5% | -5〜-10% | -10〜-14% | **損切りまで（-14%以下）** | 損切りの割合（全部の売買に対して） | 損の合計のうち損切りの分 |")
+    w("|---|---|---|---|---|---|---|---|---|---|")
+    for k in ("V", "M", "B", "C"):
+        r = [t["path"][t["out"]] - 1 for t in cur_tr if t["rule"] == k]
+        if not r:
+            continue
+        lose = [x for x in r if x <= 0]
+        b1 = sum(1 for x in lose if x > -0.05)
+        b2 = sum(1 for x in lose if -0.10 < x <= -0.05)
+        b3 = sum(1 for x in lose if -0.14 < x <= -0.10)
+        st = [x for x in lose if x <= -0.14]
+        w(f"| {names[k]} | {len(r)}（年{len(r) / yrs:.0f}回） | {len(r) - len(lose)}（{pct((len(r) - len(lose)) / len(r), 0)}） | {len(lose)}（{pct(len(lose) / len(r), 0)}） | "
+          f"{b1} | {b2} | {b3} | **{len(st)}（年{len(st) / yrs:.1f}回）** | {pct(len(st) / len(r), 0)} | {pct(sum(st) / sum(lose), 0) if lose else '—'} |")
+    w("\n- この結果はルールの条件どおりに機械的に計算したもので、Claudeによる個別銘柄の売買判断ではない。")
+    os.makedirs(OUTDIR, exist_ok=True)
+    open(OUTDIR + "損切りまで行った回数.md", "w", encoding="utf-8").write("\n".join(L) + "\n")
+    print("書き出し", file=sys.stderr)
 
 
 def pivot_stage(cur_tr, base, data, build, screen_and_confirm):
