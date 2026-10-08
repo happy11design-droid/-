@@ -346,7 +346,7 @@ def main():
     r.add_argument("--etf", default=None, help="etf2x: 2倍ETFにする銘柄（カンマ区切り）。省略すると backtest_2x.HAS_2X")
     r.add_argument("--drag", default=None, help="etf2x: 2倍ETFの目減り（年率）。数値なら全部同じ、'measured' なら 新分析ツール/2倍ETFの対応表.json の実測（ないものは0.12）")
     r.add_argument("--tag", default="", help="etf2x: 結果のファイル名と見出しに付ける名前（例: ムームー証券）")
-    r.add_argument("--stage", default="all", choices=("sell", "combo", "half", "filter", "rule", "stats", "dd", "robust", "earn", "realized", "etf2x", "etfrule", "weinstein", "rsi", "pivot", "exits", "pullback", "all"))
+    r.add_argument("--stage", default="all", choices=("sell", "combo", "half", "filter", "rule", "stats", "dd", "robust", "earn", "realized", "etf2x", "etfrule", "weinstein", "rsi", "pivot", "exits", "pullback", "recover", "all"))
     a = ap.parse_args()
     ctx = cb.setup(a.cache, with_parts=False)
     data, members, ind, days, G, end = (ctx[k] for k in ("data", "members", "ind", "days", "G", "end"))
@@ -720,6 +720,8 @@ def main():
         open(OUTDIR + "銘柄の下落率で見送る・優先する.md", "w", encoding="utf-8").write("\n".join(L) + "\n")
         print("書き出し", file=sys.stderr)
         return
+    if a.stage == "recover":
+        return recover_stage(cur_tr)
     if a.stage == "pullback":
         return pullback_stage(cur_tr, base, data, build, screen_and_confirm, rec, idx)
     if a.stage == "exits":
@@ -786,6 +788,43 @@ def main():
         os.makedirs(OUTDIR, exist_ok=True)
         open(out, "w", encoding="utf-8").write("\n".join(L) + "\n")
         print(f"書き出し: {out}", file=sys.stderr)
+
+
+def recover_stage(cur_tr):
+    """買った後に買値を下回った売買が、何日後に買値まで戻ったか（2026-10-08 ユーザーの質問「下がった後、大体何日後に上がっているか」）"""
+    names = {"V": "新高値V2", "M": "ミネルヴィニ", "B": "押し目（ボリンジャーIII）", "C": "急落の底"}
+    med = lambda xs: sorted(xs)[len(xs) // 2] if xs else None
+    L = []
+    w = L.append
+    w(f"---\ntype: backtest\ntitle: 下がった後に買値まで戻るまでの日数\ncreated: {dt.date.today()}\nscript: tools/backtest_retest.py --stage recover\n---\n")
+    w("# 買った後に下がった売買は、何日後に買値まで戻ったか\n")
+    w("後知恵なしの監視銘柄、2015年〜、今の売りのルール、片道0.1%込み。ルールの全部の合図の1回ごと。日数は取引日（土日・祝日を除く。20取引日≒1か月）。"
+      "「下がった」＝保有中の引け値が一度でも買値の97%以下（-3%以下）になった売買。「戻った」＝その後、売る前に引け値が買値以上に戻った。\n")
+    w("| ルール | 合図の数 | -3%以下に下がった | そのうち売る前に買値まで戻った | 戻るまでの日数（中央値／4分の3が戻るまで） | 戻らずに売った（その平均の損益） | 一番下がるまでの日数（中央値） |")
+    w("|---|---|---|---|---|---|---|")
+    for k in ("V", "M", "B", "C"):
+        ts = [t for t in cur_tr if t["rule"] == k]
+        dip, rec_days, norec, bottom = 0, [], [], []
+        for t in ts:
+            ds = sorted(d for d in t["path"] if d <= t["out"])
+            v = [t["path"][d] for d in ds]
+            first = next((i for i, x in enumerate(v) if x <= 0.97), None)
+            if first is None:
+                continue
+            dip += 1
+            bottom.append(min(range(len(v)), key=lambda i: v[i]))
+            back = next((i for i in range(first + 1, len(v) - 1) if v[i] >= 1.0), None)
+            if back is None:
+                norec.append(v[-1] - 1)
+            else:
+                rec_days.append(back - first)
+        q3 = sorted(rec_days)[len(rec_days) * 3 // 4] if rec_days else None
+        w(f"| {names[k]} | {len(ts)} | {dip}（{pct(dip / len(ts), 0)}） | {len(rec_days)}（{pct(len(rec_days) / dip, 0) if dip else '—'}） | "
+          f"{med(rec_days)}日／{q3}日 | {len(norec)}（{pct(sum(norec) / len(norec), 1) if norec else '—'}） | {med(bottom)}日 |")
+    w("\n- この結果はルールの条件どおりに機械的に計算したもので、Claudeによる個別銘柄の売買判断ではない。")
+    os.makedirs(OUTDIR, exist_ok=True)
+    open(OUTDIR + "下がった後に買値まで戻るまでの日数.md", "w", encoding="utf-8").write("\n".join(L) + "\n")
+    print("書き出し", file=sys.stderr)
 
 
 def pullback_stage(cur_tr, base, data, build, screen_and_confirm, rec, idx):
