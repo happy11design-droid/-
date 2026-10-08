@@ -142,7 +142,7 @@ FEATURES = [
 
 def build(a):
     members, data = load_universe(a.cache, min_bars=60)
-    spy = data.pop("SPY")
+    spy = data.pop("SPY", None) or load_prices(a.cache, "SPY")
     for k in ("QQQ", "^VIX"):
         data.pop(k, None)
     spy_c, spy_pos = spy["c"], {d: k for k, d in enumerate(spy["date"])}
@@ -191,6 +191,10 @@ def build(a):
         month.sort(key=lambda x: -x["f"]["cap"])
         for r, x in enumerate(month, 1):
             x["f"]["rank"] = r
+        for key, _, _ in FEATURES:   # その月の中での順位（0〜1、1が一番大きい）
+            xs = sorted((x["f"][key], k) for k, x in enumerate(month) if x["f"].get(key) is not None)
+            for j, (_, k) in enumerate(xs):
+                month[k]["f"][key + "_p"] = j / max(1, len(xs) - 1)
         recs += month
     return recs, entries
 
@@ -294,7 +298,30 @@ def cmd_run(a):
     print(text)
 
 
-COMBOS = []
+def g(f, k, lo=None, hi=None):
+    v = f.get(k)
+    return v is not None and (lo is None or v >= lo) and (hi is None or v <= hi)
+
+
+COMBOS = [
+    ("売上の伸び≧15%", lambda f: g(f, "rev_yoy", 0.15)),
+    ("値動きの大きさ 上位40%", lambda f: g(f, "vol60_p", 0.6)),
+    ("時価総額 上位100", lambda f: f["rank"] <= 100),
+    ("売上の伸び≧15% かつ 値動き上位40%", lambda f: g(f, "rev_yoy", 0.15) and g(f, "vol60_p", 0.6)),
+    ("売上の伸び≧15% かつ 200日線より上で200日線が上向き", lambda f: g(f, "rev_yoy", 0.15) and g(f, "ma200", 0) and g(f, "ma200_slope", 0)),
+    ("売上の伸び≧15% かつ 1株利益の伸び≧15% かつ 200日線より上（オニール風）",
+     lambda f: g(f, "rev_yoy", 0.15) and g(f, "eps_yoy", 0.15) and g(f, "ma200", 0)),
+    ("売上の伸び≧15% かつ 時価総額 上位100", lambda f: g(f, "rev_yoy", 0.15) and f["rank"] <= 100),
+    ("売上の伸び≧15% かつ 時価総額 上位100 かつ 値動き上位40%",
+     lambda f: g(f, "rev_yoy", 0.15) and f["rank"] <= 100 and g(f, "vol60_p", 0.6)),
+    ("売上の伸び≧20% かつ 値動き上位40% かつ 勢い（12カ月）上位40%",
+     lambda f: g(f, "rev_yoy", 0.2) and g(f, "vol60_p", 0.6) and g(f, "mom12_1_p", 0.6)),
+    ("売上の伸び≧20% かつ 値動き上位40% かつ 52週高値の85%以下（押し目）",
+     lambda f: g(f, "rev_yoy", 0.2) and g(f, "vol60_p", 0.6) and g(f, "hi52", None, 0.85)),
+    ("売上の伸び≧25%", lambda f: g(f, "rev_yoy", 0.25)),
+    ("売上の伸び≧25% かつ 値動き上位40%", lambda f: g(f, "rev_yoy", 0.25) and g(f, "vol60_p", 0.6)),
+    ("売上の伸び≧25% かつ 時価総額 上位150", lambda f: g(f, "rev_yoy", 0.25) and f["rank"] <= 150),
+]
 
 
 def main():
