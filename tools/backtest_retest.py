@@ -819,7 +819,7 @@ def pullback_stage(cur_tr, base, data, build, screen_and_confirm, rec, idx):
             if j is None:
                 continue
             info["filled"] += 1
-            out.append(rec(sym, k, j + 1, px, o[j + 1], "V"))
+            out.append({**rec(sym, k, j + 1, px, o[j + 1], "V"), "pb": True})   # 待って買った売買（drop で今の買い方の分だけ外すための印）
         return out, info
 
     L = []
@@ -840,10 +840,10 @@ def pullback_stage(cur_tr, base, data, build, screen_and_confirm, rec, idx):
     for above, days in combos:
         tr, info = wait_trades(above, days)
         lab = f"ピボット{'+' + str(int(above * 100)) + '%' if above else ''}まで下がったら買う（{days}日待つ）"
-        built = build(drop=lambda t: t["rule"] == "V", add=tr)
+        built = build(drop=lambda t: t["rule"] == "V" and not t.get("pb"), add=tr)
         rr = [t["path"][t["out"]] - 1 for t in built if t["rule"] == "V"]
         w(f"| {lab} | {len(rr)}（{pct(len(rr) / info['signals'], 0)}） | {pct(sum(1 for x in rr if x > 0) / len(rr), 0) if rr else '—'} | {avg(rr)} | {avg(info['miss'])}（{len(info['miss'])}回） |")
-        items.append((lab, (lambda tr=tr: build(drop=lambda t: t["rule"] == "V", add=tr))))
+        items.append((lab, (lambda tr=tr: build(drop=lambda t: t["rule"] == "V" and not t.get("pb"), add=tr))))
     w("")
     w("## 2. 資金全体（今の買い方と比べる）\n")
     screen_and_confirm("新高値V2で下がるのを待って買う", items, w)
