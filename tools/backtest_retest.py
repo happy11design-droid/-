@@ -346,7 +346,7 @@ def main():
     r.add_argument("--etf", default=None, help="etf2x: 2倍ETFにする銘柄（カンマ区切り）。省略すると backtest_2x.HAS_2X")
     r.add_argument("--drag", default=None, help="etf2x: 2倍ETFの目減り（年率）。数値なら全部同じ、'measured' なら 新分析ツール/2倍ETFの対応表.json の実測（ないものは0.12）")
     r.add_argument("--tag", default="", help="etf2x: 結果のファイル名と見出しに付ける名前（例: ムームー証券）")
-    r.add_argument("--stage", default="all", choices=("sell", "combo", "half", "filter", "rule", "stats", "dd", "robust", "earn", "realized", "etf2x", "etfrule", "weinstein", "rsi", "pivot", "exits", "pullback", "recover", "prio", "slope", "all"))
+    r.add_argument("--stage", default="all", choices=("sell", "combo", "half", "filter", "rule", "stats", "dd", "robust", "earn", "realized", "etf2x", "etfrule", "weinstein", "rsi", "pivot", "exits", "pullback", "recover", "prio", "slope", "slope2", "all"))
     a = ap.parse_args()
     ctx = cb.setup(a.cache, with_parts=False)
     data, members, ind, days, G, end = (ctx[k] for k in ("data", "members", "ind", "days", "G", "end"))
@@ -720,6 +720,8 @@ def main():
         open(OUTDIR + "銘柄の下落率で見送る・優先する.md", "w", encoding="utf-8").write("\n".join(L) + "\n")
         print("書き出し", file=sys.stderr)
         return
+    if a.stage == "slope2":
+        return slope2_stage(base, data, build, port, ev, screen_and_confirm, days)
     if a.stage == "slope":
         return slope_stage(cur_tr, base, data, build, screen_and_confirm, is_hi)
     if a.stage == "prio":
@@ -792,6 +794,132 @@ def main():
         os.makedirs(OUTDIR, exist_ok=True)
         open(out, "w", encoding="utf-8").write("\n".join(L) + "\n")
         print(f"書き出し: {out}", file=sys.stderr)
+
+
+def slope2_stage(base, data, build, port, ev, screen_and_confirm, days):
+    """傾きの小さい順に買う形の確かめ（年ごと・2倍ETF込み）と、ルールごとに向きを変える形・似た案（2026-10-09 ユーザーの指示）"""
+    import json
+    import math
+    med = lambda xs: sorted(xs)[len(xs) // 2]
+    sma = lambda c, j, n: sum(c[j - n + 1:j + 1]) / n if j >= n - 1 else None
+    rsis = {}
+
+    def feat(t, kind):
+        s, j = data[t["sym"]], t["i0"] - 1
+        c = s["c"]
+        if kind == "s50":
+            return sma(c, j, 50) / sma(c, j - 20, 50) - 1 if j >= 70 else 0.0
+        if kind == "s20":
+            return sma(c, j, 20) / sma(c, j - 10, 20) - 1 if j >= 30 else 0.0
+        if kind == "dev20":
+            return c[j] / sma(c, j, 20) - 1 if j >= 20 else 0.0
+        if kind == "r5":
+            return c[j] / c[j - 5] - 1 if j >= 5 else 0.0
+        if kind == "rsi14":
+            if t["sym"] not in rsis:
+                rsis[t["sym"]] = rsi_wilder(c, 14)
+            v = rsis[t["sym"]][j]
+            return v if v is not None else 50.0
+    cache = {}
+
+    def f(t, kind):
+        k = (id(t), kind)
+        if k not in cache:
+            cache[k] = feat(t, kind)
+        return cache[k]
+    bmap = {(data[t["sym"]]["date"][t["i0"]], t["sym"], t["rule"]): t for t in base}
+    REV = ("B", "C")
+
+    def with_prio(trs, key):
+        return [{**t, "prio": key(bmap[(t["in"], t["sym"], t["rule"])])} for t in trs]
+    is_hi = max(d for d in days if d <= cb.IS_END)
+    mid = {}
+    for k in ("V", "M", "B", "C"):
+        xs = [f(t, "s50") for t in base if t["rule"] == k and data[t["sym"]]["date"][t["i0"]] <= is_hi]
+        mid[k] = med(xs) if xs else 0.0
+    forms = [
+        ("今のルール（同じ日の候補はランダムな順）", lambda: build()),
+        ("① 50日線の傾きが小さい順", lambda: with_prio(build(), lambda b: f(b, "s50"))),
+        ("② 20日線の傾きが小さい順", lambda: with_prio(build(), lambda b: f(b, "s20"))),
+        ("③ 押し目・急落の底を先に（その中はランダム）、順張りは後", lambda: with_prio(build(), lambda b: 0 if b["rule"] in REV else 1)),
+        ("④ 押し目・急落の底を先に50日線の傾きが小さい順、順張りは後に傾きが大きい順",
+         lambda: with_prio(build(), lambda b: (0, f(b, "s50")) if b["rule"] in REV else (1, -f(b, "s50")))),
+        ("⑤ 順張りを先に50日線の傾きが大きい順、押し目・急落の底は後に傾きが小さい順",
+         lambda: with_prio(build(), lambda b: (1, f(b, "s50")) if b["rule"] in REV else (0, -f(b, "s50")))),
+        ("⑥ 選ぶ: 順張りは50日線の傾きが大きい半分、押し目・急落の底は小さい半分だけ買う",
+         lambda: build(drop=lambda b: (f(b, "s50") < mid[b["rule"]]) if b["rule"] not in REV else (f(b, "s50") >= mid[b["rule"]]))),
+        ("⑦ 20日線からの乖離が小さい順（20日線より下に離れているほど先）", lambda: with_prio(build(), lambda b: f(b, "dev20"))),
+        ("⑧ 直近5日の値動きが小さい順（5日で大きく下げたほど先）", lambda: with_prio(build(), lambda b: f(b, "r5"))),
+        ("⑨ RSI(14)が低い順", lambda: with_prio(build(), lambda b: f(b, "rsi14"))),
+    ]
+    L = []
+    w = L.append
+    w(f"---\ntype: backtest\ntitle: 傾きの小さい順に買う形の確かめと似た案\ncreated: {dt.date.today()}\nscript: tools/backtest_retest.py --stage slope2\n---\n")
+    w("# 傾きの小さい順に買う形の確かめ（年ごと・2倍ETF込み）と、似た案\n")
+    w("2026-10-09、`傾きの大きさで選ぶ・優先する.md` で「同じ日の候補を傾きの小さい順に買う」が確かだったのを受けて、ユーザーの指示で確かめた。"
+      "③は、効いているのが「傾き」なのか「逆張りの候補を先に買うこと」なのかを分けるための比べる形。後知恵なしの監視銘柄、2015年〜、4銘柄・1銘柄25%、片道0.1%込み。\n")
+    w("## 1. 株だけで比べる\n")
+    screen_and_confirm("候補の順番（株だけ）", forms[1:], w)
+    # 2倍ETF込み（今の運用: 目減りが年15%未満の2倍ETFがある銘柄は2倍ETF）
+    tab = json.load(open(os.path.join(os.path.dirname(OUTDIR.rstrip("/")), "2倍ETFの対応表.json"), encoding="utf-8"))
+    drag = {u: -x["drag"] for u, x in tab.items() if isinstance(x, dict) and "drag" in x}
+    HAS = {u for u, d in drag.items() if d < 0.15}
+
+    def to2x(trs):
+        out = []
+        for t in trs:
+            if t["sym"] not in HAS:
+                out.append(t)
+                continue
+            fee = drag[t["sym"]] / 252
+            e, prev, pv = 1 - COST, 1 - COST, {}
+            for d in sorted(t["path"]):
+                g_ = t["path"][d]
+                e = max(0.0, e * (1 + 2 * (g_ / prev - 1)) * (1 - fee))
+                prev = g_
+                pv[d] = e
+            out.append({**t, "path": pv})
+        return out
+    w(f"\n## 2. 2倍ETF込み（今の運用。目減りが年15%未満の2倍ETFがある{len(HAS)}銘柄は2倍ETF）\n")
+    pick = [forms[0], forms[1], forms[2], forms[3], forms[4]]
+    w("2倍ETF込みの今のルールと比べる（乱数50通り×2組の中央値。比べる元が株だけの表とは違うので、ふるいは使わない）。\n")
+    w("| 形 | 1組目 年率 | 最大下落率 | 設計 | 確認 | 2組目 年率 | 最大下落率 | 設計 | 確認 |")
+    w("|---|---|---|---|---|---|---|---|---|")
+    for nm, fn in pick:
+        trs = to2x(fn())
+        e1, e2 = ev(trs, CONF1), ev(trs, CONF2)
+        w(f"| {nm}（2倍ETF込み） | {pct(e1['all'])} | {pct(e1['mdd'])} | {pct(e1['is'])} | {pct(e1['oos'])} | {pct(e2['all'])} | {pct(e2['mdd'])} | {pct(e2['is'])} | {pct(e2['oos'])} |")
+    # 年ごと（乱数50通りの中央値）
+    w("\n## 3. 年ごとの成績（株だけ・乱数50通りの中央値）\n")
+    yrs = sorted({d[:4] for d in days})
+    rows = {}
+    for nm, fn in pick:
+        trs = fn()
+        per = {y: [] for y in yrs}
+        for k in range(50):
+            curve = []
+            port(trs, 5000 + k, days[0], days[-1], curve=curve)
+            ends = {}
+            for d, e in zip(days, curve):
+                ends[d[:4]] = e
+            prev = 1.0
+            for y in yrs:
+                if y in ends:
+                    per[y].append(ends[y] / prev - 1)
+                    prev = ends[y]
+        rows[nm] = {y: med(v) for y, v in per.items() if v}
+    w("| 年 | " + " | ".join(nm.split("（")[0] for nm, _ in pick) + " |")
+    w("|---" * (len(pick) + 1) + "|")
+    for y in yrs:
+        w(f"| {y} | " + " | ".join(pct(rows[nm].get(y), 0) if rows[nm].get(y) is not None else "—" for nm, _ in pick) + " |")
+    base_nm = pick[0][0]
+    for nm, _ in pick[1:]:
+        win = sum(1 for y in yrs if rows[nm].get(y) is not None and rows[base_nm].get(y) is not None and rows[nm][y] > rows[base_nm][y])
+        w(f"\n- {nm.split('（')[0]}: 今のルールより良かった年 {win} / {len(yrs)}")
+    w("\n- この結果はルールの条件どおりに機械的に計算したもので、Claudeによる個別銘柄の売買判断ではない。")
+    os.makedirs(OUTDIR, exist_ok=True)
+    open(OUTDIR + "傾きの小さい順に買う形の確かめと似た案.md", "w", encoding="utf-8").write("\n".join(L) + "\n")
+    print("書き出し", file=sys.stderr)
 
 
 def slope_stage(cur_tr, base, data, build, screen_and_confirm, is_hi):
