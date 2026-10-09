@@ -346,7 +346,7 @@ def main():
     r.add_argument("--etf", default=None, help="etf2x: 2倍ETFにする銘柄（カンマ区切り）。省略すると backtest_2x.HAS_2X")
     r.add_argument("--drag", default=None, help="etf2x: 2倍ETFの目減り（年率）。数値なら全部同じ、'measured' なら 新分析ツール/2倍ETFの対応表.json の実測（ないものは0.12）")
     r.add_argument("--tag", default="", help="etf2x: 結果のファイル名と見出しに付ける名前（例: ムームー証券）")
-    r.add_argument("--stage", default="all", choices=("sell", "combo", "half", "filter", "rule", "stats", "dd", "robust", "earn", "realized", "etf2x", "etfrule", "weinstein", "rsi", "pivot", "exits", "pullback", "recover", "prio", "slope", "slope2", "all"))
+    r.add_argument("--stage", default="all", choices=("sell", "combo", "half", "filter", "rule", "stats", "dd", "robust", "earn", "realized", "etf2x", "etfrule", "weinstein", "rsi", "pivot", "exits", "pullback", "recover", "prio", "slope", "slope2", "slope3", "all"))
     a = ap.parse_args()
     ctx = cb.setup(a.cache, with_parts=False)
     data, members, ind, days, G, end = (ctx[k] for k in ("data", "members", "ind", "days", "G", "end"))
@@ -720,6 +720,8 @@ def main():
         open(OUTDIR + "銘柄の下落率で見送る・優先する.md", "w", encoding="utf-8").write("\n".join(L) + "\n")
         print("書き出し", file=sys.stderr)
         return
+    if a.stage == "slope3":
+        return slope3_stage(base, data, build, port, days)
     if a.stage == "slope2":
         return slope2_stage(base, data, build, port, ev, screen_and_confirm, days)
     if a.stage == "slope":
@@ -794,6 +796,72 @@ def main():
         os.makedirs(OUTDIR, exist_ok=True)
         open(out, "w", encoding="utf-8").write("\n".join(L) + "\n")
         print(f"書き出し: {out}", file=sys.stderr)
+
+
+def slope3_stage(base, data, build, port, days):
+    """50日線の傾きが小さい順に買う形の、確定した損益だけの最大下落率（株だけ・2倍ETF込み）。2026-10-09 ユーザーの指示"""
+    import json
+    sma = lambda c, j, n: sum(c[j - n + 1:j + 1]) / n
+    def s50(b):
+        c, j = data[b["sym"]]["c"], b["i0"] - 1
+        return sma(c, j, 50) / sma(c, j - 20, 50) - 1 if j >= 70 else 0.0
+    bmap = {(data[t["sym"]]["date"][t["i0"]], t["sym"], t["rule"]): t for t in base}
+    REV = ("B", "C")
+    def with_prio(trs, key):
+        return [{**t, "prio": key(bmap[(t["in"], t["sym"], t["rule"])])} for t in trs]
+    tab = json.load(open(os.path.join(os.path.dirname(OUTDIR.rstrip("/")), "2倍ETFの対応表.json"), encoding="utf-8"))
+    drag = {u: -x["drag"] for u, x in tab.items() if isinstance(x, dict) and "drag" in x}
+    HAS = {u for u, d in drag.items() if d < 0.15}
+    def to2x(trs):
+        out = []
+        for t in trs:
+            if t["sym"] not in HAS:
+                out.append(t)
+                continue
+            fee = drag[t["sym"]] / 252
+            e, prev, pv = 1 - COST, 1 - COST, {}
+            for d in sorted(t["path"]):
+                g_ = t["path"][d]
+                e = max(0.0, e * (1 + 2 * (g_ / prev - 1)) * (1 - fee))
+                prev = g_
+                pv[d] = e
+            out.append({**t, "path": pv})
+        return out
+    forms = [("今のルール（ランダムな順）", lambda: build()),
+             ("50日線の傾きが小さい順", lambda: with_prio(build(), s50)),
+             ("押し目・急落の底を先に傾きが小さい順、順張りは後に傾きが大きい順（ユーザー案）",
+              lambda: with_prio(build(), lambda b: (0, s50(b)) if b["rule"] in REV else (1, -s50(b))))]
+    L = []
+    w = L.append
+    w(f"---\ntype: backtest\ntitle: 50日線の傾きが小さい順の確定した損益の下落率\ncreated: {dt.date.today()}\nscript: tools/backtest_retest.py --stage slope3\n---\n")
+    w("# 50日線の傾きが小さい順に買う形の、確定した損益だけの最大下落率\n")
+    w("確定した損益だけの下落率: 持っている株は買った額のまま数え、売って損益が確定したときだけ資金が増減するとした場合の、最高から一番下がった割合（実際に資産が減った大きさ）。"
+      "含み損込み: 毎日の時価で数えた場合。乱数50通り（5000〜5049）。2015年〜、4銘柄・1銘柄25%、片道0.1%込み。\n")
+    w("| 形 | 年率（中央値） | 含み損込みの最大下落率（中央値／最悪） | **確定した損益だけの最大下落率（中央値／最悪）** | 2015〜2021年 | 2022年〜 |")
+    w("|---|---|---|---|---|---|")
+    is_hi = max(d for d in days if d <= cb.IS_END)
+    oos_lo = min(d for d in days if d >= cb.OOS_START)
+    med = lambda xs: sorted(xs)[len(xs) // 2]
+    for etf in (False, True):
+        for nm, fn in forms:
+            trs = fn()
+            if etf:
+                trs = to2x(trs)
+            cg, mm, rm, ii, oo = [], [], [], [], []
+            for k in range(50):
+                rc = []
+                g, m = port(trs, 5000 + k, days[0], days[-1], rcurve=rc)
+                pk, r = 0.0, 0.0
+                for x in rc:
+                    pk = max(pk, x)
+                    r = max(r, 1 - x / pk)
+                cg.append(g); mm.append(m); rm.append(r)
+                ii.append(port(trs, 5000 + k, days[0], is_hi)[0]); oo.append(port(trs, 5000 + k, oos_lo, days[-1])[0])
+            w(f"| {nm}{'（2倍ETF込み）' if etf else '（株だけ）'} | {pct(med(cg))} | {pct(med(mm))}／{pct(max(mm))} | **{pct(med(rm))}／{pct(max(rm))}** | {pct(med(ii))} | {pct(med(oo))} |")
+    w("\n- この結果はルールの条件どおりに機械的に計算したもので、Claudeによる個別銘柄の売買判断ではない。")
+    os.makedirs(OUTDIR, exist_ok=True)
+    open(OUTDIR + "50日線の傾きが小さい順の確定した損益の下落率.md", "w", encoding="utf-8").write("\n".join(L) + "\n")
+    print("書き出し", file=sys.stderr)
 
 
 def slope2_stage(base, data, build, port, ev, screen_and_confirm, days):
