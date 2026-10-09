@@ -346,7 +346,7 @@ def main():
     r.add_argument("--etf", default=None, help="etf2x: 2倍ETFにする銘柄（カンマ区切り）。省略すると backtest_2x.HAS_2X")
     r.add_argument("--drag", default=None, help="etf2x: 2倍ETFの目減り（年率）。数値なら全部同じ、'measured' なら 新分析ツール/2倍ETFの対応表.json の実測（ないものは0.12）")
     r.add_argument("--tag", default="", help="etf2x: 結果のファイル名と見出しに付ける名前（例: ムームー証券）")
-    r.add_argument("--stage", default="all", choices=("sell", "combo", "half", "filter", "rule", "stats", "dd", "robust", "earn", "realized", "etf2x", "etfrule", "weinstein", "rsi", "pivot", "exits", "pullback", "recover", "prio", "all"))
+    r.add_argument("--stage", default="all", choices=("sell", "combo", "half", "filter", "rule", "stats", "dd", "robust", "earn", "realized", "etf2x", "etfrule", "weinstein", "rsi", "pivot", "exits", "pullback", "recover", "prio", "slope", "all"))
     a = ap.parse_args()
     ctx = cb.setup(a.cache, with_parts=False)
     data, members, ind, days, G, end = (ctx[k] for k in ("data", "members", "ind", "days", "G", "end"))
@@ -720,6 +720,8 @@ def main():
         open(OUTDIR + "銘柄の下落率で見送る・優先する.md", "w", encoding="utf-8").write("\n".join(L) + "\n")
         print("書き出し", file=sys.stderr)
         return
+    if a.stage == "slope":
+        return slope_stage(cur_tr, base, data, build, screen_and_confirm, is_hi)
     if a.stage == "prio":
         return prio_stage(build, screen_and_confirm)
     if a.stage == "recover":
@@ -790,6 +792,102 @@ def main():
         os.makedirs(OUTDIR, exist_ok=True)
         open(out, "w", encoding="utf-8").write("\n".join(L) + "\n")
         print(f"書き出し: {out}", file=sys.stderr)
+
+
+def slope_stage(cur_tr, base, data, build, screen_and_confirm, is_hi):
+    """傾き（角度）の大きさで合図を選ぶ・優先するか（2026-10-09 ユーザーの指示「傾きの角度が大きいほど値動きが大きい。うまく使って年率を上げられないか」）。
+    傾きは合図の日（買う前の日）の値。選ぶ境目は、ルールごとに設計期間（2015〜2021年）の合図の中央値（確認期間の値は使わない）"""
+    import math
+
+    def sma(c, j, n):
+        return sum(c[j - n + 1:j + 1]) / n if j >= n - 1 else None
+
+    def reg(c, j, n=60):   # 直近n日の終値（対数）の回帰直線の傾き（年率）
+        if j < n:
+            return None
+        ys = [math.log(x) for x in c[j - n + 1:j + 1]]
+        xm, ym = (n - 1) / 2, sum(ys) / n
+        b = sum((k - xm) * (y - ym) for k, y in enumerate(ys)) / sum((k - xm) ** 2 for k in range(n))
+        return b * 252
+
+    def bbup(c, j):
+        def up(k):
+            m = sma(c, k, 20)
+            return m + 2 * (sum((x - m) ** 2 for x in c[k - 19:k + 1]) / 20) ** 0.5
+        return up(j) / up(j - 5) - 1 if j >= 25 else None
+
+    fns = {
+        "50日線の傾き（20日前からの上昇率）": lambda c, j: (sma(c, j, 50) / sma(c, j - 20, 50) - 1) if j >= 70 else None,
+        "20日線の傾き（10日前からの上昇率）": lambda c, j: (sma(c, j, 20) / sma(c, j - 10, 20) - 1) if j >= 30 else None,
+        "ボリンジャーの上のバンドの傾き（5日前からの上昇率）": bbup,
+        "トレンドライン（直近60日の回帰直線）の角度": reg,
+    }
+    names = {"V": "新高値V2", "M": "ミネルヴィニ", "B": "押し目", "C": "急落の底"}
+    key = {(t["sym"], data[t["sym"]]["date"][t["i0"]], t["rule"]): t for t in base}
+    val = {}
+    for nm, f in fns.items():
+        for t in base:
+            val[(nm, id(t))] = f(data[t["sym"]]["c"], t["i0"] - 1)
+    med = {}
+    for nm in fns:
+        for k in names:
+            xs = sorted(v for t in base if t["rule"] == k and data[t["sym"]]["date"][t["i0"]] <= is_hi
+                        for v in [val[(nm, id(t))]] if v is not None)
+            med[(nm, k)] = xs[len(xs) // 2] if xs else 0.0
+    L = []
+    w = L.append
+    w(f"---\ntype: backtest\ntitle: 傾きの大きさで選ぶ・優先する\ncreated: {dt.date.today()}\nscript: tools/backtest_retest.py --stage slope\n---\n")
+    w("# 傾き（角度）の大きさで合図を選ぶ・優先する\n")
+    w("2026-10-09、ユーザーの質問「トレンドライン・ローソク足・ボリンジャーバンドなどの傾きの角度が大きいほど値動きが大きく動く。うまく使って年率を上げられないか」から確かめた。"
+      "傾きは合図の日（買う前の日）の値。「大きい半分」「小さい半分」の境目は、ルールごとに設計期間（2015〜2021年）の合図の中央値。"
+      "後知恵なしの監視銘柄、2015年〜、今の売りのルール、4銘柄・1銘柄25%、株だけ、片道0.1%込み。\n")
+    w("## 1. 傾きの大きさ別の1回ごとの成績（全部の合図）\n")
+    avg = lambda xs: pct(sum(xs) / len(xs), 2) if xs else "—"
+    for nm in fns:
+        w(f"### {nm}\n")
+        w("| ルール | 傾きが小さい半分: 回数・勝率・1回平均 | 傾きが大きい半分: 回数・勝率・1回平均 | 一番大きい20%: 1回平均 |")
+        w("|---|---|---|---|")
+        for k in ("V", "M", "B", "C"):
+            lo, hi, rows = [], [], []
+            for t in cur_tr:
+                if t["rule"] != k:
+                    continue
+                b = key[(t["sym"], t["in"], t["rule"])]
+                v = val[(nm, id(b))]
+                if v is None:
+                    continue
+                r = t["path"][t["out"]] - 1
+                rows.append((v, r))
+                (hi if v >= med[(nm, k)] else lo).append(r)
+            rows.sort()
+            top = [r for _, r in rows[len(rows) * 4 // 5:]]
+            f_ = lambda xs: f"{len(xs)}・{pct(sum(1 for x in xs if x > 0) / len(xs), 0)}・{avg(xs)}" if xs else "—"
+            w(f"| {names[k]} | {f_(lo)} | {f_(hi)} | {avg(top)} |")
+        w("")
+    w("## 2. 資金全体（今の買い方と比べる）\n")
+    items = []
+    for nm in fns:
+        get = lambda t, nm=nm: val.get((nm, id(t)))
+        items.append((f"{nm}が大きい半分だけ買う",
+                      (lambda nm=nm, get=get: build(drop=lambda t: get(t) is None or get(t) < med[(nm, t["rule"])]))))
+        items.append((f"{nm}が小さい半分だけ買う",
+                      (lambda nm=nm, get=get: build(drop=lambda t: get(t) is None or get(t) >= med[(nm, t["rule"])]))))
+
+        def pr(sign, nm=nm, get=get):
+            out = build()
+            bmap = {(data[t["sym"]]["date"][t["i0"]], t["sym"], t["rule"]): t for t in base}
+            res = []
+            for t in out:
+                v = get(bmap[(t["in"], t["sym"], t["rule"])])
+                res.append({**t, "prio": sign * (v if v is not None else 0.0)})
+            return res
+        items.append((f"同じ日の候補を、{nm}が大きい順に買う", (lambda pr=pr: pr(-1))))
+        items.append((f"同じ日の候補を、{nm}が小さい順に買う", (lambda pr=pr: pr(1))))
+    screen_and_confirm("傾きの大きさで選ぶ・優先する", items, w)
+    w("\n- この結果はルールの条件どおりに機械的に計算したもので、Claudeによる個別銘柄の売買判断ではない。")
+    os.makedirs(OUTDIR, exist_ok=True)
+    open(OUTDIR + "傾きの大きさで選ぶ・優先する.md", "w", encoding="utf-8").write("\n".join(L) + "\n")
+    print("書き出し", file=sys.stderr)
 
 
 def prio_stage(build, screen_and_confirm):
