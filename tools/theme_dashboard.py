@@ -228,11 +228,14 @@ def main():
     w(f'<div class="row"><span class="label">買い（予約）</span><span class="pill {"good" if reserves else ""}">{html.escape(names(reserves))}</span></div>')
     w(f'<div class="row"><span class="label">様子見</span><span class="pill {"warn" if skips else ""}">{html.escape(names(skips))}</span></div>')
     w(f'<div class="row"><span class="label">売り（保有中）</span><span class="pill {"bad" if exits else ""}">{html.escape(names(exits))}</span></div>')
-    # 優先順位: 監視銘柄の候補 → テーマの外、成行（A）→ 予約（B）、RSの高い順（毎朝のツールの買う順番と同じ）。空き枠を超える分は「枠外」
+    # 優先順位: 監視銘柄の候補 → テーマの外、成行（A）→ 予約（B）、50日線の傾きが小さい順（毎朝のツールの買う順番と同じ。2026-10-09 ユーザー採用）。空き枠を超える分は「枠外」
     rows = cand_rows(scan)
-    def rs_(c):
+    def rs_(c):   # 並べ替えの値（50日線の傾き。小さいほど先。古いレポートで列がなければRSの高い順）
+        r = rows.get(c["sym"], {})
         try:
-            return float(rows.get(c["sym"], {}).get("RS", "0"))
+            if "50日線の傾き" in r:
+                return -float(r["50日線の傾き"].replace("%", "").replace("+", ""))
+            return float(r.get("RS", "0"))
         except ValueError:
             return 0.0
     held = {h["sym"] for h in rec["holdings"]}   # 保有中の銘柄は買い増ししない（theme_scan でも候補から外す）
