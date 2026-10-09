@@ -346,7 +346,7 @@ def main():
     r.add_argument("--etf", default=None, help="etf2x: 2倍ETFにする銘柄（カンマ区切り）。省略すると backtest_2x.HAS_2X")
     r.add_argument("--drag", default=None, help="etf2x: 2倍ETFの目減り（年率）。数値なら全部同じ、'measured' なら 新分析ツール/2倍ETFの対応表.json の実測（ないものは0.12）")
     r.add_argument("--tag", default="", help="etf2x: 結果のファイル名と見出しに付ける名前（例: ムームー証券）")
-    r.add_argument("--stage", default="all", choices=("sell", "combo", "half", "filter", "rule", "stats", "dd", "robust", "earn", "realized", "etf2x", "etfrule", "weinstein", "rsi", "pivot", "exits", "pullback", "recover", "all"))
+    r.add_argument("--stage", default="all", choices=("sell", "combo", "half", "filter", "rule", "stats", "dd", "robust", "earn", "realized", "etf2x", "etfrule", "weinstein", "rsi", "pivot", "exits", "pullback", "recover", "prio", "all"))
     a = ap.parse_args()
     ctx = cb.setup(a.cache, with_parts=False)
     data, members, ind, days, G, end = (ctx[k] for k in ("data", "members", "ind", "days", "G", "end"))
@@ -720,6 +720,8 @@ def main():
         open(OUTDIR + "銘柄の下落率で見送る・優先する.md", "w", encoding="utf-8").write("\n".join(L) + "\n")
         print("書き出し", file=sys.stderr)
         return
+    if a.stage == "prio":
+        return prio_stage(build, screen_and_confirm)
     if a.stage == "recover":
         return recover_stage(cur_tr)
     if a.stage == "pullback":
@@ -788,6 +790,33 @@ def main():
         os.makedirs(OUTDIR, exist_ok=True)
         open(out, "w", encoding="utf-8").write("\n".join(L) + "\n")
         print(f"書き出し: {out}", file=sys.stderr)
+
+
+def prio_stage(build, screen_and_confirm):
+    """同じ日の候補を、ルールの期待値（1回平均）の高い順に買うか、ミネルヴィニを外すか（2026-10-09 ユーザーの指示。9/29は売りの改善前のルールで確かめた）"""
+    ev_rank = {"V": 0, "C": 1, "B": 2, "M": 3}   # ルールごとの成績.md の1回平均の順（V 2.08%・C 2.07%・B 1.51%・M 0.07%）
+
+    def ranked(trs):
+        return [{**t, "prio": ev_rank[t["rule"]]} for t in trs]
+
+    def rev(trs):   # 比べるため、逆の順（期待値の低い順）も
+        return [{**t, "prio": 3 - ev_rank[t["rule"]]} for t in trs]
+    items = [("同じ日の候補を、ルールの期待値の高い順に買う（新高値V2→急落の底→押し目→ミネルヴィニ）", lambda: ranked(build())),
+             ("（比べるため）期待値の低い順に買う（ミネルヴィニ→押し目→急落の底→新高値V2）", lambda: rev(build())),
+             ("ミネルヴィニを外す", lambda: build(drop=lambda t: t["rule"] == "M")),
+             ("ミネルヴィニを外し、期待値の高い順に買う", lambda: ranked(build(drop=lambda t: t["rule"] == "M")))]
+    L = []
+    w = L.append
+    w(f"---\ntype: backtest\ntitle: 期待値の高いルールを優先する・ミネルヴィニを外す（今のルール）\ncreated: {dt.date.today()}\nscript: tools/backtest_retest.py --stage prio\n---\n")
+    w("# 期待値の高いルールを優先する・ミネルヴィニを外す（今のルールでのやり直し）\n")
+    w("2026-10-09、ユーザーの質問「期待値が高い銘柄を優先的に買えば成績が良くなるのでは」から、今のルール（売りの改善後）で確かめ直した。"
+      "今のルールの比べる元は、同じ日の候補をランダムな順に買う形（乱数で何通りも試す）。9/29に売りの改善前のルールで試したときは、どの順でも差はランダムの幅の中だった（`ミネルヴィニを外す確認と優先順位.md`）。"
+      "後知恵なしの監視銘柄、2015年〜、4銘柄・1銘柄25%、株だけ、片道0.1%込み。\n")
+    screen_and_confirm("候補の優先順位とミネルヴィニ", items, w)
+    w("\n- この結果はルールの条件どおりに機械的に計算したもので、Claudeによる個別銘柄の売買判断ではない。")
+    os.makedirs(OUTDIR, exist_ok=True)
+    open(OUTDIR + "期待値の高いルールを優先する・ミネルヴィニを外す.md", "w", encoding="utf-8").write("\n".join(L) + "\n")
+    print("書き出し", file=sys.stderr)
 
 
 def recover_stage(cur_tr):
