@@ -101,7 +101,9 @@ EXITS = [
 ]
 
 
-def simulate(data, spy, days, cand_by_month, dip, stop, max_days, seed):
+def simulate(data, spy, days, cand_by_month, dip, stop, max_days, seed, cash_px=None):
+    """cash_px: 待っている現金を置く先の日足 {日付: 価格}（SPY・短期国債ETFなど）。None なら利息0%。
+    置き場所の値上がりへの税は、簡単のため考えない"""
     rnd = random.Random(seed)
     pos = {s: {d: k for k, d in enumerate(v["date"])} for s, v in data.items()}
     cash = CAPITAL
@@ -114,6 +116,8 @@ def simulate(data, spy, days, cand_by_month, dip, stop, max_days, seed):
     n_onk = 0
     month_cands = []
     for t, day in enumerate(days):
+        if cash_px and t > 0 and cash > 0 and day in cash_px and days[t - 1] in cash_px:
+            cash *= cash_px[day] / cash_px[days[t - 1]]
         if day[:7] in cand_by_month and (t == 0 or days[t - 1][:7] != day[:7]):
             month_cands = cand_by_month[day[:7]]
         # 1) 寄り付きで買う

@@ -28,8 +28,10 @@ REV_TAGS = ("Revenues", "RevenueFromContractWithCustomerExcludingAssessedTax", "
 CONCEPTS = {"rev": REV_TAGS, "ni": ("NetIncomeLoss",), "eps": ("EarningsPerShareDiluted", "EarningsPerShareBasic")}
 
 
-def cmd_fetch(a):
-    members, data = load_universe(a.cache)
+def cmd_fetch(a, syms=None):
+    """syms を渡すとその銘柄だけ取る（S&P500の外の銘柄用）。保存先は a.cache/onkabu_fund"""
+    if syms is None:
+        members, data = load_universe(a.cache)
     out_dir = os.path.join(a.cache, "onkabu_fund")
     os.makedirs(out_dir, exist_ok=True)
     tick = json.loads(ob.sec_get("https://www.sec.gov/files/company_tickers.json"))
@@ -71,7 +73,7 @@ def cmd_fetch(a):
         json.dump(res, open(path, "w"))
         return True
 
-    syms = sorted(data)
+    syms = sorted(syms if syms is not None else data)
     with ThreadPoolExecutor(2) as ex:
         list(ex.map(one, syms))
     n = {k: sum(1 for s in syms if json.load(open(os.path.join(out_dir, s + ".json"))).get(k)) for k in CONCEPTS}
