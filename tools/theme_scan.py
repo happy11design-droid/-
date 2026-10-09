@@ -35,7 +35,17 @@ import backtest_crash as bcr
 import backtest_compare2 as c2
 
 SLOTS, STOP = 4, 0.15   # 同時保有4銘柄・1銘柄に資金÷4（2026-09-29 ユーザー決定。以前はリスク2%→13.3%×7銘柄）
-BUY_USD = 3000          # 1銘柄に買う金額（資金12,000ドル÷4。2026-10-05 試用期間のため18,000→12,000ドル）。株数の目安に使う。資金が変わったらここを直す（2026-10-04 ユーザーの指示）
+def buy_usd():
+    """1銘柄に買う金額＝（運用開始の資金＋売買記録.md の確定した損益）÷ SLOTS。バックテストと同じく、損が出れば小さく・利益が出れば大きくなる
+    （2026-10-09 ユーザーの指示。以前は3,000ドル固定）。運用開始の資金は theme_review.CAPITAL（12,000ドル。余剰の現金は入れない）"""
+    try:
+        import theme_review as tr_   # theme_review は theme_scan を読み込むので、ここで読む
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "新分析ツール", "売買記録.md")
+        done = [t for t in tr_.load_real(path) if t["sell_date"]]
+        return int((tr_.CAPITAL + sum(t["shares"] * (t["sell"] - t["buy"]) for t in done)) / SLOTS)
+    except Exception as e:   # 読めなければ運用開始の資金で計算する
+        print(f"売買記録を読めないため、運用開始の資金で1銘柄の金額を出す: {e}", file=sys.stderr)
+        return 12000 // SLOTS
 NDX_URL = "https://api.nasdaq.com/api/quote/list-type/nasdaq100"
 OUT_MAX = 5   # 監視外の注目銘柄（ニュースを調べる）はRSの高い順にこの件数まで
 V2_TOP = 10   # 新高値V2を当てる銘柄: 監視銘柄のうちその日のRSが上位この数まで
@@ -240,6 +250,7 @@ def etf2x_of(sym):
 def shares_note(x, ex_):
     """BUY_USD 分の株数と購入金額の目安。値段は、予約注文ならその価格、寄り付きの成行なら今日の終値（寄り付きの値段で変わる）。
     2倍ETFで買う銘柄は、注文の価格（逆指値・指値・指値の上限）もETFの値段に直して書く（2026-10-04 ユーザーの指示）"""
+    BUY_USD = buy_usd()
     m = re.match(r"(逆指値買い|指値買い) ([\d.]+)", x["order"])
     p = float(m.group(2)) if m else x["close"]
     cap = re.search(r"指値の上限 ([\d.]+)", x["order"])

@@ -26,7 +26,7 @@ import backtest_crash as bcr
 import backtest_compare2 as c2
 from fundamentals import text as fund_text
 from backtest_lib import MEMBERS_URL, curl, rsi_wilder
-from theme_scan import BUY_USD, cut, earnings_date, etf2x_of, fetch_daily, pct, shares_note
+from theme_scan import buy_usd, cut, earnings_date, etf2x_of, fetch_daily, pct, shares_note
 
 STOP = 0.15
 
@@ -280,7 +280,7 @@ SHARES_HEAD = "## 株数の目安"   # theme_single.sh send はこの見出し�
 
 
 def shares_section(sym, close, lines):
-    """合図（A・B）が出ているルールごとに、BUY_USD で買える株数の目安（2026-10-04 ユーザーの指示）。参考のワインスタイン10週は除く"""
+    """合図（A・B）が出ているルールごとに、buy_usd()（資金÷4）で買える株数の目安（2026-10-04 ユーザーの指示）。参考のワインスタイン10週は除く"""
     out, sec = [], ""
     ex_ = etf2x_of(sym)
     for l in lines:
@@ -291,7 +291,7 @@ def shares_section(sym, close, lines):
             out.append(f"- {sec}（{m.group(1)}）: {shares_note({'order': m.group(2), 'close': close}, ex_).lstrip('。')}")
     if not out:
         return []
-    return [f"\n{SHARES_HEAD}（{BUY_USD:,}ドル分。著者には渡さない）\n"] + out + (
+    return [f"\n{SHARES_HEAD}（{buy_usd():,}ドル分＝資金÷4。著者には渡さない）\n"] + out + (
         [f"- 2倍ETFで買う銘柄（{ex_[0]}）なので、ETFの株数。合図・損切り・手じまいは元の株 {sym} の値段で判定する"] if ex_ else [])
 
 
