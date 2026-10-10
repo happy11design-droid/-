@@ -181,6 +181,9 @@ def upgrade_trades(trades, cache=DEFAULT_CACHE):
 
 # ---------- 組み合わせの再現 ----------
 
+STATS = {}
+
+
 class Account:
     """1つの口座（共有なら1つ、分けるなら2つ）。cash は待っている現金（QQQに置くなら QQQ の値動きで増減）"""
 
@@ -194,7 +197,11 @@ class Account:
 
 
 def run(feats, new_trades, ind, days, dbl_sig, mode, seed=0, cash_px=None, split=None, fund="free", slots_d=3, slots_n=4,
-        use_new=True, use_dbl=True, capital=6000.0, dedup=True):
+        use_new=True, use_dbl=True, capital=6000.0, dedup=True, dbl_frac=None, adopt=False, lev_info=None):
+    """dbl_frac: 倍増ツールの1銘柄の金額（資金に対する割合）。None なら 1/slots_d。
+    adopt: 倍増ツールの合図の銘柄を新分析ツールで持っていたら、売らずに（2倍ETFならETFのまま）倍増ツールの売りのルールに切り替える。
+      2倍・−30%は、その持ち株の金額（新分析ツールで買った額に対して）で判定し、189取引日は切り替えた日から数える。
+    lev_info: {銘柄: (倍率, 1日の目減り)}（2倍ETFの銘柄）。結果の数（見送り・重なり）は STATS に入る"""
     """dedup: 同じ銘柄は倍増ツールを優先（新分析ツールで持っていたら倍増ツールに移し、新分析ツールは倍増ツールの銘柄を買わない）。
     False なら両方のツールが同じ銘柄を別々に持ってよい"""
     """mode: "pool"（同じ資金。倍増ツールを優先）か "split"（split＝倍増ツールの割合で口座を分ける）
@@ -214,6 +221,12 @@ def run(feats, new_trades, ind, days, dbl_sig, mode, seed=0, cash_px=None, split
     curve, rcurve = [], []
     n_onk = 0
     year = days[0][:4]
+    lev_info = lev_info or {}
+    frac = dbl_frac if dbl_frac is not None else 1 / slots_d
+    adopted = {}   # sym -> {cost, v, lev, fee, t}（倍増ツールのルールに切り替えた新分析ツールの持ち株）
+    onk_v = []     # [{sym, v, lev, fee, cost}]（切り替えた持ち株が2倍になった後の恩株）
+    STATS.clear()
+    STATS.update({"signals": 0, "skipped": 0, "partial": 0, "overlap": 0, "adopted": 0})
 
     def px(s, d, k="c"):
         i = pos[s].get(d) if s in pos else None
@@ -242,9 +255,18 @@ def run(feats, new_trades, ind, days, dbl_sig, mode, seed=0, cash_px=None, split
         if use_dbl:
             for s in pending:
                 o = px(s, d, "o")
-                if o is None or s in A.dbl or len(A.dbl) >= slots_d:
+                if o is None or s in A.dbl or s in adopted or len(A.dbl) + len(adopted) >= slots_d:
                     continue
-                size = work(A) / slots_d
+                STATS["signals"] += 1
+                if adopt and s in B.new:
+                    h = B.new.pop(s)
+                    lev, fee = lev_info.get(s, (1, 0.0))
+                    adopted[s] = {"cost": h["size"], "v": h["size"] * h["v"], "lev": lev, "fee": fee, "t": t}
+                    STATS["adopted"] += 1
+                    continue
+                if s in B.new:
+                    STATS["overlap"] += 1
+                size = (work(A) + sum(x["v"] for x in adopted.values())) * frac
                 if dedup and s in A.new:        # 同じ銘柄を新分析ツールで持っていたら、倍増ツールに移す（寄り付きの値で）
                     close_new(A, s, d)
                 if A.cash < size and mode == "pool" and fund == "sell":
@@ -254,7 +276,10 @@ def run(feats, new_trades, ind, days, dbl_sig, mode, seed=0, cash_px=None, split
                         close_new(A, s2, d)
                 amt = min(A.cash, size)
                 if amt < 50:
+                    STATS["skipped"] += 1
                     continue
+                if amt < size * 0.5:
+                    STATS["partial"] += 1
                 A.dbl[s] = {"sh": amt / (o * (1 + COST)), "px": o * (1 + COST), "t": t}
                 A.cash -= amt
             pending = []
@@ -312,10 +337,32 @@ def run(feats, new_trades, ind, days, dbl_sig, mode, seed=0, cash_px=None, split
                     A.cash += p["sh"] * c * (1 - COST)
                     A.realized += p["sh"] * (c * (1 - COST) - p["px"])
                     del A.dbl[s]
+            # 切り替えた持ち株（倍増ツールのルール）
+            for s in list(adopted):
+                x = adopted[s]
+                c, i = px(s, d), pos[s].get(d) if s in pos else None
+                if c is not None and i:
+                    r = c / feats[s]["c"][i - 1] - 1
+                    x["v"] = max(0.0, x["v"] * (1 + x["lev"] * r) * (1 - x["fee"]))
+                if x["v"] >= 2 * x["cost"]:
+                    sv = x["v"] * SELL_AT_2X
+                    A.cash += sv * (1 - COST)
+                    A.realized += sv * (1 - COST) - SELL_AT_2X * x["cost"]
+                    onk_v.append({"sym": s, "v": x["v"] - sv, "lev": x["lev"], "fee": x["fee"], "cost": x["cost"] * (1 - SELL_AT_2X)})
+                    n_onk += 1
+                    del adopted[s]
+                elif x["v"] <= 0.7 * x["cost"] or t - x["t"] >= 189 or (c is None and d > feats[s]["date"][-1]):
+                    A.cash += x["v"] * (1 - COST)
+                    A.realized += x["v"] * (1 - COST) - x["cost"]
+                    del adopted[s]
+            for x in onk_v:
+                c, i = px(x["sym"], d), pos[x["sym"]].get(d) if x["sym"] in pos else None
+                if c is not None and i:
+                    x["v"] = max(0.0, x["v"] * (1 + x["lev"] * (c / feats[x["sym"]]["c"][i - 1] - 1)) * (1 - x["fee"]))
             # 合図（翌日の寄り付きで買う。6カ月の上昇が大きい順）
-            free = slots_d - len(A.dbl)
+            free = slots_d - len(A.dbl) - len(adopted)
             if free > 0:
-                hits = [s for s in dbl_sig.get(d, ()) if s not in A.dbl]
+                hits = [s for s in dbl_sig.get(d, ()) if s not in A.dbl and s not in adopted]
                 hits.sort(key=lambda s: -feats[s]["r126"][pos[s][d]])
                 pending = hits[:free]
         eq = 0.0
@@ -327,12 +374,14 @@ def run(feats, new_trades, ind, days, dbl_sig, mode, seed=0, cash_px=None, split
             for s, sh in acc.onk.items():
                 c = px(s, d)
                 eq += sh * (c if c is not None else feats[s]["c"][-1])
+        eq += sum(x["v"] for x in adopted.values()) + sum(x["v"] for x in onk_v)
         curve.append(eq)
         # 確定した損益だけ: 持っている株・恩株は買った額のまま（恩株は2倍で売った残りの株の買値）
         req = 0.0
         for acc in accts:
             req += acc.cash + sum(h["size"] for h in acc.new.values()) + sum(p["sh"] * p["px"] for p in acc.dbl.values())
             req += sum(acc.onk_cost.get(s, 0.0) for s in acc.onk)
+        req += sum(x["cost"] for x in adopted.values()) + sum(x["cost"] for x in onk_v)
         rcurve.append(req)
     return curve, n_onk, rcurve
 
@@ -371,6 +420,14 @@ VARIANTS = [
 ]
 
 
+VARIANTS18 = [("新分析ツールだけ（余る現金はQQQ）", dict(mode="pool", use_dbl=False, cash="QQQ")),
+              ("倍増ツールだけ（余る現金はQQQ）", dict(mode="pool", use_new=False, cash="QQQ"))]
+for _n, _f in ((4, 1 / 3), (5, 1 / 3), (6, 1 / 3), (4, 1 / 4), (5, 1 / 4), (6, 1 / 4), (4, 1 / 5)):
+    for _ad in (False, True):
+        VARIANTS18.append((f"新分析 資金÷{_n}・倍増 資金÷{round(1 / _f)}・" + ("同じ銘柄は新分析の持ち株を倍増のルールに切り替え" if _ad else "同じ銘柄も両方で持つ"),
+                           dict(mode="pool", fund="free", cash="QQQ", dedup=False, slots_n=_n, dbl_frac=_f, adopt=_ad)))
+
+
 def cmd_run(a):
     import backtest_onkabu_search as bs_
     import onkabu_lib as ol
@@ -405,7 +462,13 @@ def cmd_run(a):
             c = [d0["c"][d0["date"].index(x)] for x in days]
             bench[(name, sym)] = metrics(c, days)
     rows = []
-    for label, kw in (VARIANTS[-a.last:] if a.last else VARIANTS):
+    VS = VARIANTS18 if a.set == "18000" else VARIANTS
+    root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+    tab = json.load(open(os.path.join(root, "新分析ツール", "2倍ETFの対応表.json"), encoding="utf-8"))
+    lev_info = {u: (2, -x["drag"] / 252) for u, x in tab.items() if isinstance(x, dict) and "drag" in x and u in has2x}
+    cap = 18000.0 if a.set == "18000" else 6000.0
+    stats_rows = []
+    for label, kw in (VS[-a.last:] if a.last else VS):
         cells = []
         for name, lo, hi, ex in CONDS:
             days = [d for d in spy["date"] if lo <= d <= hi]
@@ -413,9 +476,12 @@ def cmd_run(a):
             res = []
             for seed in range(a.seeds):
                 kw2 = {k: v for k, v in kw.items() if k != "cash"}
-                curve, n_onk, rcurve = run(feats, nts, ind, days, sbd[ex], seed=seed, cash_px=qqq if kw.get("cash") == "QQQ" else None, **kw2)
+                curve, n_onk, rcurve = run(feats, nts, ind, days, sbd[ex], seed=seed, cash_px=qqq if kw.get("cash") == "QQQ" else None,
+                                           capital=cap, lev_info=lev_info, **kw2)
                 c, m = metrics(curve, days)
                 res.append((c, m, n_onk, metrics(rcurve, days)[1]))
+                if seed == 0 and name == "2015年〜 NVDAを除く" and kw.get("use_new", True) and kw.get("use_dbl", True):
+                    stats_rows.append((label, dict(STATS)))
             cells.append(tuple(st.median(r[k] for r in res) for k in range(4)))
         rows.append((label, cells))
         print(label, [f"{c:.1%}/{m:.0%}/{rm:.0%}" for c, m, _, rm in cells], flush=True)
@@ -442,6 +508,12 @@ def cmd_run(a):
     w("| （比べる相手）QQQを持ち続ける | " + " | ".join(f"{bench[(c[0], 'QQQ')][0]:.1%}（{bench[(c[0], 'QQQ')][1]:.0%}）" for c in CONDS) + " |")
     for label, cells in rows:
         w(f"| {label} | " + " | ".join(f"{c:.1%}（{m:.0%}・確定{rm:.0%}）" for c, m, _, rm in cells) + " |")
+    if stats_rows:
+        w("\n## 倍増ツールの合図の扱い（2015年〜 NVDAを除く・乱数1通り）\n")
+        w("| 組み合わせ | 倍増ツールの合図（枠が空いていた回数） | 現金がなく見送り | 半分未満しか買えず | 同じ銘柄を両方で持った | 新分析の持ち株を倍増のルールに切り替え |")
+        w("|---|---|---|---|---|---|")
+        for label, st_ in stats_rows:
+            w(f"| {label} | {st_['signals']} | {st_['skipped']} | {st_['partial']} | {st_['overlap']} | {st_['adopted']} |")
     text = "\n".join(out) + "\n"
     if a.out:
         open(a.out, "w").write(text)
@@ -455,6 +527,7 @@ def main():
     ap.add_argument("--out")
     ap.add_argument("--summary")
     ap.add_argument("--last", type=int, default=0, help="最後のN通りだけ計算する")
+    ap.add_argument("--set", default="", help="18000: 資金18,000ドルで、1銘柄の金額の決め方と切り替えの形を比べる")
     ap.add_argument("--form", default="current", choices=("current", "old"), help="新分析ツールの形。current: 50日線の傾きが小さい順・2倍ETF（今の形）")
     a = ap.parse_args()
     {"newtrades": cmd_newtrades, "run": cmd_run}[a.cmd](a)
