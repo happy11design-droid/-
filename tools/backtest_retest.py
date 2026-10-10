@@ -346,7 +346,7 @@ def main():
     r.add_argument("--etf", default=None, help="etf2x: 2倍ETFにする銘柄（カンマ区切り）。省略すると backtest_2x.HAS_2X")
     r.add_argument("--drag", default=None, help="etf2x: 2倍ETFの目減り（年率）。数値なら全部同じ、'measured' なら 新分析ツール/2倍ETFの対応表.json の実測（ないものは0.12）")
     r.add_argument("--tag", default="", help="etf2x: 結果のファイル名と見出しに付ける名前（例: ムームー証券）")
-    r.add_argument("--stage", default="all", choices=("sell", "combo", "half", "filter", "rule", "stats", "dd", "robust", "earn", "realized", "etf2x", "etfrule", "weinstein", "rsi", "pivot", "exits", "pullback", "recover", "prio", "slope", "slope2", "slope3", "swap", "premium", "hot", "all"))
+    r.add_argument("--stage", default="all", choices=("sell", "combo", "half", "filter", "rule", "stats", "dd", "robust", "earn", "realized", "etf2x", "etfrule", "weinstein", "rsi", "pivot", "exits", "pullback", "recover", "prio", "slope", "slope2", "slope3", "swap", "premium", "hot", "hotyear", "all"))
     a = ap.parse_args()
     ctx = cb.setup(a.cache, with_parts=False)
     data, members, ind, days, G, end = (ctx[k] for k in ("data", "members", "ind", "days", "G", "end"))
@@ -720,6 +720,8 @@ def main():
         open(OUTDIR + "銘柄の下落率で見送る・優先する.md", "w", encoding="utf-8").write("\n".join(L) + "\n")
         print("書き出し", file=sys.stderr)
         return
+    if a.stage == "hotyear":
+        return hotyear_stage(base, data, build, port, days)
     if a.stage == "hot":
         return hot_stage(base, data, build, ev, rec, days)
     if a.stage == "premium":
@@ -865,6 +867,62 @@ def swap_port(trs, seed, lo, hi, ind, days, prem=None, th=0.0, stats=None, curve
             curve.append(eq)
     yrs = (dt.date.fromisoformat(dd[-1]) - dt.date.fromisoformat(dd[0])).days / 365.25
     return eq ** (1 / yrs) - 1, mdd
+
+
+def hotyear_stage(base, data, build, port, days):
+    """過熱した順張りの合図を見送る形の、年ごとの成績（2026-10-10 ユーザーの指示）。乱数50通り（5000〜5049）の中央値"""
+    sma = lambda c, j, n: sum(c[j - n + 1:j + 1]) / n
+    rsis = {}
+    def hot(t):
+        s, j = data[t["sym"]], t["i0"] - 1
+        if t["sym"] not in rsis:
+            rsis[t["sym"]] = rsi_wilder(s["c"], 14)
+        r = rsis[t["sym"]][j]
+        return t["rule"] in ("V", "M") and s["bb_up"][j] is not None and s["c"][j] > s["bb_up"][j] and r is not None and r > 70
+    def s50(sym, j):
+        c = data[sym]["c"]
+        return sma(c, j, 50) / sma(c, j - 20, 50) - 1 if j >= 70 else 0.0
+    bmap = {(data[t["sym"]]["date"][t["i0"]], t["sym"], t["rule"]): t for t in base}
+    prio = lambda trs: [{**t, "prio": s50(t["sym"], bmap[(t["in"], t["sym"], t["rule"])]["i0"] - 1)} for t in trs]
+    hot_ids = {id(t) for t in base if hot(t)}
+    forms = [("今のルール", prio(build())), ("過熱した合図は見送る", prio(build(drop=lambda t: id(t) in hot_ids)))]
+    yrs = sorted({d[:4] for d in days})
+    med = lambda xs: sorted(xs)[len(xs) // 2]
+    rows = {}
+    for nm, trs in forms:
+        per = {y: [] for y in yrs}
+        for k in range(50):
+            curve = []
+            port(trs, 5000 + k, days[0], days[-1], curve=curve)
+            ends = {}
+            for d, e in zip(days, curve):
+                ends[d[:4]] = e
+            prev = 1.0
+            for y in yrs:
+                if y in ends:
+                    per[y].append(ends[y] / prev - 1)
+                    prev = ends[y]
+        rows[nm] = {y: med(v) for y, v in per.items() if v}
+    nh = {y: sum(1 for t in base if id(t) in hot_ids and data[t["sym"]]["date"][t["i0"]][:4] == y) for y in yrs}
+    L = []
+    w = L.append
+    w(f"---\ntype: backtest\ntitle: 過熱した順張りの合図を見送る形の年ごとの成績\ncreated: {dt.date.today()}\nscript: tools/backtest_retest.py --stage hotyear\n---\n")
+    w("# 過熱した順張りの合図（+2σより上かつRSI(14)>70）を見送る形の、年ごとの成績\n")
+    w("今のルール（同じ日の候補は50日線の傾きが小さい順）と比べる。株だけ、4銘柄・1銘柄25%、乱数50通りの中央値。2026年は10月まで。\n")
+    w("| 年 | 今のルール | 過熱した合図は見送る | 差 | 過熱した合図の数 |")
+    w("|---|---|---|---|---|")
+    better = 0
+    for y in yrs:
+        a, b = rows["今のルール"].get(y), rows["過熱した合図は見送る"].get(y)
+        if a is None or b is None:
+            continue
+        better += b > a
+        w(f"| {y} | {pct(a, 0)} | {pct(b, 0)} | {(b - a) * 100:+.0f}ポイント | {nh[y]} |")
+    w(f"\n- 見送る方が良かった年: {better} / {len(yrs)}")
+    w("- この結果はルールの条件どおりに機械的に計算したもので、Claudeによる個別銘柄の売買判断ではない。")
+    os.makedirs(OUTDIR, exist_ok=True)
+    open(OUTDIR + "過熱した順張りの合図を見送る形の年ごとの成績.md", "w", encoding="utf-8").write("\n".join(L) + "\n")
+    print("書き出し", file=sys.stderr)
 
 
 def hot_stage(base, data, build, ev, rec, days):
