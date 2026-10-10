@@ -346,7 +346,7 @@ def main():
     r.add_argument("--etf", default=None, help="etf2x: 2倍ETFにする銘柄（カンマ区切り）。省略すると backtest_2x.HAS_2X")
     r.add_argument("--drag", default=None, help="etf2x: 2倍ETFの目減り（年率）。数値なら全部同じ、'measured' なら 新分析ツール/2倍ETFの対応表.json の実測（ないものは0.12）")
     r.add_argument("--tag", default="", help="etf2x: 結果のファイル名と見出しに付ける名前（例: ムームー証券）")
-    r.add_argument("--stage", default="all", choices=("sell", "combo", "half", "filter", "rule", "stats", "dd", "robust", "earn", "realized", "etf2x", "etfrule", "weinstein", "rsi", "pivot", "exits", "pullback", "recover", "prio", "slope", "slope2", "slope3", "swap", "premium", "hot", "hotyear", "all"))
+    r.add_argument("--stage", default="all", choices=("sell", "combo", "half", "filter", "rule", "stats", "dd", "robust", "earn", "realized", "etf2x", "etfrule", "weinstein", "rsi", "pivot", "exits", "pullback", "recover", "prio", "slope", "slope2", "slope3", "swap", "premium", "hot", "hotyear", "ideas", "all"))
     a = ap.parse_args()
     ctx = cb.setup(a.cache, with_parts=False)
     data, members, ind, days, G, end = (ctx[k] for k in ("data", "members", "ind", "days", "G", "end"))
@@ -720,6 +720,8 @@ def main():
         open(OUTDIR + "銘柄の下落率で見送る・優先する.md", "w", encoding="utf-8").write("\n".join(L) + "\n")
         print("書き出し", file=sys.stderr)
         return
+    if a.stage == "ideas":
+        return ideas_stage(cur_tr, base, data, build, ind, days, is_hi, oos_lo, ctx, G, from_gen, a.cache)
     if a.stage == "hotyear":
         return hotyear_stage(base, data, build, port, days)
     if a.stage == "hot":
@@ -867,6 +869,169 @@ def swap_port(trs, seed, lo, hi, ind, days, prem=None, th=0.0, stats=None, curve
             curve.append(eq)
     yrs = (dt.date.fromisoformat(dd[-1]) - dt.date.fromisoformat(dd[0])).days / 365.25
     return eq ** (1 / yrs) - 1, mdd
+
+
+def ideas_stage(cur_tr, base, data, build, ind, days, is_hi, oos_lo, ctx, G, from_gen, cache):
+    """効率を上げる案（2026-10-10 ユーザーの指示）: ①待っている現金をQQQに置く ②QQQの短期の逆張り（待っている現金で）
+    ③決算後のドリフト（空いた枠で買う新しいルール）。今の運用（50日線の傾きが小さい順・2倍ETF込み）を土台に、資金全体で比べる"""
+    import json
+    from backtest_lib import load_prices
+    sma = lambda c, j, n: sum(c[j - n + 1:j + 1]) / n
+    def s50(sym, j):
+        c = data[sym]["c"]
+        return sma(c, j, 50) / sma(c, j - 20, 50) - 1 if j >= 70 else 0.0
+    # ③ 決算後のドリフト: 決算の反応の日（決算日かその翌日）に、寄り付きが前日の終値より5%以上高く、陽線で、出来高が50日平均の2倍以上 → 翌日の寄り付きで買う。
+    #    手じまいは引けで50日線割れ・損切り15%・最長40取引日
+    earn = json.load(open(os.path.join(cache, "earnings.json"), encoding="utf-8"))
+    edays = {sym: {x[0] for x in v} for sym, v in earn.items()}
+    def E_pead(i, s):
+        sym = s.get("_sym")
+        ed = edays.get(sym)
+        if not ed or i < 1:
+            return None
+        if s["date"][i] not in ed and s["date"][i - 1] not in ed:
+            return None
+        gap = s["o"][i] / s["c"][i - 1] - 1
+        v50 = s["vol50"][i - 1] if s.get("vol50") else None
+        if gap >= 0.05 and s["c"][i] >= s["o"][i] and v50 and s["v"][i] >= 2 * v50:
+            return -gap
+        return None
+    for sym, s in data.items():
+        s["_sym"] = sym
+    pead = from_gen(G(E_pead, ctx["below50"], ctx["ok_rot"], STOP, 40), "E", prio=1)
+    print("決算後のドリフトの合図", len(pead), file=sys.stderr)
+    bmap = {(data[t["sym"]]["date"][t["i0"]], t["sym"], t["rule"]): t for t in base + pead}
+    def prio(trs):
+        out = []
+        for t in trs:
+            b = bmap.get((t["in"], t["sym"], t["rule"]))
+            v = s50(t["sym"], b["i0"] - 1) if b else 0.0
+            out.append({**t, "prio": (1 if t["rule"] == "E" else 0, v)})
+        return out
+    tab = json.load(open(os.path.join(os.path.dirname(OUTDIR.rstrip("/")), "2倍ETFの対応表.json"), encoding="utf-8"))
+    drag = {u: -x["drag"] for u, x in tab.items() if isinstance(x, dict) and "drag" in x}
+    HAS = {u for u, d in drag.items() if d < 0.15}
+    def to2x(trs):
+        out = []
+        for t in trs:
+            if t["sym"] not in HAS:
+                out.append(t)
+                continue
+            fee = drag[t["sym"]] / 252
+            e, prev, pv = 1 - COST, 1 - COST, {}
+            for d in sorted(t["path"]):
+                g_ = t["path"][d]
+                e = max(0.0, e * (1 + 2 * (g_ / prev - 1)) * (1 - fee))
+                prev = g_
+                pv[d] = e
+            out.append({**t, "path": pv})
+        return out
+    tool = to2x(prio(build()))
+    tool_e = to2x(prio(build(add=pead)))
+    # QQQの日ごとの値動き（配当込み）と、短期の逆張りの合図（引けで RSI(2)≦10 かつ 200日線より上 → 翌日から持つ、引けで5日線より上になったら翌日から持たない）
+    q = load_prices(cache, "QQQ")
+    qc, qd = q["c"], q["date"]
+    qret = {qd[k]: qc[k] / qc[k - 1] - 1 for k in range(1, len(qc))}
+    r2 = rsi_wilder(qc, 2)
+    hold, on = {}, False
+    for k in range(200, len(qc) - 1):
+        if not on and r2[k] is not None and r2[k] <= 10 and qc[k] > sma(qc, k, 200):
+            on = True
+        elif on and qc[k] > sma(qc, k, 5):
+            on = False
+        hold[qd[k + 1]] = on
+    mr_days = sum(1 for d in days if hold.get(d))
+    def ret_q(lev, only_signal):
+        r = {}
+        for d in days:
+            x = qret.get(d, 0.0)
+            if only_signal and not hold.get(d):
+                x = 0.0
+            r[d] = (lev * x - (0.0095 / 252 if lev == 2 else 0.0)) if (not only_signal or hold.get(d)) else 0.0
+        return r
+    R_qqq, R_mr, R_mr2 = ret_q(1, False), ret_q(1, True), ret_q(2, True)
+    def sim(trs, seed, lo, hi, cret=None):
+        dd = [d for d in days if lo <= d <= hi]
+        by_in = {}
+        for t in trs:
+            if lo <= t["in"] and t["out"] <= hi:
+                by_in.setdefault(t["in"], []).append(t)
+        rnd = random.Random(seed)
+        cash, held, peak, mdd, eq = 1.0, [], 1.0, 0.0, 1.0
+        for d in dd:
+            if cret:
+                cash *= 1 + cret.get(d, 0.0)
+            still = []
+            for h in held:
+                v = h["t"]["path"].get(d)
+                if v is not None:
+                    h["v"] = v
+                if h["t"]["out"] == d:
+                    cash += h["size"] * h["v"]
+                else:
+                    still.append(h)
+            held = still
+            eq = cash + sum(h["size"] * h["v"] for h in held)
+            for t in sorted(by_in.get(d, []), key=lambda t: (t["prio"], rnd.random())):
+                if any(h["t"]["sym"] == t["sym"] for h in held):
+                    continue
+                if len(held) >= SLOTS:
+                    break
+                if sum(1 for h in held if ind.get(h["t"]["sym"]) == ind.get(t["sym"])) >= 2:
+                    continue
+                size = min(eq / SLOTS, cash)
+                if size <= 0:
+                    break
+                cash -= size
+                v0 = t["path"].get(d, 1.0)
+                if t["out"] == d:
+                    cash += size * v0
+                    continue
+                held.append({"t": t, "size": size, "v": v0})
+            eq = cash + sum(h["size"] * h["v"] for h in held)
+            peak = max(peak, eq)
+            mdd = max(mdd, 1 - eq / peak)
+        yrs = (dt.date.fromisoformat(dd[-1]) - dt.date.fromisoformat(dd[0])).days / 365.25
+        return eq ** (1 / yrs) - 1, mdd
+    forms = [("新分析ツールだけ（待っている現金は現金のまま＝今）", tool, None),
+             ("① 待っている現金をQQQに置く", tool, R_qqq),
+             ("② 待っている現金で、QQQの短期の逆張り（合図のときだけQQQ）", tool, R_mr),
+             ("② 同じ・2倍（QLD相当）", tool, R_mr2),
+             ("③ 決算後のドリフトを、空いた枠で買う新しいルールとして足す", tool_e, None),
+             ("③＋① 決算後のドリフト＋待っている現金をQQQ", tool_e, R_qqq),
+             ("③＋② 決算後のドリフト＋QQQの短期の逆張り", tool_e, R_mr)]
+    med = lambda xs: sorted(xs)[len(xs) // 2]
+    L = []
+    w = L.append
+    w(f"---\ntype: backtest\ntitle: 効率を上げる案（QQQ・指数の逆張り・決算後のドリフト）\ncreated: {dt.date.today()}\nscript: tools/backtest_retest.py --stage ideas\n---\n")
+    w("# 効率を上げる案: ①待っている現金をQQQ ②QQQの短期の逆張り ③決算後のドリフト\n")
+    w("2026-10-10、ユーザーの指示。土台は今の運用（新分析ツール、同じ日の候補は50日線の傾きが小さい順、目減り年15%未満の2倍ETFがある銘柄は2倍ETF、4銘柄・1銘柄25%）。"
+      "後知恵なしの監視銘柄、2015年〜、片道0.1%込み、**税は引かない**（恩株ツールの記録は税引き後なので数字を直接は比べない）。乱数50通り×2組の中央値。\n")
+    w(f"- ② QQQの短期の逆張り: 引けで RSI(2)≦10 かつ 200日線より上なら翌日から持ち、引けで5日線より上になったら翌日から持たない（コナーズの形）。持つ日は{mr_days}日（全体の{mr_days / len(days) * 100:.0f}%）。")
+    pe = [t["path"][t["out"]] - 1 for t in build(add=pead) if t["rule"] == "E"]
+    if pe:
+        w(f"- ③ 決算後のドリフト: 決算の反応の日に寄り付きが+5%以上の窓・陽線・出来高2倍 → 翌日の寄り付きで買う。手じまいは引けで50日線割れ・損切り15%・最長40取引日。"
+          f"合図 {len(pe)}回（年{len(pe) / 11.7:.0f}回）、勝率 {pct(sum(1 for x in pe if x > 0) / len(pe), 0)}、1回平均 {pct(sum(pe) / len(pe), 2)}（株、1回ごと）。今の4つのルールの候補より後に買う（空いた枠だけ）。")
+    w("")
+    w("| 形 | 1組目 年率 | 最大下落率（含み損込み） | 2015〜2021年 | 2022年〜 | 2組目 年率 | 最大下落率 | 2015〜2021年 | 2022年〜 |")
+    w("|---|---|---|---|---|---|---|---|---|")
+    for nm, trs, cr in forms:
+        cells = []
+        for s0 in (5000, 7300):
+            a_, m_, i_, o_ = [], [], [], []
+            for k in range(50):
+                g, m = sim(trs, s0 + k, days[0], days[-1], cr)
+                a_.append(g); m_.append(m)
+                i_.append(sim(trs, s0 + k, days[0], is_hi, cr)[0])
+                o_.append(sim(trs, s0 + k, oos_lo, days[-1], cr)[0])
+            cells += [pct(med(a_)), pct(med(m_)), pct(med(i_)), pct(med(o_))]
+        w(f"| {nm} | " + " | ".join(cells) + " |")
+        print(nm, cells, file=sys.stderr)
+    w("\n- QQQの売買のコストと、QQQを売って株を買うときのずれは入れていない（毎日の値動きをそのまま現金に掛けた近似）。2倍（QLD相当）は2倍の値動きから年0.95%の経費を引いた。")
+    w("- この結果はルールの条件どおりに機械的に計算したもので、Claudeによる個別銘柄の売買判断ではない。")
+    os.makedirs(OUTDIR, exist_ok=True)
+    open(OUTDIR + "効率を上げる案_QQQ・指数の逆張り・決算後のドリフト.md", "w", encoding="utf-8").write("\n".join(L) + "\n")
+    print("書き出し", file=sys.stderr)
 
 
 def hotyear_stage(base, data, build, port, days):
