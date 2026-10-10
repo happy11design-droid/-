@@ -346,7 +346,7 @@ def main():
     r.add_argument("--etf", default=None, help="etf2x: 2倍ETFにする銘柄（カンマ区切り）。省略すると backtest_2x.HAS_2X")
     r.add_argument("--drag", default=None, help="etf2x: 2倍ETFの目減り（年率）。数値なら全部同じ、'measured' なら 新分析ツール/2倍ETFの対応表.json の実測（ないものは0.12）")
     r.add_argument("--tag", default="", help="etf2x: 結果のファイル名と見出しに付ける名前（例: ムームー証券）")
-    r.add_argument("--stage", default="all", choices=("sell", "combo", "half", "filter", "rule", "stats", "dd", "robust", "earn", "realized", "etf2x", "etfrule", "weinstein", "rsi", "pivot", "exits", "pullback", "recover", "prio", "slope", "slope2", "slope3", "swap", "all"))
+    r.add_argument("--stage", default="all", choices=("sell", "combo", "half", "filter", "rule", "stats", "dd", "robust", "earn", "realized", "etf2x", "etfrule", "weinstein", "rsi", "pivot", "exits", "pullback", "recover", "prio", "slope", "slope2", "slope3", "swap", "premium", "all"))
     a = ap.parse_args()
     ctx = cb.setup(a.cache, with_parts=False)
     data, members, ind, days, G, end = (ctx[k] for k in ("data", "members", "ind", "days", "G", "end"))
@@ -720,6 +720,8 @@ def main():
         open(OUTDIR + "銘柄の下落率で見送る・優先する.md", "w", encoding="utf-8").write("\n".join(L) + "\n")
         print("書き出し", file=sys.stderr)
         return
+    if a.stage == "premium":
+        return premium_stage(cur_tr, base, data, ind, days, is_hi, oos_lo)
     if a.stage == "swap":
         return swap_stage(cur_tr, base, data, build, ind, days, is_hi, oos_lo)
     if a.stage == "slope3":
@@ -800,7 +802,7 @@ def main():
         print(f"書き出し: {out}", file=sys.stderr)
 
 
-def swap_port(trs, seed, lo, hi, ind, days, prem=None, th=0.0, stats=None):
+def swap_port(trs, seed, lo, hi, ind, days, prem=None, th=0.0, stats=None, curve=None, pick="gain"):
     """port と同じ資金の計算に、乗り換えを足したもの。枠が埋まっている日に prem(t) の合図が出たら、含み益が th より大きい保有のうち
     含み益が一番大きいものを、その日の寄り付き（前日の終値で近似、片道の手数料込み）で売って、その合図を買う"""
     dd = [d for d in days if lo <= d <= hi]
@@ -829,10 +831,16 @@ def swap_port(trs, seed, lo, hi, ind, days, prem=None, th=0.0, stats=None):
             if len(held) >= SLOTS:
                 if not (prem and prem(t)):
                     continue
-                gain = [h for h in held if h["vp"] / h["v0"] - 1 > th]
-                if not gain:
-                    continue
-                h = max(gain, key=lambda h: h["vp"] / h["v0"])
+                if pick == "gain":   # 含み益が th より大きい保有のうち、一番大きいもの
+                    gain = [h for h in held if h["vp"] / h["v0"] - 1 > th]
+                    if not gain:
+                        continue
+                    h = max(gain, key=lambda h: h["vp"] / h["v0"])
+                else:                # 含み損の保有のうち、一番損の大きいもの（弱っている保有を売る）
+                    gain = [h for h in held if h["vp"] / h["v0"] - 1 < -th]
+                    if not gain:
+                        continue
+                    h = min(gain, key=lambda h: h["vp"] / h["v0"])
                 cash += h["size"] * h["vp"] * (1 - COST)
                 held.remove(h)
                 if stats is not None:
@@ -851,8 +859,159 @@ def swap_port(trs, seed, lo, hi, ind, days, prem=None, th=0.0, stats=None):
         eq = cash + sum(h["size"] * h["v"] for h in held)
         peak = max(peak, eq)
         mdd = max(mdd, 1 - eq / peak)
+        if curve is not None:
+            curve.append(eq)
     yrs = (dt.date.fromisoformat(dd[-1]) - dt.date.fromisoformat(dd[0])).days / 365.25
     return eq ** (1 / yrs) - 1, mdd
+
+
+def side_sim(trs, lo, hi, days, slots, cap=None, tool_curve=None, tool_cap=1.0, rate=0.0):
+    """良い合図だけを買う別の枠。cap があれば、その現金で同時に slots 銘柄まで（1銘柄＝その枠の時価÷slots）。
+    cap が None なら信用取引: 全体（ツール＋この枠の損益）の時価÷4 を借りて買い、年 rate の金利を日割りで払う。日ごとの価値（損益の累計）を返す"""
+    dd = [d for d in days if lo <= d <= hi]
+    by_in = {}
+    for t in trs:
+        if lo <= t["in"] and t["out"] <= hi:
+            by_in.setdefault(t["in"], []).append(t)
+    cash = cap if cap is not None else 0.0
+    held, out = [], []
+    for k, d in enumerate(dd):
+        still = []
+        for h in held:
+            v = h["t"]["path"].get(d)
+            if v is not None:
+                h["v"] = v
+            if cap is None:
+                cash -= h["size"] * rate / 252
+            if h["t"]["out"] == d:
+                cash += h["size"] * (h["v"] - (0 if cap is not None else 1))
+            else:
+                still.append(h)
+        held = still
+        for t in sorted(by_in.get(d, []), key=lambda t: t["prio"]):
+            if len(held) >= slots or any(h["t"]["sym"] == t["sym"] for h in held):
+                continue
+            if cap is not None:
+                eq = cash + sum(h["size"] * h["v"] for h in held)
+                size = min(eq / slots, cash)
+                if size <= 0:
+                    break
+                cash -= size
+            else:
+                tot = tool_cap * tool_curve[k] + cash + sum(h["size"] * (h["v"] - 1) for h in held)
+                size = tot / 4
+            v0 = t["path"].get(d, 1.0)
+            if t["out"] == d:
+                cash += size * (v0 - (0 if cap is not None else 1))
+                continue
+            held.append({"t": t, "size": size, "v": v0})
+        out.append(cash + sum(h["size"] * (h["v"] - (0 if cap is not None else 1)) for h in held))
+    return out
+
+
+def premium_stage(cur_tr, base, data, ind, days, is_hi, oos_lo):
+    """良い合図（急落の底のうち50日線の傾きが小さい20%）をうまく使う案1〜4と、余剰の現金を全部ツールに入れる形を、同じ資金（18,000ドル＝1.5）で比べる（2026-10-10 ユーザーの指示）"""
+    import json
+    sma = lambda c, j, n: sum(c[j - n + 1:j + 1]) / n
+    def s50(b):
+        c, j = data[b["sym"]]["c"], b["i0"] - 1
+        return sma(c, j, 50) / sma(c, j - 20, 50) - 1 if j >= 70 else 0.0
+    bmap = {(data[t["sym"]]["date"][t["i0"]], t["sym"], t["rule"]): t for t in base}
+    B = lambda t: bmap[(t["in"], t["sym"], t["rule"])]
+    trs = [{**t, "prio": s50(B(t))} for t in cur_tr]
+    cs = sorted(t["prio"] for t in trs if t["rule"] == "C" and t["in"] <= is_hi)
+    c20 = cs[len(cs) // 5]   # 境目は設計期間（2015〜2021年）の急落の底の下位20%
+    prem = lambda t: t["rule"] == "C" and t["prio"] <= c20
+    ptrs = [t for t in trs if prem(t)]
+    tab = json.load(open(os.path.join(os.path.dirname(OUTDIR.rstrip("/")), "2倍ETFの対応表.json"), encoding="utf-8"))
+    drag = {u: -x["drag"] for u, x in tab.items() if isinstance(x, dict) and "drag" in x}
+    HAS = {u for u, d in drag.items() if d < 0.15}
+    def to2x(xs, only=None):
+        out = []
+        for t in xs:
+            if t["sym"] not in HAS or (only and not only(t)):
+                out.append(t)
+                continue
+            fee = drag[t["sym"]] / 252
+            e, prev, pv = 1 - COST, 1 - COST, {}
+            for d in sorted(t["path"]):
+                g_ = t["path"][d]
+                e = max(0.0, e * (1 + 2 * (g_ / prev - 1)) * (1 - fee))
+                prev = g_
+                pv[d] = e
+            out.append({**t, "path": pv})
+        return out
+    trs2, ptrs2 = to2x(trs), to2x(ptrs)
+    TOT = 1.5   # 18,000ドル（ツール12,000ドル＝1.0＋余剰6,000ドル＝0.5）
+    RATE = 0.07  # 信用取引の金利（年。仮定）
+    def total(seed, lo, hi, form, etf):
+        dd = [d for d in days if lo <= d <= hi]
+        tt = trs2 if etf else trs
+        pt = ptrs2 if (etf or form == "1x2") else ptrs
+        tc = []
+        if form == "all":         # 全部（1.5）をツールに
+            swap_port(tt, seed, lo, hi, ind, days, curve=tc)
+            tot = [TOT * x for x in tc]
+        elif form == "big":       # 全部ツール、良い合図だけ1銘柄の金額を1.5倍
+            swap_port([{**t, "w": 1.5} if prem(t) else t for t in tt], seed, lo, hi, ind, days, curve=tc)
+            tot = [TOT * x for x in tc]
+        elif form == "swaploss":  # 全部ツール、枠が埋まっていれば含み損が一番大きい保有を売って乗り換える
+            swap_port(tt, seed, lo, hi, ind, days, prem=prem, th=0.0, curve=tc, pick="loss")
+            tot = [TOT * x for x in tc]
+        elif form == "margin":    # 全部ツール、良い合図は信用取引で別に買う
+            swap_port(tt, seed, lo, hi, ind, days, curve=tc)
+            side = side_sim(pt, lo, hi, days, 1, None, tc, TOT, RATE)
+            tot = [TOT * x + y for x, y in zip(tc, side)]
+        else:                     # ツールは1.0、余剰の0.5は idle（何もしない）か、良い合図専用の枠
+            swap_port(tt, seed, lo, hi, ind, days, curve=tc)
+            side = [0.5] * len(dd) if form == "idle" else side_sim(pt, lo, hi, days, 2, 0.5)
+            tot = [x + y for x, y in zip(tc, side)]
+        yrs = (dt.date.fromisoformat(dd[-1]) - dt.date.fromisoformat(dd[0])).days / 365.25
+        pk, m = 0.0, 0.0
+        for x in tot:
+            pk = max(pk, x)
+            m = max(m, 1 - x / pk)
+        return (tot[-1] / TOT) ** (1 / yrs) - 1, m
+    forms = [("余剰の6,000ドルは現金のまま（今の形）", "idle"),
+             ("全部（18,000ドル）をツールに入れる", "all"),
+             ("案1: 余剰の6,000ドルを良い合図専用の枠に（同時に2銘柄、株）", "side"),
+             ("案1＋2: 専用の枠を2倍ETFで（2倍ETFがある銘柄）", "1x2"),
+             ("案2: 全部ツールに入れ、良い合図だけ1銘柄の金額を1.5倍", "big"),
+             ("案3: 全部ツールに入れ、良い合図は信用取引で別に買う（金利 年7%と仮定）", "margin"),
+             ("案4: 全部ツールに入れ、枠が埋まっていれば含み損が一番大きい保有を売って乗り換える", "swaploss")]
+    med = lambda xs: sorted(xs)[len(xs) // 2]
+    L = []
+    w = L.append
+    w(f"---\ntype: backtest\ntitle: 良い合図をうまく使う案と余剰の現金\ncreated: {dt.date.today()}\nscript: tools/backtest_retest.py --stage premium\n---\n")
+    w("# 良い合図（急落の底のうち50日線の傾きが小さい20%）をうまく使う案と、余剰の現金の使い方\n")
+    w(f"2026-10-10、ユーザーの指示。資金は全部で18,000ドル（ツール12,000ドル＋余剰6,000ドル）として、資金全体の年率・最大下落率（含み損込み）で比べる。"
+      f"良い合図の境目は、設計期間の急落の底の合図のうち50日線の傾きの下位20%（{pct(c20, 1)}以下）。年に約{len(ptrs) / 11.7:.0f}回。"
+      "ツールは今のルール（同じ日の候補は50日線の傾きが小さい順、4銘柄・1銘柄25%）。後知恵なしの監視銘柄、2015年〜、片道0.1%込み。乱数50通り×2組の中央値。\n")
+    for etf in (False, True):
+        w(f"## {'2倍ETF込み（今の運用）' if etf else '株だけ'}\n")
+        w("| 形 | 1組目 年率 | 最大下落率 | 2015〜2021年 | 2022年〜 | 2組目 年率 | 最大下落率 | 2015〜2021年 | 2022年〜 |")
+        w("|---|---|---|---|---|---|---|---|---|")
+        for nm, fm in forms:
+            if etf and fm == "1x2":
+                continue
+            cells = []
+            for s0 in (5000, 7300):
+                a_, m_, i_, o_ = [], [], [], []
+                for k in range(50):
+                    g, m = total(s0 + k, days[0], days[-1], fm, etf)
+                    a_.append(g); m_.append(m)
+                    i_.append(total(s0 + k, days[0], is_hi, fm, etf)[0])
+                    o_.append(total(s0 + k, oos_lo, days[-1], fm, etf)[0])
+                cells += [pct(med(a_)), pct(med(m_)), pct(med(i_)), pct(med(o_))]
+            w(f"| {nm} | " + " | ".join(cells) + " |")
+            print(nm, etf, cells, file=sys.stderr)
+        w("")
+    w("- 案1の専用の枠: 余剰の6,000ドルで同時に2銘柄まで（1銘柄＝その枠の時価÷2）。良い合図は年に十数回で、保有は4取引日ほどなので、ほとんどの日は現金。")
+    w("- 案3の信用取引: 全体の時価÷4 を借りて買い、金利は年7%を日割りで払うと仮定（ムームー証券の実際の金利は要確認）。")
+    w("- この結果はルールの条件どおりに機械的に計算したもので、Claudeによる個別銘柄の売買判断ではない。")
+    os.makedirs(OUTDIR, exist_ok=True)
+    open(OUTDIR + "良い合図をうまく使う案と余剰の現金.md", "w", encoding="utf-8").write("\n".join(L) + "\n")
+    print("書き出し", file=sys.stderr)
 
 
 def swap_stage(cur_tr, base, data, build, ind, days, is_hi, oos_lo):
