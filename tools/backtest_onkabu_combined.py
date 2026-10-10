@@ -471,6 +471,12 @@ VARIANTS_E = [
     ("⑦倍増用に25%を取っておく＋合図を5日待たせる（QQQ）", dict(mode="pool", fund="free", cash="QQQ", dedup=False, dbl_frac=0.25, reserve=0.25, wait=5)),
 ]
 
+CASH_SYMS = [("QQQ", "NASDAQ100（QQQ）"), ("SPY", "S&P500（SPY）"), ("SSO", "S&P500の2倍（SSO）"), ("UPRO", "S&P500の3倍（UPRO）"),
+             ("QLD", "NASDAQ100の2倍（QLD）"), ("TQQQ", "NASDAQ100の3倍（TQQQ）"), ("SMH", "半導体（SMH）"), ("SOXX", "半導体（SOXX）"),
+             ("XLK", "IT（XLK）"), ("VGT", "IT（VGT）"), ("BIL", "短期国債（BIL）"), (None, "現金のまま")]
+VARIANTS_CASH = [(f"倍増用に25%を取っておく・待っている資金は{lab}", dict(mode="pool", fund="free", cash=sym, dedup=False, dbl_frac=0.25, reserve=0.25))
+                 for sym, lab in CASH_SYMS]
+
 VARIANTS18 = [("新分析ツールだけ（余る現金はQQQ）", dict(mode="pool", use_dbl=False, cash="QQQ")),
               ("倍増ツールだけ（余る現金はQQQ）", dict(mode="pool", use_new=False, cash="QQQ"))]
 for _n, _f in ((4, 1 / 3), (5, 1 / 3), (6, 1 / 3), (4, 1 / 4), (5, 1 / 4), (6, 1 / 4), (4, 1 / 5)):
@@ -508,16 +514,21 @@ def cmd_run(a):
     bench = {}
     for name, lo, hi, ex in CONDS:
         days = [d for d in spy["date"] if lo <= d <= hi]
-        for sym in ("SPY", "QQQ"):
+        for sym in (["SPY", "QQQ"] + ([x for x, _ in CASH_SYMS if x and x not in ("SPY", "QQQ")] if a.set == "cash" else [])):
             d0 = load_prices(DEFAULT_CACHE, sym)
             c = [d0["c"][d0["date"].index(x)] for x in days]
             bench[(name, sym)] = metrics(c, days)
     rows = []
-    VS = VARIANTS_E if a.set == "entry" else VARIANTS18 if a.set == "18000" else VARIANTS
+    VS = VARIANTS_CASH if a.set == "cash" else VARIANTS_E if a.set == "entry" else VARIANTS18 if a.set == "18000" else VARIANTS
     root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
     tab = json.load(open(os.path.join(root, "新分析ツール", "2倍ETFの対応表.json"), encoding="utf-8"))
     lev_info = {u: (2, -x["drag"] / 252) for u, x in tab.items() if isinstance(x, dict) and "drag" in x and u in has2x}
-    cap = 18000.0 if a.set in ("18000", "entry") else 6000.0
+    cap = 18000.0 if a.set in ("18000", "entry", "cash") else 6000.0
+    cash_prices = {}
+    for sym, _ in CASH_SYMS:
+        if sym:
+            d0 = load_prices(DEFAULT_CACHE, sym)
+            cash_prices[sym] = dict(zip(d0["date"], d0["c"]))
     stats_rows = []
     for label, kw in (VS[-a.last:] if a.last else VS):
         cells = []
@@ -527,7 +538,7 @@ def cmd_run(a):
             res = []
             for seed in range(a.seeds):
                 kw2 = {k: v for k, v in kw.items() if k != "cash"}
-                curve, n_onk, rcurve = run(feats, nts, ind, days, sbd[ex], seed=seed, cash_px=qqq if kw.get("cash") == "QQQ" else None,
+                curve, n_onk, rcurve = run(feats, nts, ind, days, sbd[ex], seed=seed, cash_px=cash_prices.get(kw.get("cash")),
                                            capital=cap, lev_info=lev_info, **kw2)
                 c, m = metrics(curve, days)
                 res.append((c, m, n_onk, metrics(rcurve, days)[1]))
@@ -557,6 +568,10 @@ def cmd_run(a):
     w("|---|" + "---|" * len(CONDS))
     w("| （比べる相手）SPYを持ち続ける | " + " | ".join(f"{bench[(c[0], 'SPY')][0]:.1%}（{bench[(c[0], 'SPY')][1]:.0%}）" for c in CONDS) + " |")
     w("| （比べる相手）QQQを持ち続ける | " + " | ".join(f"{bench[(c[0], 'QQQ')][0]:.1%}（{bench[(c[0], 'QQQ')][1]:.0%}）" for c in CONDS) + " |")
+    if a.set == "cash":
+        for sym, lab in CASH_SYMS:
+            if sym and sym not in ("SPY", "QQQ"):
+                w(f"| （参考）{lab}を持ち続ける | " + " | ".join(f"{bench[(c[0], sym)][0]:.1%}（{bench[(c[0], sym)][1]:.0%}）" for c in CONDS) + " |")
     for label, cells in rows:
         w(f"| {label} | " + " | ".join(f"{c:.1%}（{m:.0%}・確定{rm:.0%}）" for c, m, _, rm in cells) + " |")
     if stats_rows:
@@ -578,7 +593,7 @@ def main():
     ap.add_argument("--out")
     ap.add_argument("--summary")
     ap.add_argument("--last", type=int, default=0, help="最後のN通りだけ計算する")
-    ap.add_argument("--set", default="", help="18000: 資金18,000ドルで、1銘柄の金額の決め方と切り替えの形を比べる。entry: 倍増ツールの合図を買い逃さない形・新分析に資金を入れる形を比べる")
+    ap.add_argument("--set", default="", help="cash: 倍増用に25%を取っておく形で、待っている資金の置き場所を比べる。18000: 資金18,000ドルで、1銘柄の金額の決め方と切り替えの形を比べる。entry: 倍増ツールの合図を買い逃さない形・新分析に資金を入れる形を比べる")
     ap.add_argument("--form", default="current", choices=("current", "old"), help="新分析ツールの形。current: 50日線の傾きが小さい順・2倍ETF（今の形）")
     a = ap.parse_args()
     {"newtrades": cmd_newtrades, "run": cmd_run}[a.cmd](a)
