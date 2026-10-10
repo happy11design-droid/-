@@ -346,7 +346,7 @@ def main():
     r.add_argument("--etf", default=None, help="etf2x: 2倍ETFにする銘柄（カンマ区切り）。省略すると backtest_2x.HAS_2X")
     r.add_argument("--drag", default=None, help="etf2x: 2倍ETFの目減り（年率）。数値なら全部同じ、'measured' なら 新分析ツール/2倍ETFの対応表.json の実測（ないものは0.12）")
     r.add_argument("--tag", default="", help="etf2x: 結果のファイル名と見出しに付ける名前（例: ムームー証券）")
-    r.add_argument("--stage", default="all", choices=("sell", "combo", "half", "filter", "rule", "stats", "dd", "robust", "earn", "realized", "etf2x", "etfrule", "weinstein", "rsi", "pivot", "all"))
+    r.add_argument("--stage", default="all", choices=("sell", "combo", "half", "filter", "rule", "stats", "dd", "robust", "earn", "realized", "etf2x", "etfrule", "weinstein", "rsi", "pivot", "exits", "pullback", "recover", "prio", "slope", "slope2", "slope3", "all"))
     a = ap.parse_args()
     ctx = cb.setup(a.cache, with_parts=False)
     data, members, ind, days, G, end = (ctx[k] for k in ("data", "members", "ind", "days", "G", "end"))
@@ -720,6 +720,20 @@ def main():
         open(OUTDIR + "銘柄の下落率で見送る・優先する.md", "w", encoding="utf-8").write("\n".join(L) + "\n")
         print("書き出し", file=sys.stderr)
         return
+    if a.stage == "slope3":
+        return slope3_stage(base, data, build, port, days)
+    if a.stage == "slope2":
+        return slope2_stage(base, data, build, port, ev, screen_and_confirm, days)
+    if a.stage == "slope":
+        return slope_stage(cur_tr, base, data, build, screen_and_confirm, is_hi)
+    if a.stage == "prio":
+        return prio_stage(build, screen_and_confirm)
+    if a.stage == "recover":
+        return recover_stage(cur_tr)
+    if a.stage == "pullback":
+        return pullback_stage(cur_tr, base, data, build, screen_and_confirm, rec, idx)
+    if a.stage == "exits":
+        return exits_stage(cur_tr)
     if a.stage == "pivot":
         return pivot_stage(cur_tr, base, data, build, screen_and_confirm)
     if a.stage == "rsi":
@@ -782,6 +796,452 @@ def main():
         os.makedirs(OUTDIR, exist_ok=True)
         open(out, "w", encoding="utf-8").write("\n".join(L) + "\n")
         print(f"書き出し: {out}", file=sys.stderr)
+
+
+def slope3_stage(base, data, build, port, days):
+    """50日線の傾きが小さい順に買う形の、確定した損益だけの最大下落率（株だけ・2倍ETF込み）。2026-10-09 ユーザーの指示"""
+    import json
+    sma = lambda c, j, n: sum(c[j - n + 1:j + 1]) / n
+    def s50(b):
+        c, j = data[b["sym"]]["c"], b["i0"] - 1
+        return sma(c, j, 50) / sma(c, j - 20, 50) - 1 if j >= 70 else 0.0
+    bmap = {(data[t["sym"]]["date"][t["i0"]], t["sym"], t["rule"]): t for t in base}
+    REV = ("B", "C")
+    def with_prio(trs, key):
+        return [{**t, "prio": key(bmap[(t["in"], t["sym"], t["rule"])])} for t in trs]
+    tab = json.load(open(os.path.join(os.path.dirname(OUTDIR.rstrip("/")), "2倍ETFの対応表.json"), encoding="utf-8"))
+    drag = {u: -x["drag"] for u, x in tab.items() if isinstance(x, dict) and "drag" in x}
+    HAS = {u for u, d in drag.items() if d < 0.15}
+    def to2x(trs):
+        out = []
+        for t in trs:
+            if t["sym"] not in HAS:
+                out.append(t)
+                continue
+            fee = drag[t["sym"]] / 252
+            e, prev, pv = 1 - COST, 1 - COST, {}
+            for d in sorted(t["path"]):
+                g_ = t["path"][d]
+                e = max(0.0, e * (1 + 2 * (g_ / prev - 1)) * (1 - fee))
+                prev = g_
+                pv[d] = e
+            out.append({**t, "path": pv})
+        return out
+    forms = [("今のルール（ランダムな順）", lambda: build()),
+             ("50日線の傾きが小さい順", lambda: with_prio(build(), s50)),
+             ("押し目・急落の底を先に傾きが小さい順、順張りは後に傾きが大きい順（ユーザー案）",
+              lambda: with_prio(build(), lambda b: (0, s50(b)) if b["rule"] in REV else (1, -s50(b))))]
+    L = []
+    w = L.append
+    w(f"---\ntype: backtest\ntitle: 50日線の傾きが小さい順の確定した損益の下落率\ncreated: {dt.date.today()}\nscript: tools/backtest_retest.py --stage slope3\n---\n")
+    w("# 50日線の傾きが小さい順に買う形の、確定した損益だけの最大下落率\n")
+    w("確定した損益だけの下落率: 持っている株は買った額のまま数え、売って損益が確定したときだけ資金が増減するとした場合の、最高から一番下がった割合（実際に資産が減った大きさ）。"
+      "含み損込み: 毎日の時価で数えた場合。乱数50通り（5000〜5049）。2015年〜、4銘柄・1銘柄25%、片道0.1%込み。\n")
+    w("| 形 | 年率（中央値） | 含み損込みの最大下落率（中央値／最悪） | **確定した損益だけの最大下落率（中央値／最悪）** | 2015〜2021年 | 2022年〜 |")
+    w("|---|---|---|---|---|---|")
+    is_hi = max(d for d in days if d <= cb.IS_END)
+    oos_lo = min(d for d in days if d >= cb.OOS_START)
+    med = lambda xs: sorted(xs)[len(xs) // 2]
+    for etf in (False, True):
+        for nm, fn in forms:
+            trs = fn()
+            if etf:
+                trs = to2x(trs)
+            cg, mm, rm, ii, oo = [], [], [], [], []
+            for k in range(50):
+                rc = []
+                g, m = port(trs, 5000 + k, days[0], days[-1], rcurve=rc)
+                pk, r = 0.0, 0.0
+                for x in rc:
+                    pk = max(pk, x)
+                    r = max(r, 1 - x / pk)
+                cg.append(g); mm.append(m); rm.append(r)
+                ii.append(port(trs, 5000 + k, days[0], is_hi)[0]); oo.append(port(trs, 5000 + k, oos_lo, days[-1])[0])
+            w(f"| {nm}{'（2倍ETF込み）' if etf else '（株だけ）'} | {pct(med(cg))} | {pct(med(mm))}／{pct(max(mm))} | **{pct(med(rm))}／{pct(max(rm))}** | {pct(med(ii))} | {pct(med(oo))} |")
+    w("\n- この結果はルールの条件どおりに機械的に計算したもので、Claudeによる個別銘柄の売買判断ではない。")
+    os.makedirs(OUTDIR, exist_ok=True)
+    open(OUTDIR + "50日線の傾きが小さい順の確定した損益の下落率.md", "w", encoding="utf-8").write("\n".join(L) + "\n")
+    print("書き出し", file=sys.stderr)
+
+
+def slope2_stage(base, data, build, port, ev, screen_and_confirm, days):
+    """傾きの小さい順に買う形の確かめ（年ごと・2倍ETF込み）と、ルールごとに向きを変える形・似た案（2026-10-09 ユーザーの指示）"""
+    import json
+    import math
+    med = lambda xs: sorted(xs)[len(xs) // 2]
+    sma = lambda c, j, n: sum(c[j - n + 1:j + 1]) / n if j >= n - 1 else None
+    rsis = {}
+
+    def feat(t, kind):
+        s, j = data[t["sym"]], t["i0"] - 1
+        c = s["c"]
+        if kind == "s50":
+            return sma(c, j, 50) / sma(c, j - 20, 50) - 1 if j >= 70 else 0.0
+        if kind == "s20":
+            return sma(c, j, 20) / sma(c, j - 10, 20) - 1 if j >= 30 else 0.0
+        if kind == "dev20":
+            return c[j] / sma(c, j, 20) - 1 if j >= 20 else 0.0
+        if kind == "r5":
+            return c[j] / c[j - 5] - 1 if j >= 5 else 0.0
+        if kind == "rsi14":
+            if t["sym"] not in rsis:
+                rsis[t["sym"]] = rsi_wilder(c, 14)
+            v = rsis[t["sym"]][j]
+            return v if v is not None else 50.0
+    cache = {}
+
+    def f(t, kind):
+        k = (id(t), kind)
+        if k not in cache:
+            cache[k] = feat(t, kind)
+        return cache[k]
+    bmap = {(data[t["sym"]]["date"][t["i0"]], t["sym"], t["rule"]): t for t in base}
+    REV = ("B", "C")
+
+    def with_prio(trs, key):
+        return [{**t, "prio": key(bmap[(t["in"], t["sym"], t["rule"])])} for t in trs]
+    is_hi = max(d for d in days if d <= cb.IS_END)
+    mid = {}
+    for k in ("V", "M", "B", "C"):
+        xs = [f(t, "s50") for t in base if t["rule"] == k and data[t["sym"]]["date"][t["i0"]] <= is_hi]
+        mid[k] = med(xs) if xs else 0.0
+    forms = [
+        ("今のルール（同じ日の候補はランダムな順）", lambda: build()),
+        ("① 50日線の傾きが小さい順", lambda: with_prio(build(), lambda b: f(b, "s50"))),
+        ("② 20日線の傾きが小さい順", lambda: with_prio(build(), lambda b: f(b, "s20"))),
+        ("③ 押し目・急落の底を先に（その中はランダム）、順張りは後", lambda: with_prio(build(), lambda b: 0 if b["rule"] in REV else 1)),
+        ("④ 押し目・急落の底を先に50日線の傾きが小さい順、順張りは後に傾きが大きい順",
+         lambda: with_prio(build(), lambda b: (0, f(b, "s50")) if b["rule"] in REV else (1, -f(b, "s50")))),
+        ("⑤ 順張りを先に50日線の傾きが大きい順、押し目・急落の底は後に傾きが小さい順",
+         lambda: with_prio(build(), lambda b: (1, f(b, "s50")) if b["rule"] in REV else (0, -f(b, "s50")))),
+        ("⑥ 選ぶ: 順張りは50日線の傾きが大きい半分、押し目・急落の底は小さい半分だけ買う",
+         lambda: build(drop=lambda b: (f(b, "s50") < mid[b["rule"]]) if b["rule"] not in REV else (f(b, "s50") >= mid[b["rule"]]))),
+        ("⑦ 20日線からの乖離が小さい順（20日線より下に離れているほど先）", lambda: with_prio(build(), lambda b: f(b, "dev20"))),
+        ("⑧ 直近5日の値動きが小さい順（5日で大きく下げたほど先）", lambda: with_prio(build(), lambda b: f(b, "r5"))),
+        ("⑨ RSI(14)が低い順", lambda: with_prio(build(), lambda b: f(b, "rsi14"))),
+    ]
+    L = []
+    w = L.append
+    w(f"---\ntype: backtest\ntitle: 傾きの小さい順に買う形の確かめと似た案\ncreated: {dt.date.today()}\nscript: tools/backtest_retest.py --stage slope2\n---\n")
+    w("# 傾きの小さい順に買う形の確かめ（年ごと・2倍ETF込み）と、似た案\n")
+    w("2026-10-09、`傾きの大きさで選ぶ・優先する.md` で「同じ日の候補を傾きの小さい順に買う」が確かだったのを受けて、ユーザーの指示で確かめた。"
+      "③は、効いているのが「傾き」なのか「逆張りの候補を先に買うこと」なのかを分けるための比べる形。後知恵なしの監視銘柄、2015年〜、4銘柄・1銘柄25%、片道0.1%込み。\n")
+    w("## 1. 株だけで比べる\n")
+    screen_and_confirm("候補の順番（株だけ）", forms[1:], w)
+    # 2倍ETF込み（今の運用: 目減りが年15%未満の2倍ETFがある銘柄は2倍ETF）
+    tab = json.load(open(os.path.join(os.path.dirname(OUTDIR.rstrip("/")), "2倍ETFの対応表.json"), encoding="utf-8"))
+    drag = {u: -x["drag"] for u, x in tab.items() if isinstance(x, dict) and "drag" in x}
+    HAS = {u for u, d in drag.items() if d < 0.15}
+
+    def to2x(trs):
+        out = []
+        for t in trs:
+            if t["sym"] not in HAS:
+                out.append(t)
+                continue
+            fee = drag[t["sym"]] / 252
+            e, prev, pv = 1 - COST, 1 - COST, {}
+            for d in sorted(t["path"]):
+                g_ = t["path"][d]
+                e = max(0.0, e * (1 + 2 * (g_ / prev - 1)) * (1 - fee))
+                prev = g_
+                pv[d] = e
+            out.append({**t, "path": pv})
+        return out
+    w(f"\n## 2. 2倍ETF込み（今の運用。目減りが年15%未満の2倍ETFがある{len(HAS)}銘柄は2倍ETF）\n")
+    pick = [forms[0], forms[1], forms[2], forms[3], forms[4]]
+    w("2倍ETF込みの今のルールと比べる（乱数50通り×2組の中央値。比べる元が株だけの表とは違うので、ふるいは使わない）。\n")
+    w("| 形 | 1組目 年率 | 最大下落率 | 設計 | 確認 | 2組目 年率 | 最大下落率 | 設計 | 確認 |")
+    w("|---|---|---|---|---|---|---|---|---|")
+    for nm, fn in pick:
+        trs = to2x(fn())
+        e1, e2 = ev(trs, CONF1), ev(trs, CONF2)
+        w(f"| {nm}（2倍ETF込み） | {pct(e1['all'])} | {pct(e1['mdd'])} | {pct(e1['is'])} | {pct(e1['oos'])} | {pct(e2['all'])} | {pct(e2['mdd'])} | {pct(e2['is'])} | {pct(e2['oos'])} |")
+    # 年ごと（乱数50通りの中央値）
+    w("\n## 3. 年ごとの成績（株だけ・乱数50通りの中央値）\n")
+    yrs = sorted({d[:4] for d in days})
+    rows = {}
+    for nm, fn in pick:
+        trs = fn()
+        per = {y: [] for y in yrs}
+        for k in range(50):
+            curve = []
+            port(trs, 5000 + k, days[0], days[-1], curve=curve)
+            ends = {}
+            for d, e in zip(days, curve):
+                ends[d[:4]] = e
+            prev = 1.0
+            for y in yrs:
+                if y in ends:
+                    per[y].append(ends[y] / prev - 1)
+                    prev = ends[y]
+        rows[nm] = {y: med(v) for y, v in per.items() if v}
+    w("| 年 | " + " | ".join(nm.split("（")[0] for nm, _ in pick) + " |")
+    w("|---" * (len(pick) + 1) + "|")
+    for y in yrs:
+        w(f"| {y} | " + " | ".join(pct(rows[nm].get(y), 0) if rows[nm].get(y) is not None else "—" for nm, _ in pick) + " |")
+    base_nm = pick[0][0]
+    for nm, _ in pick[1:]:
+        win = sum(1 for y in yrs if rows[nm].get(y) is not None and rows[base_nm].get(y) is not None and rows[nm][y] > rows[base_nm][y])
+        w(f"\n- {nm.split('（')[0]}: 今のルールより良かった年 {win} / {len(yrs)}")
+    w("\n- この結果はルールの条件どおりに機械的に計算したもので、Claudeによる個別銘柄の売買判断ではない。")
+    os.makedirs(OUTDIR, exist_ok=True)
+    open(OUTDIR + "傾きの小さい順に買う形の確かめと似た案.md", "w", encoding="utf-8").write("\n".join(L) + "\n")
+    print("書き出し", file=sys.stderr)
+
+
+def slope_stage(cur_tr, base, data, build, screen_and_confirm, is_hi):
+    """傾き（角度）の大きさで合図を選ぶ・優先するか（2026-10-09 ユーザーの指示「傾きの角度が大きいほど値動きが大きい。うまく使って年率を上げられないか」）。
+    傾きは合図の日（買う前の日）の値。選ぶ境目は、ルールごとに設計期間（2015〜2021年）の合図の中央値（確認期間の値は使わない）"""
+    import math
+
+    def sma(c, j, n):
+        return sum(c[j - n + 1:j + 1]) / n if j >= n - 1 else None
+
+    def reg(c, j, n=60):   # 直近n日の終値（対数）の回帰直線の傾き（年率）
+        if j < n:
+            return None
+        ys = [math.log(x) for x in c[j - n + 1:j + 1]]
+        xm, ym = (n - 1) / 2, sum(ys) / n
+        b = sum((k - xm) * (y - ym) for k, y in enumerate(ys)) / sum((k - xm) ** 2 for k in range(n))
+        return b * 252
+
+    def bbup(c, j):
+        def up(k):
+            m = sma(c, k, 20)
+            return m + 2 * (sum((x - m) ** 2 for x in c[k - 19:k + 1]) / 20) ** 0.5
+        return up(j) / up(j - 5) - 1 if j >= 25 else None
+
+    fns = {
+        "50日線の傾き（20日前からの上昇率）": lambda c, j: (sma(c, j, 50) / sma(c, j - 20, 50) - 1) if j >= 70 else None,
+        "20日線の傾き（10日前からの上昇率）": lambda c, j: (sma(c, j, 20) / sma(c, j - 10, 20) - 1) if j >= 30 else None,
+        "ボリンジャーの上のバンドの傾き（5日前からの上昇率）": bbup,
+        "トレンドライン（直近60日の回帰直線）の角度": reg,
+    }
+    names = {"V": "新高値V2", "M": "ミネルヴィニ", "B": "押し目", "C": "急落の底"}
+    key = {(t["sym"], data[t["sym"]]["date"][t["i0"]], t["rule"]): t for t in base}
+    val = {}
+    for nm, f in fns.items():
+        for t in base:
+            val[(nm, id(t))] = f(data[t["sym"]]["c"], t["i0"] - 1)
+    med = {}
+    for nm in fns:
+        for k in names:
+            xs = sorted(v for t in base if t["rule"] == k and data[t["sym"]]["date"][t["i0"]] <= is_hi
+                        for v in [val[(nm, id(t))]] if v is not None)
+            med[(nm, k)] = xs[len(xs) // 2] if xs else 0.0
+    L = []
+    w = L.append
+    w(f"---\ntype: backtest\ntitle: 傾きの大きさで選ぶ・優先する\ncreated: {dt.date.today()}\nscript: tools/backtest_retest.py --stage slope\n---\n")
+    w("# 傾き（角度）の大きさで合図を選ぶ・優先する\n")
+    w("2026-10-09、ユーザーの質問「トレンドライン・ローソク足・ボリンジャーバンドなどの傾きの角度が大きいほど値動きが大きく動く。うまく使って年率を上げられないか」から確かめた。"
+      "傾きは合図の日（買う前の日）の値。「大きい半分」「小さい半分」の境目は、ルールごとに設計期間（2015〜2021年）の合図の中央値。"
+      "後知恵なしの監視銘柄、2015年〜、今の売りのルール、4銘柄・1銘柄25%、株だけ、片道0.1%込み。\n")
+    w("## 1. 傾きの大きさ別の1回ごとの成績（全部の合図）\n")
+    avg = lambda xs: pct(sum(xs) / len(xs), 2) if xs else "—"
+    for nm in fns:
+        w(f"### {nm}\n")
+        w("| ルール | 傾きが小さい半分: 回数・勝率・1回平均 | 傾きが大きい半分: 回数・勝率・1回平均 | 一番大きい20%: 1回平均 |")
+        w("|---|---|---|---|")
+        for k in ("V", "M", "B", "C"):
+            lo, hi, rows = [], [], []
+            for t in cur_tr:
+                if t["rule"] != k:
+                    continue
+                b = key[(t["sym"], t["in"], t["rule"])]
+                v = val[(nm, id(b))]
+                if v is None:
+                    continue
+                r = t["path"][t["out"]] - 1
+                rows.append((v, r))
+                (hi if v >= med[(nm, k)] else lo).append(r)
+            rows.sort()
+            top = [r for _, r in rows[len(rows) * 4 // 5:]]
+            f_ = lambda xs: f"{len(xs)}・{pct(sum(1 for x in xs if x > 0) / len(xs), 0)}・{avg(xs)}" if xs else "—"
+            w(f"| {names[k]} | {f_(lo)} | {f_(hi)} | {avg(top)} |")
+        w("")
+    w("## 2. 資金全体（今の買い方と比べる）\n")
+    items = []
+    for nm in fns:
+        get = lambda t, nm=nm: val.get((nm, id(t)))
+        items.append((f"{nm}が大きい半分だけ買う",
+                      (lambda nm=nm, get=get: build(drop=lambda t: get(t) is None or get(t) < med[(nm, t["rule"])]))))
+        items.append((f"{nm}が小さい半分だけ買う",
+                      (lambda nm=nm, get=get: build(drop=lambda t: get(t) is None or get(t) >= med[(nm, t["rule"])]))))
+
+        def pr(sign, nm=nm, get=get):
+            out = build()
+            bmap = {(data[t["sym"]]["date"][t["i0"]], t["sym"], t["rule"]): t for t in base}
+            res = []
+            for t in out:
+                v = get(bmap[(t["in"], t["sym"], t["rule"])])
+                res.append({**t, "prio": sign * (v if v is not None else 0.0)})
+            return res
+        items.append((f"同じ日の候補を、{nm}が大きい順に買う", (lambda pr=pr: pr(-1))))
+        items.append((f"同じ日の候補を、{nm}が小さい順に買う", (lambda pr=pr: pr(1))))
+    screen_and_confirm("傾きの大きさで選ぶ・優先する", items, w)
+    w("\n- この結果はルールの条件どおりに機械的に計算したもので、Claudeによる個別銘柄の売買判断ではない。")
+    os.makedirs(OUTDIR, exist_ok=True)
+    open(OUTDIR + "傾きの大きさで選ぶ・優先する.md", "w", encoding="utf-8").write("\n".join(L) + "\n")
+    print("書き出し", file=sys.stderr)
+
+
+def prio_stage(build, screen_and_confirm):
+    """同じ日の候補を、ルールの期待値（1回平均）の高い順に買うか、ミネルヴィニを外すか（2026-10-09 ユーザーの指示。9/29は売りの改善前のルールで確かめた）"""
+    ev_rank = {"V": 0, "C": 1, "B": 2, "M": 3}   # ルールごとの成績.md の1回平均の順（V 2.08%・C 2.07%・B 1.51%・M 0.07%）
+
+    def ranked(trs):
+        return [{**t, "prio": ev_rank[t["rule"]]} for t in trs]
+
+    def rev(trs):   # 比べるため、逆の順（期待値の低い順）も
+        return [{**t, "prio": 3 - ev_rank[t["rule"]]} for t in trs]
+    items = [("同じ日の候補を、ルールの期待値の高い順に買う（新高値V2→急落の底→押し目→ミネルヴィニ）", lambda: ranked(build())),
+             ("（比べるため）期待値の低い順に買う（ミネルヴィニ→押し目→急落の底→新高値V2）", lambda: rev(build())),
+             ("ミネルヴィニを外す", lambda: build(drop=lambda t: t["rule"] == "M")),
+             ("ミネルヴィニを外し、期待値の高い順に買う", lambda: ranked(build(drop=lambda t: t["rule"] == "M")))]
+    L = []
+    w = L.append
+    w(f"---\ntype: backtest\ntitle: 期待値の高いルールを優先する・ミネルヴィニを外す（今のルール）\ncreated: {dt.date.today()}\nscript: tools/backtest_retest.py --stage prio\n---\n")
+    w("# 期待値の高いルールを優先する・ミネルヴィニを外す（今のルールでのやり直し）\n")
+    w("2026-10-09、ユーザーの質問「期待値が高い銘柄を優先的に買えば成績が良くなるのでは」から、今のルール（売りの改善後）で確かめ直した。"
+      "今のルールの比べる元は、同じ日の候補をランダムな順に買う形（乱数で何通りも試す）。9/29に売りの改善前のルールで試したときは、どの順でも差はランダムの幅の中だった（`ミネルヴィニを外す確認と優先順位.md`）。"
+      "後知恵なしの監視銘柄、2015年〜、4銘柄・1銘柄25%、株だけ、片道0.1%込み。\n")
+    screen_and_confirm("候補の優先順位とミネルヴィニ", items, w)
+    w("\n- この結果はルールの条件どおりに機械的に計算したもので、Claudeによる個別銘柄の売買判断ではない。")
+    os.makedirs(OUTDIR, exist_ok=True)
+    open(OUTDIR + "期待値の高いルールを優先する・ミネルヴィニを外す.md", "w", encoding="utf-8").write("\n".join(L) + "\n")
+    print("書き出し", file=sys.stderr)
+
+
+def recover_stage(cur_tr):
+    """買った後に買値を下回った売買が、何日後に買値まで戻ったか（2026-10-08 ユーザーの質問「下がった後、大体何日後に上がっているか」）"""
+    names = {"V": "新高値V2", "M": "ミネルヴィニ", "B": "押し目（ボリンジャーIII）", "C": "急落の底"}
+    med = lambda xs: sorted(xs)[len(xs) // 2] if xs else None
+    L = []
+    w = L.append
+    w(f"---\ntype: backtest\ntitle: 下がった後に買値まで戻るまでの日数\ncreated: {dt.date.today()}\nscript: tools/backtest_retest.py --stage recover\n---\n")
+    w("# 買った後に下がった売買は、何日後に買値まで戻ったか\n")
+    w("後知恵なしの監視銘柄、2015年〜、今の売りのルール、片道0.1%込み。ルールの全部の合図の1回ごと。日数は取引日（土日・祝日を除く。20取引日≒1か月）。"
+      "「下がった」＝保有中の引け値が一度でも買値の97%以下（-3%以下）になった売買。「戻った」＝その後、売る前に引け値が買値以上に戻った。\n")
+    w("| ルール | 合図の数 | -3%以下に下がった | そのうち売る前に買値まで戻った | 戻るまでの日数（中央値／4分の3が戻るまで） | 戻らずに売った（その平均の損益） | 一番下がるまでの日数（中央値） |")
+    w("|---|---|---|---|---|---|---|")
+    for k in ("V", "M", "B", "C"):
+        ts = [t for t in cur_tr if t["rule"] == k]
+        dip, rec_days, norec, bottom = 0, [], [], []
+        for t in ts:
+            ds = sorted(d for d in t["path"] if d <= t["out"])
+            v = [t["path"][d] for d in ds]
+            first = next((i for i, x in enumerate(v) if x <= 0.97), None)
+            if first is None:
+                continue
+            dip += 1
+            bottom.append(min(range(len(v)), key=lambda i: v[i]))
+            back = next((i for i in range(first + 1, len(v) - 1) if v[i] >= 1.0), None)
+            if back is None:
+                norec.append(v[-1] - 1)
+            else:
+                rec_days.append(back - first)
+        q3 = sorted(rec_days)[len(rec_days) * 3 // 4] if rec_days else None
+        w(f"| {names[k]} | {len(ts)} | {dip}（{pct(dip / len(ts), 0)}） | {len(rec_days)}（{pct(len(rec_days) / dip, 0) if dip else '—'}） | "
+          f"{med(rec_days)}日／{q3}日 | {len(norec)}（{pct(sum(norec) / len(norec), 1) if norec else '—'}） | {med(bottom)}日 |")
+    w("\n- この結果はルールの条件どおりに機械的に計算したもので、Claudeによる個別銘柄の売買判断ではない。")
+    os.makedirs(OUTDIR, exist_ok=True)
+    open(OUTDIR + "下がった後に買値まで戻るまでの日数.md", "w", encoding="utf-8").write("\n".join(L) + "\n")
+    print("書き出し", file=sys.stderr)
+
+
+def pullback_stage(cur_tr, base, data, build, screen_and_confirm, rec, idx):
+    """新高値V2の合図の後、すぐ買わずに、ピボット（抜けた高値）近くまで下がるのを待って指値で買うか（2026-10-08 ユーザーの指示）。
+    指値は合図の翌日から毎晩置き直し、待つ日数のうちに届かなければ見送る。手じまいは今と同じ（引けで50日線割れ・引けで買値の15%下→翌日の寄り付き、かぶせ線・半分売り）"""
+    def trig(t):
+        s, j = data[t["sym"]], t["i0"] - 1
+        return max(max(s["c"][max(0, j - 20):j]), max(s["h"][max(0, j - 500):j]))
+
+    def wait_trades(above, days):
+        out, info = [], {"signals": 0, "filled": 0, "miss": []}
+        vb = [t for t in base if t["rule"] == "V"]
+        cur = {(t["sym"], t["in"]): t for t in cur_tr if t["rule"] == "V"}
+        for t in vb:
+            s, sym = data[t["sym"]], t["sym"]
+            o, l, c, n = s["o"], s["l"], s["c"], len(s["c"])
+            lim = trig(t) * (1 + above)
+            info["signals"] += 1
+            k = next((k for k in range(t["i0"], min(n - 1, t["i0"] + days)) if l[k] <= lim), None)
+            if k is None:
+                ct = cur.get((sym, s["date"][t["i0"]]))
+                if ct:
+                    info["miss"].append(ct["path"][ct["out"]] - 1)
+                continue
+            px = min(o[k], lim)
+            floor, j = px * (1 - STOP), None
+            for jj in range(k, n - 1):
+                if c[jj] <= floor or (s["ma50"][jj] is not None and c[jj] < s["ma50"][jj]):
+                    j = jj
+                    break
+            if j is None:
+                continue
+            info["filled"] += 1
+            out.append({**rec(sym, k, j + 1, px, o[j + 1], "V"), "pb": True})   # 待って買った売買（drop で今の買い方の分だけ外すための印）
+        return out, info
+
+    L = []
+    w = L.append
+    w(f"---\ntype: backtest\ntitle: 新高値V2で下がるのを待って買う\ncreated: {dt.date.today()}\nscript: tools/backtest_retest.py --stage pullback\n---\n")
+    w("# 新高値V2の合図の後、ピボット近くまで下がるのを待って買う\n")
+    w("2026-10-08、ユーザーの質問「損で終わる方が多い（下がる）なら、下がった時に買った方が効率が良いのでは」から確かめた。"
+      "今は合図の翌日の寄り付き（または逆指値）で買う。比べる形は、合図の後、ピボット（直前20日の最高値（終値）と直前2年の最高値の高い方）"
+      "の近くに指値の買いを置き、決めた日数のうちに届いたら買い、届かなければ見送る。手じまいは今と同じ。後知恵なしの監視銘柄、2015年〜、片道0.1%込み。\n")
+    combos = [(0.0, 10), (0.0, 20), (0.02, 10), (0.02, 20), (0.05, 10)]
+    w("## 1. 1回ごとの成績（新高値V2の全部の合図）\n")
+    r0 = [t["path"][t["out"]] - 1 for t in cur_tr if t["rule"] == "V"]
+    avg = lambda xs: pct(sum(xs) / len(xs), 2) if xs else "—"
+    w(f"今の買い方（合図の翌日に買う）: {len(r0)}回、勝率 {pct(sum(1 for x in r0 if x > 0) / len(r0), 0)}、1回平均 {avg(r0)}\n")
+    w("| 待つ形 | 買えた回数（合図に対する割合） | 勝率 | 1回平均 | 買えなかった合図を今の買い方で買った場合の1回平均 |")
+    w("|---|---|---|---|---|")
+    items = []
+    for above, days in combos:
+        tr, info = wait_trades(above, days)
+        lab = f"ピボット{'+' + str(int(above * 100)) + '%' if above else ''}まで下がったら買う（{days}日待つ）"
+        built = build(drop=lambda t: t["rule"] == "V" and not t.get("pb"), add=tr)
+        rr = [t["path"][t["out"]] - 1 for t in built if t["rule"] == "V"]
+        w(f"| {lab} | {len(rr)}（{pct(len(rr) / info['signals'], 0)}） | {pct(sum(1 for x in rr if x > 0) / len(rr), 0) if rr else '—'} | {avg(rr)} | {avg(info['miss'])}（{len(info['miss'])}回） |")
+        items.append((lab, (lambda tr=tr: build(drop=lambda t: t["rule"] == "V" and not t.get("pb"), add=tr))))
+    w("")
+    w("## 2. 資金全体（今の買い方と比べる）\n")
+    screen_and_confirm("新高値V2で下がるのを待って買う", items, w)
+    w("\n- この結果はルールの条件どおりに機械的に計算したもので、Claudeによる個別銘柄の売買判断ではない。")
+    os.makedirs(OUTDIR, exist_ok=True)
+    open(OUTDIR + "新高値V2で下がるのを待って買う.md", "w", encoding="utf-8").write("\n".join(L) + "\n")
+    print("書き出し", file=sys.stderr)
+
+
+def exits_stage(cur_tr):
+    """ルールごとに、損で終わった売買のうち損切り（買値の15%下）まで行った回数と割合（2026-10-08 ユーザーの質問）"""
+    names = {"V": "新高値V2", "M": "ミネルヴィニ（ベースの上抜け）", "B": "押し目（ボリンジャーIII）", "C": "急落の底"}
+    yrs = 11.7
+    L = []
+    w = L.append
+    w(f"---\ntype: backtest\ntitle: 損切りまで行った回数\ncreated: {dt.date.today()}\nscript: tools/backtest_retest.py --stage exits\n---\n")
+    w("# 損切り（買値の15%下）まで行った回数と、損で終わった売買の内訳\n")
+    w("後知恵なしの監視銘柄、2015年〜（約11.7年）、今の売りのルール、片道0.1%込み。ルールの全部の合図の1回ごと（資金の枠に入らなかった合図も含む）。"
+      "1回の損益が-14%以下を「損切りまで行った」とした（損切り15%に、手数料と、損切り前に半分売った分のずれを見込んだ近似。窓を開けて15%より大きく下げた回も入る）。\n")
+    w("| ルール | 合図の数 | 勝ち | 損で終わった | 0〜-5% | -5〜-10% | -10〜-14% | **損切りまで（-14%以下）** | 損切りの割合（全部の売買に対して） | 損の合計のうち損切りの分 |")
+    w("|---|---|---|---|---|---|---|---|---|---|")
+    for k in ("V", "M", "B", "C"):
+        r = [t["path"][t["out"]] - 1 for t in cur_tr if t["rule"] == k]
+        if not r:
+            continue
+        lose = [x for x in r if x <= 0]
+        b1 = sum(1 for x in lose if x > -0.05)
+        b2 = sum(1 for x in lose if -0.10 < x <= -0.05)
+        b3 = sum(1 for x in lose if -0.14 < x <= -0.10)
+        st = [x for x in lose if x <= -0.14]
+        w(f"| {names[k]} | {len(r)}（年{len(r) / yrs:.0f}回） | {len(r) - len(lose)}（{pct((len(r) - len(lose)) / len(r), 0)}） | {len(lose)}（{pct(len(lose) / len(r), 0)}） | "
+          f"{b1} | {b2} | {b3} | **{len(st)}（年{len(st) / yrs:.1f}回）** | {pct(len(st) / len(r), 0)} | {pct(sum(st) / sum(lose), 0) if lose else '—'} |")
+    w("\n- この結果はルールの条件どおりに機械的に計算したもので、Claudeによる個別銘柄の売買判断ではない。")
+    os.makedirs(OUTDIR, exist_ok=True)
+    open(OUTDIR + "損切りまで行った回数.md", "w", encoding="utf-8").write("\n".join(L) + "\n")
+    print("書き出し", file=sys.stderr)
 
 
 def pivot_stage(cur_tr, base, data, build, screen_and_confirm):
