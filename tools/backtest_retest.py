@@ -346,7 +346,7 @@ def main():
     r.add_argument("--etf", default=None, help="etf2x: 2倍ETFにする銘柄（カンマ区切り）。省略すると backtest_2x.HAS_2X")
     r.add_argument("--drag", default=None, help="etf2x: 2倍ETFの目減り（年率）。数値なら全部同じ、'measured' なら 新分析ツール/2倍ETFの対応表.json の実測（ないものは0.12）")
     r.add_argument("--tag", default="", help="etf2x: 結果のファイル名と見出しに付ける名前（例: ムームー証券）")
-    r.add_argument("--stage", default="all", choices=("sell", "combo", "half", "filter", "rule", "stats", "dd", "robust", "earn", "realized", "etf2x", "etfrule", "weinstein", "rsi", "pivot", "exits", "pullback", "recover", "prio", "slope", "slope2", "slope3", "all"))
+    r.add_argument("--stage", default="all", choices=("sell", "combo", "half", "filter", "rule", "stats", "dd", "robust", "earn", "realized", "etf2x", "etfrule", "weinstein", "rsi", "pivot", "exits", "pullback", "recover", "prio", "slope", "slope2", "slope3", "swap", "all"))
     a = ap.parse_args()
     ctx = cb.setup(a.cache, with_parts=False)
     data, members, ind, days, G, end = (ctx[k] for k in ("data", "members", "ind", "days", "G", "end"))
@@ -720,6 +720,8 @@ def main():
         open(OUTDIR + "銘柄の下落率で見送る・優先する.md", "w", encoding="utf-8").write("\n".join(L) + "\n")
         print("書き出し", file=sys.stderr)
         return
+    if a.stage == "swap":
+        return swap_stage(cur_tr, base, data, build, ind, days, is_hi, oos_lo)
     if a.stage == "slope3":
         return slope3_stage(base, data, build, port, days)
     if a.stage == "slope2":
@@ -796,6 +798,136 @@ def main():
         os.makedirs(OUTDIR, exist_ok=True)
         open(out, "w", encoding="utf-8").write("\n".join(L) + "\n")
         print(f"書き出し: {out}", file=sys.stderr)
+
+
+def swap_port(trs, seed, lo, hi, ind, days, prem=None, th=0.0, stats=None):
+    """port と同じ資金の計算に、乗り換えを足したもの。枠が埋まっている日に prem(t) の合図が出たら、含み益が th より大きい保有のうち
+    含み益が一番大きいものを、その日の寄り付き（前日の終値で近似、片道の手数料込み）で売って、その合図を買う"""
+    dd = [d for d in days if lo <= d <= hi]
+    by_in = {}
+    for t in trs:
+        if lo <= t["in"] and t["out"] <= hi:
+            by_in.setdefault(t["in"], []).append(t)
+    rnd = random.Random(seed)
+    cash, held, peak, mdd, eq = 1.0, [], 1.0, 0.0, 1.0
+    for d in dd:
+        still = []
+        for h in held:
+            h["vp"] = h["v"]
+            v = h["t"]["path"].get(d)
+            if v is not None:
+                h["v"] = v
+            if h["t"]["out"] == d:
+                cash += h["size"] * h["v"]
+            else:
+                still.append(h)
+        held = still
+        eq = cash + sum(h["size"] * h["v"] for h in held)
+        for t in sorted(by_in.get(d, []), key=lambda t: (t["prio"], rnd.random())):
+            if any(h["t"]["sym"] == t["sym"] for h in held):
+                continue
+            if len(held) >= SLOTS:
+                if not (prem and prem(t)):
+                    continue
+                gain = [h for h in held if h["vp"] / h["v0"] - 1 > th]
+                if not gain:
+                    continue
+                h = max(gain, key=lambda h: h["vp"] / h["v0"])
+                cash += h["size"] * h["vp"] * (1 - COST)
+                held.remove(h)
+                if stats is not None:
+                    stats.append(h["vp"] / h["v0"] - 1)
+            if sum(1 for h in held if ind.get(h["t"]["sym"]) == ind.get(t["sym"])) >= 2:
+                continue
+            size = min(eq / SLOTS * t.get("w", 1.0), cash)
+            if size <= 0:
+                break
+            cash -= size
+            v0 = t["path"].get(d, 1.0)
+            if t["out"] == d:
+                cash += size * v0
+                continue
+            held.append({"t": t, "size": size, "v": v0, "vp": v0, "v0": 1.0})
+        eq = cash + sum(h["size"] * h["v"] for h in held)
+        peak = max(peak, eq)
+        mdd = max(mdd, 1 - eq / peak)
+    yrs = (dt.date.fromisoformat(dd[-1]) - dt.date.fromisoformat(dd[0])).days / 365.25
+    return eq ** (1 / yrs) - 1, mdd
+
+
+def swap_stage(cur_tr, base, data, build, ind, days, is_hi, oos_lo):
+    """出る回数は少ないが勝率が高く下落が小さい合図が出たら、含み益の保有を利確して乗り換えるか（2026-10-10 ユーザーの指示）"""
+    sma = lambda c, j, n: sum(c[j - n + 1:j + 1]) / n
+    def s50(b):
+        c, j = data[b["sym"]]["c"], b["i0"] - 1
+        return sma(c, j, 50) / sma(c, j - 20, 50) - 1 if j >= 70 else 0.0
+    bmap = {(data[t["sym"]]["date"][t["i0"]], t["sym"], t["rule"]): t for t in base}
+    B = lambda t: bmap[(t["in"], t["sym"], t["rule"])]
+    rs = lambda t: data[t["sym"]]["rs"][B(t)["i0"] - 1] or 0
+    yrs = 11.7
+    groups = {
+        "新高値V2（全部）": lambda t: t["rule"] == "V",
+        "ミネルヴィニ（全部）": lambda t: t["rule"] == "M",
+        "押し目（全部）": lambda t: t["rule"] == "B",
+        "押し目・RS≧80": lambda t: t["rule"] == "B" and rs(t) >= 80,
+        "押し目・RS≧90": lambda t: t["rule"] == "B" and rs(t) >= 90,
+        "急落の底（全部）": lambda t: t["rule"] == "C",
+        "急落の底・RS≧80": lambda t: t["rule"] == "C" and rs(t) >= 80,
+        "急落の底・50日線の傾きが小さい20%": None,
+    }
+    cs = sorted(s50(B(t)) for t in cur_tr if t["rule"] == "C")
+    c20 = cs[len(cs) // 5]
+    groups["急落の底・50日線の傾きが小さい20%"] = lambda t: t["rule"] == "C" and s50(B(t)) <= c20
+    L = []
+    w = L.append
+    w(f"---\ntype: backtest\ntitle: 良い合図が出たら含み益の保有を利確して乗り換える\ncreated: {dt.date.today()}\nscript: tools/backtest_retest.py --stage swap\n---\n")
+    w("# 出る回数は少ないが勝率が高く下落が小さい合図が出たら、含み益の保有を利確して乗り換えるか\n")
+    w("2026-10-10、ユーザーの指示。後知恵なしの監視銘柄、2015年〜、今のルール（同じ日の候補は50日線の傾きが小さい順）、4銘柄・1銘柄25%、株だけ、片道0.1%込み。\n")
+    w("## 1. 合図の種類ごとの成績（全部の合図、1回ごと）\n")
+    w("「保有中の一番深い下げ」は、買ってから売るまでの終値で一番下がった割合の平均。\n")
+    w("| 合図 | 回数（年あたり） | 勝率 | 1回平均 | 保有中の一番深い下げ（平均） | 1回の最悪 | 保有日数（中央値、取引日） |")
+    w("|---|---|---|---|---|---|---|")
+    for nm, f in groups.items():
+        ts = [t for t in cur_tr if f(t)]
+        if not ts:
+            continue
+        r = [t["path"][t["out"]] - 1 for t in ts]
+        mae = [min(v for d, v in t["path"].items() if d <= t["out"]) - 1 for t in ts]
+        hold = sorted(len([d for d in t["path"] if d <= t["out"]]) for t in ts)
+        w(f"| {nm} | {len(ts)}（年{len(ts) / yrs:.0f}回） | {pct(sum(1 for x in r if x > 0) / len(r), 0)} | {pct(sum(r) / len(r), 2)} | {pct(sum(mae) / len(mae), 1)} | {pct(min(r), 0)} | {hold[len(hold) // 2]}日 |")
+    trs = [{**t, "prio": s50(B(t))} for t in cur_tr]
+    w("\n## 2. 乗り換えを資金全体で試す（今のルールと比べる）\n")
+    w("枠（4つ）が埋まっている日に、下の合図が出たら、含み益（前日の終値で、買値から）が条件を超える保有のうち一番大きいものを、その日の寄り付きで売り、その合図を買う。"
+      "乗り換えの合図が出なければ今のルールと同じ。乱数50通り×2組の中央値。\n")
+    w("| 乗り換える合図 | 利確する保有の条件 | 1組目 年率 | 最大下落率 | 設計 | 確認 | 2組目 年率 | 最大下落率 | 設計 | 確認 | 乗り換えの回数（年あたり）・売った保有の含み益の平均 |")
+    w("|---|---|---|---|---|---|---|---|---|---|---|")
+    med = lambda xs: sorted(xs)[len(xs) // 2]
+    def run(prem, th):
+        out = []
+        for s0 in (5000, 7300):
+            a_, m_, i_, o_ = [], [], [], []
+            st = []
+            for k in range(50):
+                g, m = swap_port(trs, s0 + k, days[0], days[-1], ind, days, prem, th, st if s0 == 5000 else None)
+                a_.append(g); m_.append(m)
+                i_.append(swap_port(trs, s0 + k, days[0], is_hi, ind, days, prem, th)[0])
+                o_.append(swap_port(trs, s0 + k, oos_lo, days[-1], ind, days, prem, th)[0])
+            out.append((med(a_), med(m_), med(i_), med(o_), st))
+        return out
+    base_r = run(None, 0)
+    def row(nm, cond, r):
+        st = r[0][4]
+        n = f"年{len(st) / 50 / yrs:.1f}回・{pct(sum(st) / len(st), 1)}" if st else "—"
+        w(f"| {nm} | {cond} | {pct(r[0][0])} | {pct(r[0][1])} | {pct(r[0][2])} | {pct(r[0][3])} | {pct(r[1][0])} | {pct(r[1][1])} | {pct(r[1][2])} | {pct(r[1][3])} | {n} |")
+    row("（乗り換えなし＝今のルール）", "—", base_r)
+    for nm in ("急落の底（全部）", "急落の底・RS≧80", "急落の底・50日線の傾きが小さい20%", "押し目・RS≧90", "押し目・RS≧80"):
+        for th in (0.0, 0.10):
+            row(nm, f"含み益 {'+' + str(int(th * 100)) + '%超' if th else 'プラス'}", run(groups[nm], th))
+    w("\n- 「設計」は2015〜2021年、「確認」は2022年〜。採用の目安は、今のルールより両方の期間で上回ること（2組とも）。")
+    w("- この結果はルールの条件どおりに機械的に計算したもので、Claudeによる個別銘柄の売買判断ではない。")
+    os.makedirs(OUTDIR, exist_ok=True)
+    open(OUTDIR + "良い合図が出たら含み益の保有を利確して乗り換える.md", "w", encoding="utf-8").write("\n".join(L) + "\n")
+    print("書き出し", file=sys.stderr)
 
 
 def slope3_stage(base, data, build, port, days):
