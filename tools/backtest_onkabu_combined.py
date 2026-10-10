@@ -148,6 +148,37 @@ def cmd_newtrades(a):
     print(f"新分析ツールの売買 {len(out)}件を保存（{NEW_PKL}）")
 
 
+def upgrade_trades(trades, cache=DEFAULT_CACHE):
+    """新分析ツールの今の形にする（2026-10-09〜）: 同じ日の候補は50日線の傾き（20日前からの上昇率、買う前の日）が小さい順、
+    2倍ETFの対応表で目減り年15%未満の銘柄は2倍ETF（実測の目減り）。backtest_retest.slope3_stage と同じ作り方"""
+    root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+    tab = json.load(open(os.path.join(root, "新分析ツール", "2倍ETFの対応表.json"), encoding="utf-8"))
+    drag = {u: -x["drag"] for u, x in tab.items() if isinstance(x, dict) and "drag" in x}
+    has = {u for u, d in drag.items() if d < 0.15}
+    px = {}
+    out = []
+    for t in trades:
+        s = t["sym"]
+        if s not in px:
+            d = load_prices(cache, s)
+            px[s] = (d["c"], {x: k for k, x in enumerate(d["date"])})
+        c, pos = px[s]
+        j = pos[t["in"]] - 1
+        prio = (sum(c[j - 49:j + 1]) / 50) / (sum(c[j - 69:j - 19]) / 50) - 1 if j >= 70 else 0.0
+        path = t["path"]
+        if s in has:
+            fee = drag[s] / 252
+            e, prev, pv = 1 - COST, 1 - COST, {}
+            for d in sorted(path):
+                g_ = path[d]
+                e = max(0.0, e * (1 + 2 * (g_ / prev - 1)) * (1 - fee))
+                prev = g_
+                pv[d] = e
+            path = pv
+        out.append({**t, "prio": prio, "path": path, "out": max(path)})
+    return out, has
+
+
 # ---------- 組み合わせの再現 ----------
 
 class Account:
@@ -158,6 +189,7 @@ class Account:
         self.dbl = {}     # sym -> {sh, px, t}
         self.new = {}     # sym -> {t: trade, size, v}
         self.onk = {}     # sym -> 株数
+        self.onk_cost = {}  # sym -> 恩株の買値の合計
         self.realized = 0.0
 
 
@@ -177,7 +209,7 @@ def run(feats, new_trades, ind, days, dbl_sig, mode, seed=0, cash_px=None, split
     for t in new_trades:
         by_in.setdefault(t["in"], []).append(t)
     pending = []
-    curve = []
+    curve, rcurve = [], []
     n_onk = 0
     year = days[0][:4]
 
@@ -271,6 +303,7 @@ def run(feats, new_trades, ind, days, dbl_sig, mode, seed=0, cash_px=None, split
                     A.cash += sell * c * (1 - COST)
                     A.realized += sell * (c * (1 - COST) - p["px"])
                     A.onk[s] = A.onk.get(s, 0.0) + p["sh"] - sell
+                    A.onk_cost[s] = A.onk_cost.get(s, 0.0) + (p["sh"] - sell) * p["px"]
                     n_onk += 1
                     del A.dbl[s]
                 elif c <= p["px"] * 0.7 or t - p["t"] >= 189:
@@ -293,7 +326,13 @@ def run(feats, new_trades, ind, days, dbl_sig, mode, seed=0, cash_px=None, split
                 c = px(s, d)
                 eq += sh * (c if c is not None else feats[s]["c"][-1])
         curve.append(eq)
-    return curve, n_onk
+        # 確定した損益だけ: 持っている株・恩株は買った額のまま（恩株は2倍で売った残りの株の買値）
+        req = 0.0
+        for acc in accts:
+            req += acc.cash + sum(h["size"] for h in acc.new.values()) + sum(p["sh"] * p["px"] for p in acc.dbl.values())
+            req += sum(acc.onk_cost.get(s, 0.0) for s in acc.onk)
+        rcurve.append(req)
+    return curve, n_onk, rcurve
 
 
 def metrics(curve, days):
@@ -330,6 +369,9 @@ def cmd_run(a):
     members, spy, feats = bs_.load_all()
     nt = pickle.load(open(NEW_PKL, "rb"))
     new_trades, ind = nt["trades"], nt["ind"]
+    has2x = set()
+    if a.form == "current":
+        new_trades, has2x = upgrade_trades(new_trades)
     # 倍増ツールの株価に新分析ツールの銘柄も要る（同じ銘柄の移し替えで使うのは倍増側だけなので不要）
     sig = {"mom": ("r126", 1.0), "hi": "nh", "rev": 0.1, "extra": None}
     q = load_prices(DEFAULT_CACHE, "QQQ")
@@ -363,12 +405,12 @@ def cmd_run(a):
             res = []
             for seed in range(a.seeds):
                 kw2 = {k: v for k, v in kw.items() if k != "cash"}
-                curve, n_onk = run(feats, nts, ind, days, sbd[ex], seed=seed, cash_px=qqq if kw.get("cash") == "QQQ" else None, **kw2)
+                curve, n_onk, rcurve = run(feats, nts, ind, days, sbd[ex], seed=seed, cash_px=qqq if kw.get("cash") == "QQQ" else None, **kw2)
                 c, m = metrics(curve, days)
-                res.append((c, m, n_onk))
-            cells.append((st.median(r[0] for r in res), st.median(r[1] for r in res), st.median(r[2] for r in res)))
+                res.append((c, m, n_onk, metrics(rcurve, days)[1]))
+            cells.append(tuple(st.median(r[k] for r in res) for k in range(4)))
         rows.append((label, cells))
-        print(label, [f"{c:.1%}/{m:.0%}" for c, m, _ in cells], flush=True)
+        print(label, [f"{c:.1%}/{m:.0%}/{rm:.0%}" for c, m, _, rm in cells], flush=True)
     out = []
     w = out.append
     w("---\ntype: backtest\ntitle: 倍増ツールと新分析ツールの組み合わせ\n"
@@ -379,17 +421,19 @@ def cmd_run(a):
     w("## 前提\n")
     w("- 倍増ツール: `恩株ツール/採用ルール.json`（6カ月+100%・52週高値・売上≧10%、3銘柄、−30%損切り、189取引日、2倍で55.7%売って恩株）")
     w("- 新分析ツール: 今の採用ルール（ボリンジャーIII・急落の底・ミネルヴィニ・新高値V2、4銘柄、損切り15%、半分売り・かぶせ線・大陰線）。"
-      "`tools/backtest_retest.py` の「今のルール」と同じ売買の一覧（後知恵なしの監視銘柄）")
+      "`tools/backtest_retest.py` の「今のルール」と同じ売買の一覧（後知恵なしの監視銘柄）"
+      + ("。**2026-10-09〜の今の形: 同じ日の候補は50日線の傾きが小さい順、2倍ETFの対応表で目減り年15%未満の"
+         f"{len(has2x)}銘柄は2倍ETF（実測の目減り）**（`backtest_retest.py --stage slope3` と同じ作り方）" if a.form == "current" else "（株だけ・ランダムな順の古い形）"))
     w("- 同じ資金のときは倍増ツールを優先: 倍増ツールの合図の銘柄を新分析ツールで持っていたら、倍増ツールに移す。新分析ツールは倍増ツールが持っている銘柄を買わない")
     w("- 税: 両方とも、売って確定した損益を暦年ごとに通算して年末に20.315%（損失の繰越なし）。最後に持っている株・QQQには税をかけない。売買コスト片道0.1%")
     w(f"- 新分析ツールの買う順番は乱数で、{a.seeds}通りの中央値\n")
-    w("## 結果（年率（最大下落率））\n")
+    w("## 結果（年率（含み損込みの最大下落率・確定した損益だけの最大下落率））\n")
     w("| 組み合わせ | " + " | ".join(c[0] for c in CONDS) + " |")
     w("|---|" + "---|" * len(CONDS))
     w("| （比べる相手）SPYを持ち続ける | " + " | ".join(f"{bench[(c[0], 'SPY')][0]:.1%}（{bench[(c[0], 'SPY')][1]:.0%}）" for c in CONDS) + " |")
     w("| （比べる相手）QQQを持ち続ける | " + " | ".join(f"{bench[(c[0], 'QQQ')][0]:.1%}（{bench[(c[0], 'QQQ')][1]:.0%}）" for c in CONDS) + " |")
     for label, cells in rows:
-        w(f"| {label} | " + " | ".join(f"{c:.1%}（{m:.0%}）" for c, m, _ in cells) + " |")
+        w(f"| {label} | " + " | ".join(f"{c:.1%}（{m:.0%}・確定{rm:.0%}）" for c, m, _, rm in cells) + " |")
     text = "\n".join(out) + "\n"
     if a.out:
         open(a.out, "w").write(text)
@@ -402,6 +446,7 @@ def main():
     ap.add_argument("--seeds", type=int, default=10)
     ap.add_argument("--out")
     ap.add_argument("--summary")
+    ap.add_argument("--form", default="current", choices=("current", "old"), help="新分析ツールの形。current: 50日線の傾きが小さい順・2倍ETF（今の形）")
     a = ap.parse_args()
     {"newtrades": cmd_newtrades, "run": cmd_run}[a.cmd](a)
 
