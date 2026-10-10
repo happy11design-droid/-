@@ -23,7 +23,9 @@ COST = 0.001
 
 
 def simulate(feats, days, sig_by_day, slots=4, stop=None, T=252, rot=None, entry="open", cash_px=None, seed=0,
-             capital=6000.0, collect=False):
+             capital=6000.0, collect=False, order="random"):
+    """order: 枠より多く合図が出たときの選び方。"random"・"mom_desc"（6カ月の上昇が大きい順）・"mom_asc"（小さい順）・
+    "rev_desc"（売上の伸びが大きい順）・"vol_asc"（直近1カ月の上昇が小さい順）"""
     rnd = random.Random(seed)
     pos = {}
     for s, f in feats.items():
@@ -129,6 +131,12 @@ def simulate(feats, days, sig_by_day, slots=4, stop=None, T=252, rot=None, entry
         # 3) 合図
         today = [s for s in sig_by_day.get(d, ()) if s not in active and not any(q[0] == s for q in pending)]
         rnd.shuffle(today)
+        if order != "random":
+            key = {"mom_desc": ("r126", -1), "mom_asc": ("r126", 1), "rev_desc": ("rev", -1), "vol_asc": ("r21", 1)}[order]
+            def kv(x):
+                v = feats[x][key[0]][pos[x][d]]
+                return 9e9 if v != v else key[1] * v
+            today.sort(key=kv)
         free = slots - len(active) - sum(1 for q in pending if q[1] != "add")
         for s in today:
             if free <= 0 and rot is not None and active:
