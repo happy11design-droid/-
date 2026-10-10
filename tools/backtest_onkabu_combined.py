@@ -194,7 +194,9 @@ class Account:
 
 
 def run(feats, new_trades, ind, days, dbl_sig, mode, seed=0, cash_px=None, split=None, fund="free", slots_d=3, slots_n=4,
-        use_new=True, use_dbl=True, capital=6000.0):
+        use_new=True, use_dbl=True, capital=6000.0, dedup=True):
+    """dedup: 同じ銘柄は倍増ツールを優先（新分析ツールで持っていたら倍増ツールに移し、新分析ツールは倍増ツールの銘柄を買わない）。
+    False なら両方のツールが同じ銘柄を別々に持ってよい"""
     """mode: "pool"（同じ資金。倍増ツールを優先）か "split"（split＝倍増ツールの割合で口座を分ける）
     fund（pool のとき）: "free" 倍増ツールは空いている現金だけで買う／"sell" 足りなければ新分析ツールの値上がり率が低い順に売って作る"""
     rnd = random.Random(seed)
@@ -243,7 +245,7 @@ def run(feats, new_trades, ind, days, dbl_sig, mode, seed=0, cash_px=None, split
                 if o is None or s in A.dbl or len(A.dbl) >= slots_d:
                     continue
                 size = work(A) / slots_d
-                if s in A.new:        # 同じ銘柄を新分析ツールで持っていたら、倍増ツールに移す（寄り付きの値で）
+                if dedup and s in A.new:        # 同じ銘柄を新分析ツールで持っていたら、倍増ツールに移す（寄り付きの値で）
                     close_new(A, s, d)
                 if A.cash < size and mode == "pool" and fund == "sell":
                     for s2 in sorted(A.new, key=lambda x: A.new[x]["v"]):
@@ -270,7 +272,7 @@ def run(feats, new_trades, ind, days, dbl_sig, mode, seed=0, cash_px=None, split
             eqB = work(B)
             for tr in todays:
                 s = tr["sym"]
-                if s in B.new or s in A.dbl:
+                if s in B.new or (dedup and s in A.dbl):
                     continue
                 if len(B.new) >= slots_n:
                     break
@@ -360,6 +362,12 @@ VARIANTS = [
     ("資金を分ける 倍増33%・新分析67%（余る現金はQQQ）", dict(mode="split", split=1 / 3, cash="QQQ")),
     ("資金を分ける 倍増67%・新分析33%（余る現金はQQQ）", dict(mode="split", split=2 / 3, cash="QQQ")),
     ("資金を分ける 倍増50%・新分析50%（余る現金は0%）", dict(mode="split", split=0.5, cash=None)),
+    ("同じ資金・同じ銘柄も両方で持つ・倍増の資金が足りなければ新分析を売る・余る現金はQQQ", dict(mode="pool", fund="sell", cash="QQQ", dedup=False)),
+    ("同じ資金・同じ銘柄も両方で持つ・倍増は空いた現金だけで買う・余る現金はQQQ", dict(mode="pool", fund="free", cash="QQQ", dedup=False)),
+    ("資金を分ける 倍増50%・新分析50%・同じ銘柄も両方で持つ（余る現金はQQQ）", dict(mode="split", split=0.5, cash="QQQ", dedup=False)),
+    ("資金を分ける 倍増33%・新分析67%・同じ銘柄も両方で持つ（余る現金はQQQ）", dict(mode="split", split=1 / 3, cash="QQQ", dedup=False)),
+    ("資金を分ける 倍増67%・新分析33%・同じ銘柄も両方で持つ（余る現金はQQQ）", dict(mode="split", split=2 / 3, cash="QQQ", dedup=False)),
+    ("資金を分ける 倍増20%・新分析80%・同じ銘柄も両方で持つ（余る現金はQQQ）", dict(mode="split", split=0.2, cash="QQQ", dedup=False)),
 ]
 
 
@@ -397,7 +405,7 @@ def cmd_run(a):
             c = [d0["c"][d0["date"].index(x)] for x in days]
             bench[(name, sym)] = metrics(c, days)
     rows = []
-    for label, kw in VARIANTS:
+    for label, kw in (VARIANTS[-a.last:] if a.last else VARIANTS):
         cells = []
         for name, lo, hi, ex in CONDS:
             days = [d for d in spy["date"] if lo <= d <= hi]
@@ -446,6 +454,7 @@ def main():
     ap.add_argument("--seeds", type=int, default=10)
     ap.add_argument("--out")
     ap.add_argument("--summary")
+    ap.add_argument("--last", type=int, default=0, help="最後のN通りだけ計算する")
     ap.add_argument("--form", default="current", choices=("current", "old"), help="新分析ツールの形。current: 50日線の傾きが小さい順・2倍ETF（今の形）")
     a = ap.parse_args()
     {"newtrades": cmd_newtrades, "run": cmd_run}[a.cmd](a)
