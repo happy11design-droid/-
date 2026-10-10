@@ -466,6 +466,9 @@ VARIANTS_E = [
     ("⑤新分析の1銘柄を資金÷3に大きくする（QQQ）", dict(mode="pool", fund="free", cash="QQQ", dedup=False, dbl_frac=0.25, new_frac=1 / 3)),
     ("⑤新分析÷3＋倍増の合図を20日待たせる（QQQ）", dict(mode="pool", fund="free", cash="QQQ", dedup=False, dbl_frac=0.25, new_frac=1 / 3, wait=20)),
     ("⑥倍増の合図で新分析の一番弱い株を売って買う（QQQ）", dict(mode="pool", fund="sell", cash="QQQ", dedup=False, dbl_frac=0.25)),
+    ("⑦倍増用に25%を取っておく＋合図を10日待たせる（QQQ）", dict(mode="pool", fund="free", cash="QQQ", dedup=False, dbl_frac=0.25, reserve=0.25, wait=10)),
+    ("⑦倍増用に15%を取っておく＋合図を10日待たせる（QQQ）", dict(mode="pool", fund="free", cash="QQQ", dedup=False, dbl_frac=0.25, reserve=0.15, wait=10)),
+    ("⑦倍増用に25%を取っておく＋合図を5日待たせる（QQQ）", dict(mode="pool", fund="free", cash="QQQ", dedup=False, dbl_frac=0.25, reserve=0.25, wait=5)),
 ]
 
 VARIANTS18 = [("新分析ツールだけ（余る現金はQQQ）", dict(mode="pool", use_dbl=False, cash="QQQ")),
