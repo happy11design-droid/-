@@ -346,7 +346,7 @@ def main():
     r.add_argument("--etf", default=None, help="etf2x: 2倍ETFにする銘柄（カンマ区切り）。省略すると backtest_2x.HAS_2X")
     r.add_argument("--drag", default=None, help="etf2x: 2倍ETFの目減り（年率）。数値なら全部同じ、'measured' なら 新分析ツール/2倍ETFの対応表.json の実測（ないものは0.12）")
     r.add_argument("--tag", default="", help="etf2x: 結果のファイル名と見出しに付ける名前（例: ムームー証券）")
-    r.add_argument("--stage", default="all", choices=("sell", "combo", "half", "filter", "rule", "stats", "dd", "robust", "earn", "realized", "etf2x", "etfrule", "weinstein", "rsi", "pivot", "exits", "pullback", "recover", "prio", "slope", "slope2", "slope3", "swap", "premium", "all"))
+    r.add_argument("--stage", default="all", choices=("sell", "combo", "half", "filter", "rule", "stats", "dd", "robust", "earn", "realized", "etf2x", "etfrule", "weinstein", "rsi", "pivot", "exits", "pullback", "recover", "prio", "slope", "slope2", "slope3", "swap", "premium", "hot", "all"))
     a = ap.parse_args()
     ctx = cb.setup(a.cache, with_parts=False)
     data, members, ind, days, G, end = (ctx[k] for k in ("data", "members", "ind", "days", "G", "end"))
@@ -720,6 +720,8 @@ def main():
         open(OUTDIR + "銘柄の下落率で見送る・優先する.md", "w", encoding="utf-8").write("\n".join(L) + "\n")
         print("書き出し", file=sys.stderr)
         return
+    if a.stage == "hot":
+        return hot_stage(base, data, build, ev, rec, days)
     if a.stage == "premium":
         return premium_stage(cur_tr, base, data, ind, days, is_hi, oos_lo)
     if a.stage == "swap":
@@ -863,6 +865,100 @@ def swap_port(trs, seed, lo, hi, ind, days, prem=None, th=0.0, stats=None, curve
             curve.append(eq)
     yrs = (dt.date.fromisoformat(dd[-1]) - dt.date.fromisoformat(dd[0])).days / 365.25
     return eq ** (1 / yrs) - 1, mdd
+
+
+def hot_stage(base, data, build, ev, rec, days):
+    """順張り（新高値V2・ミネルヴィニ）で、合図の日に終値が+2σより上かつRSI(14)が70超え（過熱）のとき、見送る・数日待つ・中心線まで待つ（2026-10-10 ユーザーの指示）。
+    比べる元は今のルール（同じ日の候補は50日線の傾きが小さい順）"""
+    sma = lambda c, j, n: sum(c[j - n + 1:j + 1]) / n
+    rsis = {}
+    def rsi14(sym, j):
+        if sym not in rsis:
+            rsis[sym] = rsi_wilder(data[sym]["c"], 14)
+        return rsis[sym][j]
+    def s50(sym, j):
+        c = data[sym]["c"]
+        return sma(c, j, 50) / sma(c, j - 20, 50) - 1 if j >= 70 else 0.0
+    def hot(t):
+        s, j = data[t["sym"]], t["i0"] - 1
+        r = rsi14(t["sym"], j)
+        return t["rule"] in ("V", "M") and s["bb_up"][j] is not None and s["c"][j] > s["bb_up"][j] and r is not None and r > 70
+    def exit_from(s, k, px):
+        c, floor = s["c"], px * (1 - STOP)
+        for jj in range(k, len(c) - 1):
+            if c[jj] <= floor or (s["ma50"][jj] is not None and c[jj] < s["ma50"][jj]):
+                return jj + 1
+        return None
+    hots = [t for t in base if hot(t)]
+    def delayed(n):
+        out = []
+        for t in hots:
+            s, sym, i0 = data[t["sym"]], t["sym"], t["i0"]
+            k = i0 + n
+            if k >= len(s["c"]) - 1:
+                continue
+            j = i0 - 1
+            lvl = max(s["c"][max(0, j - 20):j])   # 抜けた水準（合図の日の直前20日の最高値（終値））
+            if s["c"][k - 1] < lvl:              # 待つ間にこの水準より下に戻ったら見送る
+                continue
+            px = s["o"][k]
+            x = exit_from(s, k, px)
+            if x:
+                out.append({**rec(sym, k, x, px, s["o"][x], t["rule"]), "prio": s50(sym, j), "add": True})
+        return out
+    def to_mid(days_):
+        out = []
+        for t in hots:
+            s, sym, i0 = data[t["sym"]], t["sym"], t["i0"]
+            k = next((k for k in range(i0, min(len(s["c"]) - 1, i0 + days_)) if s["bb_mid"][k - 1] and s["l"][k] <= s["bb_mid"][k - 1]), None)
+            if k is None:
+                continue
+            px = min(s["o"][k], s["bb_mid"][k - 1])
+            x = exit_from(s, k, px)
+            if x:
+                out.append({**rec(sym, k, x, px, s["o"][x], t["rule"]), "prio": s50(sym, i0 - 1), "add": True})
+        return out
+    bmap = {(data[t["sym"]]["date"][t["i0"]], t["sym"], t["rule"]): t for t in base}
+    def prio(trs):
+        out = []
+        for t in trs:
+            b = bmap.get((t["in"], t["sym"], t["rule"]))
+            out.append({**t, "prio": s50(t["sym"], b["i0"] - 1)} if b and not t.get("add") else t)
+        return out
+    hot_ids = {id(t) for t in hots}
+    drop_hot = lambda t: id(t) in hot_ids
+    forms = [("今のルール（50日線の傾きが小さい順）", lambda: prio(build()))]
+    forms.append(("1. 過熱した合図は見送る", lambda: prio(build(drop=drop_hot))))
+    for n in (1, 2, 3):
+        forms.append((f"2. 過熱した合図は{n}日待ち、抜けた水準より上なら{n}日後の寄り付きで買う", (lambda n=n: prio(build(drop=drop_hot, add=delayed(n))))))
+    for d_ in (5, 10):
+        forms.append((f"3. 過熱した合図は、{d_}日以内に20日線（バンドの中心）まで下がったら指値で買う", (lambda d_=d_: prio(build(drop=drop_hot, add=to_mid(d_))))))
+    L = []
+    w = L.append
+    nV = sum(1 for t in hots if t["rule"] == "V"); nM = len(hots) - nV
+    allT = sum(1 for t in base if t["rule"] in ("V", "M"))
+    w(f"---\ntype: backtest\ntitle: 過熱した順張りの合図を見送る・待つ\ncreated: {dt.date.today()}\nscript: tools/backtest_retest.py --stage hot\n---\n")
+    w("# 順張りの合図が過熱している（+2σより上かつRSI(14)が70超え）とき、見送る・数日待つ・中心線まで待つ\n")
+    w(f"2026-10-10、ユーザーの指示（保有4銘柄がどれも+2σ付近で買い、2つは20日線まで下げたことから）。過熱した合図: 合図の日の終値がボリンジャーの+2σより上、かつRSI(14)が70超え。"
+      f"順張りの合図{allT}件のうち{len(hots)}件（新高値V2 {nV}件・ミネルヴィニ {nM}件）。押し目・急落の底はそのまま。"
+      "比べる元は今のルール（同じ日の候補は50日線の傾きが小さい順）。後知恵なしの監視銘柄、2015年〜、4銘柄・1銘柄25%、株だけ、片道0.1%込み。乱数20通り・50通り×2組の中央値。\n")
+    sets = ((1000, 20), (5000, 50), (7300, 50))
+    res = {}
+    for nm, fn in forms:
+        trs = fn()
+        res[nm] = [ev(trs, sd) for sd in sets]
+        print(nm, [round(e["all"], 3) for e in res[nm]], file=sys.stderr)
+    b0 = res[forms[0][0]]
+    w("| 形 | 年率（3組） | 最大下落率（組2） | 2015〜2021年（3組） | 2022年〜（3組） | 3組とも両方の期間で今のルールを上回ったか |")
+    w("|---|---|---|---|---|---|")
+    for nm, _ in forms:
+        r = res[nm]
+        ok = all(r[k]["is"] > b0[k]["is"] and r[k]["oos"] > b0[k]["oos"] for k in range(3)) if nm != forms[0][0] else None
+        w(f"| {nm} | {'／'.join(pct(e['all']) for e in r)} | {pct(r[1]['mdd'])} | {'／'.join(pct(e['is']) for e in r)} | {'／'.join(pct(e['oos']) for e in r)} | {'—' if ok is None else ('**確か**' if ok else 'いいえ')} |")
+    w("\n- この結果はルールの条件どおりに機械的に計算したもので、Claudeによる個別銘柄の売買判断ではない。")
+    os.makedirs(OUTDIR, exist_ok=True)
+    open(OUTDIR + "過熱した順張りの合図を見送る・待つ.md", "w", encoding="utf-8").write("\n".join(L) + "\n")
+    print("書き出し", file=sys.stderr)
 
 
 def side_sim(trs, lo, hi, days, slots, cap=None, tool_curve=None, tool_cap=1.0, rate=0.0):
