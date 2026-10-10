@@ -197,7 +197,7 @@ class Account:
 
 
 def run(feats, new_trades, ind, days, dbl_sig, mode, seed=0, cash_px=None, split=None, fund="free", slots_d=3, slots_n=4,
-        use_new=True, use_dbl=True, capital=6000.0, dedup=True, dbl_frac=None, adopt=False, lev_info=None):
+        use_new=True, use_dbl=True, capital=6000.0, dedup=True, dbl_frac=None, adopt=False, lev_info=None, trace=None):
     """dbl_frac: 倍増ツールの1銘柄の金額（資金に対する割合）。None なら 1/slots_d。
     adopt: 倍増ツールの合図の銘柄を新分析ツールで持っていたら、売らずに（2倍ETFならETFのまま）倍増ツールの売りのルールに切り替える。
       2倍・−30%は、その持ち株の金額（新分析ツールで買った額に対して）で判定し、189取引日は切り替えた日から数える。
@@ -376,6 +376,8 @@ def run(feats, new_trades, ind, days, dbl_sig, mode, seed=0, cash_px=None, split
                 eq += sh * (c if c is not None else feats[s]["c"][-1])
         eq += sum(x["v"] for x in adopted.values()) + sum(x["v"] for x in onk_v)
         curve.append(eq)
+        if trace is not None:   # 調べる用: その日の待っている現金（QQQ）の割合と、保有数
+            trace.append((d, sum(a_.cash for a_ in accts) / eq if eq else 0, len(B.new), len(A.dbl) + len(adopted)))
         # 確定した損益だけ: 持っている株・恩株は買った額のまま（恩株は2倍で売った残りの株の買値）
         req = 0.0
         for acc in accts:
