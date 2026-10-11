@@ -197,7 +197,7 @@ class Account:
 
 
 def run(feats, new_trades, ind, days, dbl_sig, mode, seed=0, cash_px=None, split=None, fund="free", slots_d=3, slots_n=4,
-        use_new=True, use_dbl=True, capital=6000.0, dedup=True, dbl_frac=None, adopt=False, lev_info=None, trace=None, new_frac=None, reserve=0.0, wait=0):
+        use_new=True, use_dbl=True, capital=6000.0, dedup=True, dbl_frac=None, adopt=False, lev_info=None, trace=None, new_frac=None, reserve=0.0, wait=0, dbl_etf=False, judge="etf", etf_stop=0.3, after2x="keep"):
     """new_frac: 新分析ツールの1銘柄の金額（資金に対する割合。None なら 1/slots_n）。
     reserve: 新分析ツールが使える額を資金の (1−reserve) までにして、残りを倍増ツール用に取っておく。
     wait: 倍増ツールの合図を現金がなくて買えなかったら、wait 取引日まで待ち、現金ができた日に新分析ツールの買いより先に終値で買う"""
@@ -229,6 +229,10 @@ def run(feats, new_trades, ind, days, dbl_sig, mode, seed=0, cash_px=None, split
     adopted = {}   # sym -> {cost, v, lev, fee, t}（倍増ツールのルールに切り替えた新分析ツールの持ち株）
     onk_v = []     # [{sym, v, lev, fee, cost}]（切り替えた持ち株が2倍になった後の恩株）
     nfrac = new_frac if new_frac is not None else 1 / slots_n
+    # 倍増ツールで2倍ETFを買う形（dbl_etf）: 2倍ETFがある銘柄（lev_info）はETFで買う。
+    #   judge="etf": 2倍・損切り（etf_stop）をETFの金額で判定／"stock": 元の株の値段で判定（損切りは元の株の−30%）
+    #   after2x="keep": 2倍で売った残りはETFのまま恩株に／"stock": 残りも売って元の株に乗り換える（その利益は確定して税）
+    etfp = {}      # sym -> {cost, v, fee, t, upx（元の株の買値）, lp（前の日の元の株の値段）}
     waiting = []   # [(sym, 期限のt)]
     STATS.clear()
     STATS.update({"signals": 0, "skipped": 0, "partial": 0, "overlap": 0, "adopted": 0})
@@ -260,7 +264,7 @@ def run(feats, new_trades, ind, days, dbl_sig, mode, seed=0, cash_px=None, split
         if use_dbl:
             for s in pending:
                 o = px(s, d, "o")
-                if o is None or s in A.dbl or s in adopted or len(A.dbl) + len(adopted) >= slots_d:
+                if o is None or s in A.dbl or s in adopted or s in etfp or len(A.dbl) + len(adopted) + len(etfp) >= slots_d:
                     continue
                 STATS["signals"] += 1
                 if adopt and s in B.new:
@@ -271,7 +275,7 @@ def run(feats, new_trades, ind, days, dbl_sig, mode, seed=0, cash_px=None, split
                     continue
                 if s in B.new:
                     STATS["overlap"] += 1
-                size = (work(A) + sum(x["v"] for x in adopted.values())) * frac
+                size = (work(A) + sum(x["v"] for x in adopted.values()) + sum(x["v"] for x in etfp.values())) * frac
                 if dedup and s in A.new:        # 同じ銘柄を新分析ツールで持っていたら、倍増ツールに移す（寄り付きの値で）
                     close_new(A, s, d)
                 if A.cash < size and mode == "pool" and fund == "sell":
@@ -287,6 +291,11 @@ def run(feats, new_trades, ind, days, dbl_sig, mode, seed=0, cash_px=None, split
                     continue
                 if amt < size * 0.5:
                     STATS["partial"] += 1
+                if dbl_etf and s in lev_info:
+                    etfp[s] = {"cost": amt, "v": amt * (1 - COST), "fee": lev_info[s][1], "t": t, "upx": o, "lp": o}
+                    A.cash -= amt
+                    STATS["etf"] = STATS.get("etf", 0) + 1
+                    continue
                 A.dbl[s] = {"sh": amt / (o * (1 + COST)), "px": o * (1 + COST), "t": t}
                 A.cash -= amt
             pending = []
@@ -322,7 +331,7 @@ def run(feats, new_trades, ind, days, dbl_sig, mode, seed=0, cash_px=None, split
             todays = sorted(by_in.get(d, []), key=lambda x: (x["prio"], rnd.random()))
             eqB = work(B)
             if A is B:
-                eqB += sum(x["v"] for x in adopted.values())
+                eqB += sum(x["v"] for x in adopted.values()) + sum(x["v"] for x in etfp.values())
             for tr in todays:
                 s = tr["sym"]
                 if s in B.new or (dedup and s in A.dbl):
@@ -367,6 +376,39 @@ def run(feats, new_trades, ind, days, dbl_sig, mode, seed=0, cash_px=None, split
                     A.cash += p["sh"] * c * (1 - COST)
                     A.realized += p["sh"] * (c * (1 - COST) - p["px"])
                     del A.dbl[s]
+            # 倍増ツールの2倍ETF
+            for s in list(etfp):
+                x = etfp[s]
+                c = px(s, d)
+                gone = c is None and d > feats[s]["date"][-1]
+                if c is not None:
+                    x["v"] = max(0.0, x["v"] * (1 + 2 * (c / x["lp"] - 1)) * (1 - x["fee"]))
+                    x["lp"] = c
+                if judge == "etf":
+                    hit2 = x["v"] >= 2 * x["cost"]
+                    stop = etf_stop is not None and x["v"] <= (1 - etf_stop) * x["cost"]
+                else:
+                    hit2 = c is not None and c >= 2 * x["upx"]
+                    stop = c is not None and c <= 0.7 * x["upx"]
+                if hit2 and x["v"] > x["cost"]:
+                    f = min(1.0, x["cost"] / (x["v"] - TAX * (x["v"] - x["cost"])))   # 税引き後で元本が戻る割合
+                    sv = x["v"] * f
+                    A.cash += sv * (1 - COST)
+                    A.realized += sv * (1 - COST) - f * x["cost"]
+                    rest, rest_cost = x["v"] - sv, x["cost"] * (1 - f)
+                    if after2x == "stock" and c is not None:
+                        A.realized += rest * (1 - COST) - rest_cost            # 残りも売って元の株に乗り換える
+                        sh = rest * (1 - COST) ** 2 / c
+                        A.onk[s] = A.onk.get(s, 0.0) + sh
+                        A.onk_cost[s] = A.onk_cost.get(s, 0.0) + sh * c
+                    else:
+                        onk_v.append({"sym": s, "v": rest, "lev": 2, "fee": x["fee"], "cost": rest_cost})
+                    n_onk += 1
+                    del etfp[s]
+                elif stop or t - x["t"] >= 189 or gone:
+                    A.cash += x["v"] * (1 - COST)
+                    A.realized += x["v"] * (1 - COST) - x["cost"]
+                    del etfp[s]
             # 切り替えた持ち株（倍増ツールのルール）
             for s in list(adopted):
                 x = adopted[s]
@@ -390,9 +432,9 @@ def run(feats, new_trades, ind, days, dbl_sig, mode, seed=0, cash_px=None, split
                 if c is not None and i:
                     x["v"] = max(0.0, x["v"] * (1 + x["lev"] * (c / feats[x["sym"]]["c"][i - 1] - 1)) * (1 - x["fee"]))
             # 合図（翌日の寄り付きで買う。6カ月の上昇が大きい順）
-            free = slots_d - len(A.dbl) - len(adopted)
+            free = slots_d - len(A.dbl) - len(adopted) - len(etfp)
             if free > 0:
-                hits = [s for s in dbl_sig.get(d, ()) if s not in A.dbl and s not in adopted]
+                hits = [s for s in dbl_sig.get(d, ()) if s not in A.dbl and s not in adopted and s not in etfp]
                 hits.sort(key=lambda s: -feats[s]["r126"][pos[s][d]])
                 pending = hits[:free]
         eq = 0.0
@@ -404,7 +446,7 @@ def run(feats, new_trades, ind, days, dbl_sig, mode, seed=0, cash_px=None, split
             for s, sh in acc.onk.items():
                 c = px(s, d)
                 eq += sh * (c if c is not None else feats[s]["c"][-1])
-        eq += sum(x["v"] for x in adopted.values()) + sum(x["v"] for x in onk_v)
+        eq += sum(x["v"] for x in adopted.values()) + sum(x["v"] for x in onk_v) + sum(x["v"] for x in etfp.values())
         curve.append(eq)
         if trace is not None:   # 調べる用: その日の待っている現金（QQQ）の割合と、保有数
             trace.append((d, sum(a_.cash for a_ in accts) / eq if eq else 0, len(B.new), len(A.dbl) + len(adopted)))
@@ -413,7 +455,7 @@ def run(feats, new_trades, ind, days, dbl_sig, mode, seed=0, cash_px=None, split
         for acc in accts:
             req += acc.cash + sum(h["size"] for h in acc.new.values()) + sum(p["sh"] * p["px"] for p in acc.dbl.values())
             req += sum(acc.onk_cost.get(s, 0.0) for s in acc.onk)
-        req += sum(x["cost"] for x in adopted.values()) + sum(x["cost"] for x in onk_v)
+        req += sum(x["cost"] for x in adopted.values()) + sum(x["cost"] for x in onk_v) + sum(x["cost"] for x in etfp.values())
         rcurve.append(req)
     return curve, n_onk, rcurve
 
@@ -477,6 +519,18 @@ CASH_SYMS = [("QQQ", "NASDAQ100（QQQ）"), ("SPY", "S&P500（SPY）"), ("SSO", 
 VARIANTS_CASH = [(f"倍増用に25%を取っておく・待っている資金は{lab}", dict(mode="pool", fund="free", cash=sym, dedup=False, dbl_frac=0.25, reserve=0.25))
                  for sym, lab in CASH_SYMS]
 
+_B = dict(mode="pool", fund="free", cash="QQQ", dedup=False, dbl_frac=0.25, reserve=0.25)
+VARIANTS_ETF = [
+    ("今の一番良い形（倍増ツールは株だけ・倍増用に25%をQQQで取っておく）", dict(_B)),
+    ("2倍ETF・ETFの金額で2倍／−30%で損切り・恩株はETFのまま", dict(_B, dbl_etf=True, judge="etf", etf_stop=0.3, after2x="keep")),
+    ("2倍ETF・ETFの金額で2倍／−50%で損切り・恩株はETFのまま", dict(_B, dbl_etf=True, judge="etf", etf_stop=0.5, after2x="keep")),
+    ("2倍ETF・ETFの金額で2倍／損切りなし・恩株はETFのまま", dict(_B, dbl_etf=True, judge="etf", etf_stop=None, after2x="keep")),
+    ("2倍ETF・ETFの金額で2倍／−30%で損切り・恩株は元の株に乗り換え", dict(_B, dbl_etf=True, judge="etf", etf_stop=0.3, after2x="stock")),
+    ("2倍ETF・ETFの金額で2倍／−50%で損切り・恩株は元の株に乗り換え", dict(_B, dbl_etf=True, judge="etf", etf_stop=0.5, after2x="stock")),
+    ("2倍ETF・元の株の値段で2倍／元の株の−30%で損切り・恩株はETFのまま", dict(_B, dbl_etf=True, judge="stock", after2x="keep")),
+    ("2倍ETF・元の株の値段で2倍／元の株の−30%で損切り・恩株は元の株に乗り換え", dict(_B, dbl_etf=True, judge="stock", after2x="stock")),
+]
+
 VARIANTS18 = [("新分析ツールだけ（余る現金はQQQ）", dict(mode="pool", use_dbl=False, cash="QQQ")),
               ("倍増ツールだけ（余る現金はQQQ）", dict(mode="pool", use_new=False, cash="QQQ"))]
 for _n, _f in ((4, 1 / 3), (5, 1 / 3), (6, 1 / 3), (4, 1 / 4), (5, 1 / 4), (6, 1 / 4), (4, 1 / 5)):
@@ -519,11 +573,11 @@ def cmd_run(a):
             c = [d0["c"][d0["date"].index(x)] for x in days]
             bench[(name, sym)] = metrics(c, days)
     rows = []
-    VS = VARIANTS_CASH if a.set == "cash" else VARIANTS_E if a.set == "entry" else VARIANTS18 if a.set == "18000" else VARIANTS
+    VS = VARIANTS_ETF if a.set == "etf" else VARIANTS_CASH if a.set == "cash" else VARIANTS_E if a.set == "entry" else VARIANTS18 if a.set == "18000" else VARIANTS
     root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
     tab = json.load(open(os.path.join(root, "新分析ツール", "2倍ETFの対応表.json"), encoding="utf-8"))
     lev_info = {u: (2, -x["drag"] / 252) for u, x in tab.items() if isinstance(x, dict) and "drag" in x and u in has2x}
-    cap = 18000.0 if a.set in ("18000", "entry", "cash") else 6000.0
+    cap = 18000.0 if a.set in ("18000", "entry", "cash", "etf") else 6000.0
     cash_prices = {}
     for sym, _ in CASH_SYMS:
         if sym:
@@ -579,7 +633,8 @@ def cmd_run(a):
         w("| 組み合わせ | 倍増ツールの合図（枠が空いていた回数） | 現金がなく見送り（待たせる形は、待ちに入った回数） | 半分未満しか買えず | 待って買えた | 同じ銘柄を両方で持った |")
         w("|---|---|---|---|---|---|")
         for label, st_ in stats_rows:
-            w(f"| {label} | {st_['signals']} | {st_['skipped']} | {st_['partial']} | {st_.get('waited', 0)} | {st_['overlap']} |")
+            w(f"| {label} | {st_['signals']} | {st_['skipped']} | {st_['partial']} | {st_.get('waited', 0)} | {st_['overlap']} |"
+              + (f"（2倍ETFで買った {st_.get('etf', 0)}回）" if st_.get("etf") else ""))
     text = "\n".join(out) + "\n"
     if a.out:
         open(a.out, "w").write(text)
@@ -593,7 +648,7 @@ def main():
     ap.add_argument("--out")
     ap.add_argument("--summary")
     ap.add_argument("--last", type=int, default=0, help="最後のN通りだけ計算する")
-    ap.add_argument("--set", default="", help="cash: 倍増用に25%を取っておく形で、待っている資金の置き場所を比べる。18000: 資金18,000ドルで、1銘柄の金額の決め方と切り替えの形を比べる。entry: 倍増ツールの合図を買い逃さない形・新分析に資金を入れる形を比べる")
+    ap.add_argument("--set", default="", help="etf: 倍増ツールで2倍ETFを使う形を比べる。cash: 倍増用に25%を取っておく形で、待っている資金の置き場所を比べる。18000: 資金18,000ドルで、1銘柄の金額の決め方と切り替えの形を比べる。entry: 倍増ツールの合図を買い逃さない形・新分析に資金を入れる形を比べる")
     ap.add_argument("--form", default="current", choices=("current", "old"), help="新分析ツールの形。current: 50日線の傾きが小さい順・2倍ETF（今の形）")
     a = ap.parse_args()
     {"newtrades": cmd_newtrades, "run": cmd_run}[a.cmd](a)
