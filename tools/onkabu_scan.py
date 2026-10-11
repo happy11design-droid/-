@@ -143,8 +143,15 @@ def main():
             rv = f["rev"][-1]
             rv_s = "取得不可" if np.isnan(rv) else f"{rv:+.0%}"
             stop_s = "なし" if stop is None else f"{c * (1 - stop):,.2f}（買値で決まる）"
-            w(f"| {s} | {c:,.2f} | {f[k][-1]:+.0%} | {f['hi52'][-1]:.0%} | {rv_s} | {int(amt // c)}株 | {2 * c:,.2f}（買値で決まる） | {stop_s} |")
+            w(f"| {s} | {c:,.2f} | {f[k][-1]:+.0%} | {f['hi52'][-1]:.1%} | {rv_s} | {int(amt // c)}株 | {2 * c:,.2f}（買値で決まる） | {stop_s} |")
         w("\n価格は今日の終値を買値とした目安。実際の2倍・損切りの価格は、約定した買値から計算する。")
+        free = cfg["枠"] - sum(1 for h in hold if h["state"] == "保有")
+        order = sorted(hits, key=lambda x: -feats[x][k][-1])
+        if cfg.get("倍増用に取っておく割合"):
+            w(f"\n**買う順番**: 6カ月の上昇が大きい順（{' → '.join(order)}）。倍増用に取っておいた{cfg['資金'] * cfg['倍増用に取っておく割合']:,.0f}ドル（QQQ）で買うのは"
+              f"**1銘柄目（{order[0]}）**。2銘柄目以降は、空いている現金（新分析ツールが使っていない分）がある場合だけ、この順で買う。枠の空き: {free}銘柄。")
+        else:
+            w(f"\n**買う順番**: 6カ月の上昇が大きい順（{' → '.join(order)}）。枠の空き: {free}銘柄。")
     else:
         w("合図は出ていない。")
     if [s for s in pass1 if s not in hits]:
@@ -190,7 +197,7 @@ def main():
         for s in sorted(near, key=lambda x: -feats[x][k][-1])[:15]:
             f = ol.features(got[s], rows.get(s, []), spy_up)
             rv = f["rev"][-1]
-            w(f"| {s} | {f['c'][-1]:,.2f} | {f[k][-1]:+.0%} | {f['hi52'][-1]:.0%} | {'取得不可' if np.isnan(rv) else f'{rv:+.0%}'} |")
+            w(f"| {s} | {f['c'][-1]:,.2f} | {f[k][-1]:+.0%} | {f['hi52'][-1]:.1%} | {'取得不可' if np.isnan(rv) else f'{rv:+.0%}'} |")
     else:
         w("なし")
     if missing:
