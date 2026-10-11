@@ -534,6 +534,12 @@ VARIANTS_ETF = [
     ("2倍ETF・元の株の値段で2倍／元の株の−30%で損切り・恩株は元の株に乗り換え", dict(_B, dbl_etf=True, judge="stock", after2x="stock")),
 ]
 
+VARIANTS_SLOTS = [("今の採用ルール（同じ資金・倍増用に25%・倍増1銘柄=資金の25%・新分析1銘柄=資金÷4で75%まで）",
+                   dict(mode="pool", fund="free", cash="QQQ", dedup=False, dbl_frac=0.25, reserve=0.25))]
+for _n in (1, 2, 3, 4, 5, 6):
+    VARIANTS_SLOTS.append((f"資金を分ける 倍増6,000ドルを{_n}銘柄（1銘柄{6000 // _n:,}ドル）・新分析12,000ドル（1銘柄3,000ドル）",
+                           dict(mode="split", split=1 / 3, cash="QQQ", dedup=False, slots_d=_n, dbl_frac=1 / _n)))
+
 VARIANTS18 = [("新分析ツールだけ（余る現金はQQQ）", dict(mode="pool", use_dbl=False, cash="QQQ")),
               ("倍増ツールだけ（余る現金はQQQ）", dict(mode="pool", use_new=False, cash="QQQ"))]
 for _n, _f in ((4, 1 / 3), (5, 1 / 3), (6, 1 / 3), (4, 1 / 4), (5, 1 / 4), (6, 1 / 4), (4, 1 / 5)):
@@ -576,11 +582,11 @@ def cmd_run(a):
             c = [d0["c"][d0["date"].index(x)] for x in days]
             bench[(name, sym)] = metrics(c, days)
     rows = []
-    VS = VARIANTS_ETF if a.set == "etf" else VARIANTS_CASH if a.set == "cash" else VARIANTS_E if a.set == "entry" else VARIANTS18 if a.set == "18000" else VARIANTS
+    VS = VARIANTS_SLOTS if a.set == "slots" else VARIANTS_ETF if a.set == "etf" else VARIANTS_CASH if a.set == "cash" else VARIANTS_E if a.set == "entry" else VARIANTS18 if a.set == "18000" else VARIANTS
     root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
     tab = json.load(open(os.path.join(root, "新分析ツール", "2倍ETFの対応表.json"), encoding="utf-8"))
     lev_info = {u: (2, -x["drag"] / 252) for u, x in tab.items() if isinstance(x, dict) and "drag" in x and u in has2x}
-    cap = 18000.0 if a.set in ("18000", "entry", "cash", "etf") else 6000.0
+    cap = 18000.0 if a.set in ("18000", "entry", "cash", "etf", "slots") else 6000.0
     cash_prices = {}
     for sym, _ in CASH_SYMS:
         if sym:
@@ -651,7 +657,7 @@ def main():
     ap.add_argument("--out")
     ap.add_argument("--summary")
     ap.add_argument("--last", type=int, default=0, help="最後のN通りだけ計算する")
-    ap.add_argument("--set", default="", help="etf: 倍増ツールで2倍ETFを使う形を比べる。cash: 倍増用に25%を取っておく形で、待っている資金の置き場所を比べる。18000: 資金18,000ドルで、1銘柄の金額の決め方と切り替えの形を比べる。entry: 倍増ツールの合図を買い逃さない形・新分析に資金を入れる形を比べる")
+    ap.add_argument("--set", default="", help="slots: 倍増ツールに6,000ドルを分けて銘柄数を比べる。etf: 倍増ツールで2倍ETFを使う形を比べる。cash: 倍増用に25%を取っておく形で、待っている資金の置き場所を比べる。18000: 資金18,000ドルで、1銘柄の金額の決め方と切り替えの形を比べる。entry: 倍増ツールの合図を買い逃さない形・新分析に資金を入れる形を比べる")
     ap.add_argument("--form", default="current", choices=("current", "old"), help="新分析ツールの形。current: 50日線の傾きが小さい順・2倍ETF（今の形）")
     a = ap.parse_args()
     {"newtrades": cmd_newtrades, "run": cmd_run}[a.cmd](a)
