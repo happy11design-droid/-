@@ -633,8 +633,8 @@ def cmd_run(a):
         w("| 組み合わせ | 倍増ツールの合図（枠が空いていた回数） | 現金がなく見送り（待たせる形は、待ちに入った回数） | 半分未満しか買えず | 待って買えた | 同じ銘柄を両方で持った |")
         w("|---|---|---|---|---|---|")
         for label, st_ in stats_rows:
-            w(f"| {label} | {st_['signals']} | {st_['skipped']} | {st_['partial']} | {st_.get('waited', 0)} | {st_['overlap']} |"
-              + (f"（2倍ETFで買った {st_.get('etf', 0)}回）" if st_.get("etf") else ""))
+            etf_ = f"（うち2倍ETFで買った {st_['etf']}回）" if st_.get("etf") else ""
+            w(f"| {label} | {st_['signals']}{etf_} | {st_['skipped']} | {st_['partial']} | {st_.get('waited', 0)} | {st_['overlap']} |")
     text = "\n".join(out) + "\n"
     if a.out:
         open(a.out, "w").write(text)
