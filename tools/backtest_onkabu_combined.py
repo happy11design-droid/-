@@ -296,7 +296,7 @@ def run(feats, new_trades, ind, days, dbl_sig, mode, seed=0, cash_px=None, split
                     A.cash -= amt
                     STATS["etf"] = STATS.get("etf", 0) + 1
                     continue
-                A.dbl[s] = {"sh": amt / (o * (1 + COST)), "px": o * (1 + COST), "t": t}
+                A.dbl[s] = {"sh": amt / (o * (1 + COST)), "px": o * (1 + COST), "t": t, "d0": d, "sig": days[t - 1] if t else d}
                 A.cash -= amt
             pending = []
         # 2) 新分析ツール: その日の値動きと手じまい
@@ -364,6 +364,9 @@ def run(feats, new_trades, ind, days, dbl_sig, mode, seed=0, cash_px=None, split
                         A.realized += p["sh"] * (c * (1 - COST) - p["px"])
                         del A.dbl[s]
                     continue
+                if c >= 2 * p["px"] or c <= p["px"] * 0.7 or t - p["t"] >= 189:
+                    STATS.setdefault("log", []).append({"sym": s, "sig": p.get("sig"), "buy": p.get("d0"), "out": d, "ret": c / p["px"] - 1,
+                                                        "why": "2倍" if c >= 2 * p["px"] else "損切り" if c <= p["px"] * 0.7 else "期限"})
                 if c >= 2 * p["px"]:
                     sell = p["sh"] * SELL_AT_2X
                     A.cash += sell * c * (1 - COST)
