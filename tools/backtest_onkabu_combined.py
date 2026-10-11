@@ -197,7 +197,7 @@ class Account:
 
 
 def run(feats, new_trades, ind, days, dbl_sig, mode, seed=0, cash_px=None, split=None, fund="free", slots_d=3, slots_n=4,
-        use_new=True, use_dbl=True, capital=6000.0, dedup=True, dbl_frac=None, adopt=False, lev_info=None, trace=None, new_frac=None, reserve=0.0, wait=0, dbl_etf=False, judge="etf", etf_stop=0.3, after2x="keep"):
+        use_new=True, use_dbl=True, capital=6000.0, dedup=True, dbl_frac=None, adopt=False, lev_info=None, trace=None, new_frac=None, reserve=0.0, wait=0, dbl_etf=False, judge="etf", etf_stop=0.3, after2x="keep", delay=0):
     """new_frac: 新分析ツールの1銘柄の金額（資金に対する割合。None なら 1/slots_n）。
     reserve: 新分析ツールが使える額を資金の (1−reserve) までにして、残りを倍増ツール用に取っておく。
     wait: 倍増ツールの合図を現金がなくて買えなかったら、wait 取引日まで待ち、現金ができた日に新分析ツールの買いより先に終値で買う"""
@@ -233,6 +233,8 @@ def run(feats, new_trades, ind, days, dbl_sig, mode, seed=0, cash_px=None, split
     #   judge="etf": 2倍・損切り（etf_stop）をETFの金額で判定／"stock": 元の株の値段で判定（損切りは元の株の−30%）
     #   after2x="keep": 2倍で売った残りはETFのまま恩株に／"stock": 残りも売って元の株に乗り換える（その利益は確定して税）
     etfp = {}      # sym -> {cost, v, fee, t, upx（元の株の買値）, lp（前の日の元の株の値段）}
+    # delay: 倍増ツールの合図の翌日にQQQを売り、その delay 取引日後の寄り付きで買う（売却代金がすぐに使えない証券会社用）
+    delayed = []   # [(買う日のt, sym)]
     waiting = []   # [(sym, 期限のt)]
     STATS.clear()
     STATS.update({"signals": 0, "skipped": 0, "partial": 0, "overlap": 0, "adopted": 0})
@@ -262,6 +264,9 @@ def run(feats, new_trades, ind, days, dbl_sig, mode, seed=0, cash_px=None, split
                     acc.cash *= cash_px[d] / cash_px[days[t - 1]]
         # 1) 倍増ツール: 寄り付きで買う
         if use_dbl:
+            if delay:
+                pending = [x for tt, x in delayed if tt == t]
+                delayed = [(tt, x) for tt, x in delayed if tt > t]
             for s in pending:
                 o = px(s, d, "o")
                 if o is None or s in A.dbl or s in adopted or s in etfp or len(A.dbl) + len(adopted) + len(etfp) >= slots_d:
@@ -435,11 +440,15 @@ def run(feats, new_trades, ind, days, dbl_sig, mode, seed=0, cash_px=None, split
                 if c is not None and i:
                     x["v"] = max(0.0, x["v"] * (1 + x["lev"] * (c / feats[x["sym"]]["c"][i - 1] - 1)) * (1 - x["fee"]))
             # 合図（翌日の寄り付きで買う。6カ月の上昇が大きい順）
-            free = slots_d - len(A.dbl) - len(adopted) - len(etfp)
+            free = slots_d - len(A.dbl) - len(adopted) - len(etfp) - len(delayed)
             if free > 0:
                 hits = [s for s in dbl_sig.get(d, ()) if s not in A.dbl and s not in adopted and s not in etfp]
                 hits.sort(key=lambda s: -feats[s]["r126"][pos[s][d]])
                 pending = hits[:free]
+                if delay:
+                    hits = [x for x in hits if all(x != y for _, y in delayed)]
+                    delayed += [(t + 1 + delay, x) for x in hits[:free]]
+                    pending = []
         eq = 0.0
         for acc in accts:
             eq += acc.cash + sum(h["size"] * h["v"] for h in acc.new.values())
@@ -540,6 +549,11 @@ for _n in (1, 2, 3, 4, 5, 6):
     VARIANTS_SLOTS.append((f"資金を分ける 倍増6,000ドルを{_n}銘柄（1銘柄{6000 // _n:,}ドル）・新分析12,000ドル（1銘柄3,000ドル）",
                            dict(mode="split", split=1 / 3, cash="QQQ", dedup=False, slots_d=_n, dbl_frac=1 / _n)))
 
+_A = dict(mode="pool", fund="free", cash="QQQ", dedup=False, dbl_frac=0.25, reserve=0.25)
+VARIANTS_DELAY = [("今の採用ルール（合図の翌日の寄り付きで買う）", dict(_A)),
+                  ("1日遅れ（合図の翌日にQQQを売り、その次の日の寄り付きで買う）", dict(_A, delay=1)),
+                  ("2日遅れ（参考）", dict(_A, delay=2))]
+
 VARIANTS18 = [("新分析ツールだけ（余る現金はQQQ）", dict(mode="pool", use_dbl=False, cash="QQQ")),
               ("倍増ツールだけ（余る現金はQQQ）", dict(mode="pool", use_new=False, cash="QQQ"))]
 for _n, _f in ((4, 1 / 3), (5, 1 / 3), (6, 1 / 3), (4, 1 / 4), (5, 1 / 4), (6, 1 / 4), (4, 1 / 5)):
@@ -582,11 +596,11 @@ def cmd_run(a):
             c = [d0["c"][d0["date"].index(x)] for x in days]
             bench[(name, sym)] = metrics(c, days)
     rows = []
-    VS = VARIANTS_SLOTS if a.set == "slots" else VARIANTS_ETF if a.set == "etf" else VARIANTS_CASH if a.set == "cash" else VARIANTS_E if a.set == "entry" else VARIANTS18 if a.set == "18000" else VARIANTS
+    VS = VARIANTS_DELAY if a.set == "delay" else VARIANTS_SLOTS if a.set == "slots" else VARIANTS_ETF if a.set == "etf" else VARIANTS_CASH if a.set == "cash" else VARIANTS_E if a.set == "entry" else VARIANTS18 if a.set == "18000" else VARIANTS
     root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
     tab = json.load(open(os.path.join(root, "新分析ツール", "2倍ETFの対応表.json"), encoding="utf-8"))
     lev_info = {u: (2, -x["drag"] / 252) for u, x in tab.items() if isinstance(x, dict) and "drag" in x and u in has2x}
-    cap = 18000.0 if a.set in ("18000", "entry", "cash", "etf", "slots") else 6000.0
+    cap = 18000.0 if a.set in ("18000", "entry", "cash", "etf", "slots", "delay") else 6000.0
     cash_prices = {}
     for sym, _ in CASH_SYMS:
         if sym:
