@@ -346,7 +346,7 @@ def main():
     r.add_argument("--etf", default=None, help="etf2x: 2倍ETFにする銘柄（カンマ区切り）。省略すると backtest_2x.HAS_2X")
     r.add_argument("--drag", default=None, help="etf2x: 2倍ETFの目減り（年率）。数値なら全部同じ、'measured' なら 新分析ツール/2倍ETFの対応表.json の実測（ないものは0.12）")
     r.add_argument("--tag", default="", help="etf2x: 結果のファイル名と見出しに付ける名前（例: ムームー証券）")
-    r.add_argument("--stage", default="all", choices=("sell", "combo", "half", "filter", "rule", "stats", "dd", "robust", "earn", "realized", "etf2x", "etfrule", "weinstein", "rsi", "pivot", "exits", "pullback", "recover", "prio", "slope", "slope2", "slope3", "swap", "premium", "hot", "hotyear", "ideas", "theme", "all"))
+    r.add_argument("--stage", default="all", choices=("sell", "combo", "half", "filter", "rule", "stats", "dd", "robust", "earn", "realized", "etf2x", "etfrule", "weinstein", "rsi", "pivot", "exits", "pullback", "recover", "prio", "slope", "slope2", "slope3", "swap", "premium", "hot", "hotyear", "ideas", "theme", "halfadd", "all"))
     a = ap.parse_args()
     ctx = cb.setup(a.cache, with_parts=False)
     data, members, ind, days, G, end = (ctx[k] for k in ("data", "members", "ind", "days", "G", "end"))
@@ -720,6 +720,8 @@ def main():
         open(OUTDIR + "銘柄の下落率で見送る・優先する.md", "w", encoding="utf-8").write("\n".join(L) + "\n")
         print("書き出し", file=sys.stderr)
         return
+    if a.stage == "halfadd":
+        return halfadd_stage(base, data, build, port, days)
     if a.stage == "theme":
         return theme_stage(base, data, build, ind, days, a.cache)
     if a.stage == "ideas":
@@ -1644,6 +1646,126 @@ def theme_stage(base, data, build, ind, days, cache):
     w("- この結果はルールの条件どおりに機械的に計算したもので、Claudeによる個別銘柄の売買判断ではない。")
     os.makedirs(OUTDIR, exist_ok=True)
     open(OUTDIR + "同じテーマ・セクターに固まったとき.md", "w", encoding="utf-8").write("\n".join(L) + "\n")
+    print("書き出し", file=sys.stderr)
+
+
+def halfadd_stage(base, data, build, port, days):
+    """合図で半分買い、残りの半分は決めた日数のうちに決めた値段まで下がったら指値で買い足す（下がらなければ半分のまま）。
+    2026-10-12 ユーザーの指示。手じまいは今と同じ（買い足した分も同じ日に売る）。今のルール（50日線の傾きが小さい順・2倍ETF込み）と比べる"""
+    import json
+    sma_ = lambda c, j, n: sum(c[j - n + 1:j + 1]) / n
+    def s50(b):
+        c, j = data[b["sym"]]["c"], b["i0"] - 1
+        return sma_(c, j, 50) / sma_(c, j - 20, 50) - 1 if j >= 70 else 0.0
+    bmap = {(data[t["sym"]]["date"][t["i0"]], t["sym"], t["rule"]): t for t in base}
+    tab = json.load(open(os.path.join(os.path.dirname(OUTDIR.rstrip("/")), "2倍ETFの対応表.json"), encoding="utf-8"))
+    drag = {s: -x["drag"] for s, x in tab.items() if isinstance(x, dict) and "drag" in x}
+    HAS = {s for s, d in drag.items() if d < 0.15}
+    def to2x(trs):
+        out = []
+        for t in trs:
+            if t["sym"] not in HAS:
+                out.append(t)
+                continue
+            fee = drag[t["sym"]] / 252
+            e, prev, pv = 1 - COST, 1 - COST, {}
+            for d in sorted(t["path"]):
+                g_ = t["path"][d]
+                e = max(0.0, e * (1 + 2 * (g_ / prev - 1)) * (1 - fee))
+                prev = g_
+                pv[d] = e
+            out.append({**t, "path": pv})
+        return out
+    cur = [{**t, "prio": s50(bmap[(t["in"], t["sym"], t["rule"])])} for t in build()]
+    TREND = ("M", "V")
+    stats = {}
+
+    def halfadd(trs, level, wait, rules, key):
+        """level(b, s) → 指値の値段。買い足しは買った翌日から wait 取引日のうち、売る日の前日まで"""
+        out, n_sig, n_add, rets = [], 0, 0, []
+        for t in trs:
+            if t["rule"] not in rules:
+                out.append(t)
+                continue
+            b = bmap[(t["in"], t["sym"], t["rule"])]
+            s = data[t["sym"]]
+            lim = level(b, s)
+            ds = s["date"]
+            io = ds.index(t["out"])
+            fill, fd = None, None
+            for j in range(b["i0"] + 1, min(b["i0"] + wait, io - 1) + 1):
+                if s["l"][j] <= lim:
+                    fill, fd = min(s["o"][j], lim), ds[j]
+                    break
+            n_sig += 1
+            p, mult = t["path"], None
+            if fill:
+                n_add += 1
+                mult = b["px"] / fill * (1 - COST)   # 買い足した分は、買った分の値動きを買値の比で引き伸ばしたもの
+            pv = {}
+            for d in sorted(p):
+                pv[d] = 0.5 * p[d] + (0.5 * p[d] * mult if mult and d >= fd else 0.5)
+            rets.append(pv[t["out"]] - 1)
+            out.append({**t, "path": pv})
+        stats[key] = (n_sig, n_add, sum(rets) / max(1, len(rets)))
+        return out
+
+    pct_lv = lambda x: (lambda b, s: b["px"] * (1 - x))
+    ma20 = lambda b, s: sma_(s["c"], b["i0"] - 1, 20)
+    forms = [("今のルール（合図で全部買う）", None),
+             ("順張り: 半分＋買値の3%下に指値（10日）", (pct_lv(0.03), 10, TREND)),
+             ("順張り: 半分＋買値の5%下に指値（10日）", (pct_lv(0.05), 10, TREND)),
+             ("順張り: 半分＋買値の5%下に指値（20日）", (pct_lv(0.05), 20, TREND)),
+             ("順張り: 半分＋買値の8%下に指値（20日）", (pct_lv(0.08), 20, TREND)),
+             ("順張り: 半分＋合図の日の20日線に指値（10日）", (ma20, 10, TREND)),
+             ("順張り: 半分＋合図の日の20日線に指値（20日）", (ma20, 20, TREND)),
+             ("全部のルール: 半分＋買値の5%下に指値（10日）", (pct_lv(0.05), 10, ("B", "C", "M", "V")))]
+    is_hi = max(d for d in days if d <= cb.IS_END)
+    oos_lo = min(d for d in days if d >= cb.OOS_START)
+    med = lambda xs: sorted(xs)[len(xs) // 2]
+    L = []
+    w = L.append
+    w(f"---\ntype: backtest\ntitle: 半分は合図で買い残りは下がったら買い足す\ncreated: {dt.date.today()}\nscript: tools/backtest_retest.py --stage halfadd\n---\n")
+    w("# 合図で半分買い、残りの半分は下がったら買い足す（下がらなければ半分のまま）\n")
+    w("2026-10-12、ユーザーの質問「買った後に半分以上の売買で下がると分かっているなら、最適なルールは作れないか」から確かめた。"
+      "今は合図で1枠（資金の25%）を全部買う。比べる形は、合図で半分（12.5%）を買い、残りの半分はその枠に取っておき、買った翌日から決めた日数のうちに"
+      "日中の安値が決めた値段に届いたら指値で買い足す（寄り付きで下に窓を開けたら寄り付きの値段）。届かなければ半分のまま持つ。"
+      "手じまい・損切り・半分売りは今と同じ（買い足した分も同じ日に同じ割合で売る。損切りは最初の買値で判定）。買い足しは売る日の前日まで。"
+      "土台は今のルール（4銘柄・1銘柄25%、同じ業種2銘柄まで、50日線の傾きが小さい順、2倍ETFがある銘柄は2倍ETF〔実測の目減り〕）。"
+      "後知恵なしの監視銘柄、2015年〜、片道0.1%込み。乱数50通り×2組の中央値。\n")
+    w("| 形 | 組 | 年率 | 含み損込みの最大下落率（中央値／最悪） | 確定した損益だけの最大下落率（中央値／最悪） | 2015〜2021年 | 2022年〜 |")
+    w("|---|---|---|---|---|---|---|")
+    res = {}
+    for nm, spec in forms:
+        trs = to2x(cur if spec is None else halfadd(cur, *spec, nm))
+        for s0 in (5000, 7300):
+            cg, mm, rm, ii, oo = [], [], [], [], []
+            for k in range(50):
+                rc = []
+                g, m = port(trs, s0 + k, days[0], days[-1], rcurve=rc)
+                pk, r = 0.0, 0.0
+                for x in rc:
+                    pk = max(pk, x)
+                    r = max(r, 1 - x / pk)
+                cg.append(g); mm.append(m); rm.append(r)
+                ii.append(port(trs, s0 + k, days[0], is_hi)[0]); oo.append(port(trs, s0 + k, oos_lo, days[-1])[0])
+            res[(nm, s0)] = (med(ii), med(oo))
+            w(f"| {nm} | {'1組目' if s0 == 5000 else '2組目'} | {pct(med(cg))} | {pct(med(mm))}／{pct(max(mm))} | {pct(med(rm))}／{pct(max(rm))} | {pct(med(ii))} | {pct(med(oo))} |")
+            print(nm, s0, file=sys.stderr)
+    base_nm = forms[0][0]
+    w("\n両方の組で、2015〜2021年・2022年〜の両方とも今のルールを上回った形: " +
+      ("、".join(nm for nm, _ in forms[1:] if all(res[(nm, s)][0] > res[(base_nm, s)][0] and res[(nm, s)][1] > res[(base_nm, s)][1] for s in (5000, 7300))) or "なし") + "\n")
+    w("\n## 買い足しが入った割合（全部の合図、株の値段で）\n")
+    w("| 形 | 対象の合図 | 買い足した合図（割合） | 1枠あたりの1回平均（株） |")
+    w("|---|---|---|---|")
+    c_tr = [t for t in cur if t["rule"] in TREND]
+    w(f"| 今のルール（順張り） | {len(c_tr)} | — | {pct(sum(t['path'][t['out']] - 1 for t in c_tr) / len(c_tr))} |")
+    for nm, (n, a_, r_) in stats.items():
+        w(f"| {nm} | {n} | {a_}（{a_ / n * 100:.0f}%） | {pct(r_)} |")
+    w("\n- 1枠あたりの1回平均は、1枠（資金の25%）に対する損益。半分のまま終わった売買は、使わなかった半分を0%として数える。")
+    w("- この結果はルールの条件どおりに機械的に計算したもので、Claudeによる個別銘柄の売買判断ではない。")
+    os.makedirs(OUTDIR, exist_ok=True)
+    open(OUTDIR + "半分は合図で買い残りは下がったら買い足す.md", "w", encoding="utf-8").write("\n".join(L) + "\n")
     print("書き出し", file=sys.stderr)
 
 
