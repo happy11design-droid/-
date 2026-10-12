@@ -554,6 +554,12 @@ VARIANTS_DELAY = [("今の採用ルール（合図の翌日の寄り付きで買
                   ("1日遅れ（合図の翌日にQQQを売り、その次の日の寄り付きで買う）", dict(_A, delay=1)),
                   ("2日遅れ（参考）", dict(_A, delay=2))]
 
+# 今の実際の形（2026-10-12 ユーザー決定）: 新分析12,000ドル（1銘柄3,000ドル）・倍増4,500ドルで1銘柄。合図の6カ月の上昇率を変える
+VARIANTS_MOM = []
+for _m in (0.8, 0.9, 1.0, 1.1, 1.2):
+    VARIANTS_MOM.append((f"6カ月で+{_m * 100:.0f}%以上・52週高値・売上≧10%（倍増4,500ドルで1銘柄・新分析12,000ドル）",
+                         dict(mode="split", split=4500 / 16500, cash="QQQ", dedup=False, slots_d=1, dbl_frac=1.0, mom=_m)))
+
 VARIANTS18 = [("新分析ツールだけ（余る現金はQQQ）", dict(mode="pool", use_dbl=False, cash="QQQ")),
               ("倍増ツールだけ（余る現金はQQQ）", dict(mode="pool", use_new=False, cash="QQQ"))]
 for _n, _f in ((4, 1 / 3), (5, 1 / 3), (6, 1 / 3), (4, 1 / 4), (5, 1 / 4), (6, 1 / 4), (4, 1 / 5)):
@@ -587,6 +593,12 @@ def cmd_run(a):
                 out.setdefault(f["date"][i], []).append(s)
         return out
 
+    def sig_by_day_m(ex, mom):
+        sig["mom"] = ("r126", mom)
+        out = sig_by_day(ex)
+        sig["mom"] = ("r126", 1.0)
+        return out
+
     sbd = {(): sig_by_day(()), ("NVDA",): sig_by_day(("NVDA",))}
     bench = {}
     for name, lo, hi, ex in CONDS:
@@ -596,11 +608,11 @@ def cmd_run(a):
             c = [d0["c"][d0["date"].index(x)] for x in days]
             bench[(name, sym)] = metrics(c, days)
     rows = []
-    VS = VARIANTS_DELAY if a.set == "delay" else VARIANTS_SLOTS if a.set == "slots" else VARIANTS_ETF if a.set == "etf" else VARIANTS_CASH if a.set == "cash" else VARIANTS_E if a.set == "entry" else VARIANTS18 if a.set == "18000" else VARIANTS
+    VS = VARIANTS_MOM if a.set == "mom" else VARIANTS_DELAY if a.set == "delay" else VARIANTS_SLOTS if a.set == "slots" else VARIANTS_ETF if a.set == "etf" else VARIANTS_CASH if a.set == "cash" else VARIANTS_E if a.set == "entry" else VARIANTS18 if a.set == "18000" else VARIANTS
     root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
     tab = json.load(open(os.path.join(root, "新分析ツール", "2倍ETFの対応表.json"), encoding="utf-8"))
     lev_info = {u: (2, -x["drag"] / 252) for u, x in tab.items() if isinstance(x, dict) and "drag" in x and u in has2x}
-    cap = 18000.0 if a.set in ("18000", "entry", "cash", "etf", "slots", "delay") else 6000.0
+    cap = 16500.0 if a.set == "mom" else 18000.0 if a.set in ("18000", "entry", "cash", "etf", "slots", "delay") else 6000.0
     cash_prices = {}
     for sym, _ in CASH_SYMS:
         if sym:
@@ -614,8 +626,12 @@ def cmd_run(a):
             nts = [t for t in new_trades if lo <= t["in"] and t["sym"] not in ex]
             res = []
             for seed in range(a.seeds):
-                kw2 = {k: v for k, v in kw.items() if k != "cash"}
-                curve, n_onk, rcurve = run(feats, nts, ind, days, sbd[ex], seed=seed, cash_px=cash_prices.get(kw.get("cash")),
+                kw2 = {k: v for k, v in kw.items() if k not in ("cash", "mom")}
+                mom = kw.get("mom", 1.0)
+                if (mom, ex) not in sbd:
+                    sbd[(mom, ex)] = sig_by_day_m(ex, mom)
+                sb = sbd[(mom, ex)] if mom != 1.0 else sbd[ex]
+                curve, n_onk, rcurve = run(feats, nts, ind, days, sb, seed=seed, cash_px=cash_prices.get(kw.get("cash")),
                                            capital=cap, lev_info=lev_info, **kw2)
                 c, m = metrics(curve, days)
                 res.append((c, m, n_onk, metrics(rcurve, days)[1]))
@@ -671,7 +687,7 @@ def main():
     ap.add_argument("--out")
     ap.add_argument("--summary")
     ap.add_argument("--last", type=int, default=0, help="最後のN通りだけ計算する")
-    ap.add_argument("--set", default="", help="slots: 倍増ツールに6,000ドルを分けて銘柄数を比べる。etf: 倍増ツールで2倍ETFを使う形を比べる。cash: 倍増用に25%を取っておく形で、待っている資金の置き場所を比べる。18000: 資金18,000ドルで、1銘柄の金額の決め方と切り替えの形を比べる。entry: 倍増ツールの合図を買い逃さない形・新分析に資金を入れる形を比べる")
+    ap.add_argument("--set", default="", help="mom: 今の実際の形（倍増4,500ドル1銘柄・新分析12,000ドル）で合図の6カ月の上昇率を変える。slots: 倍増ツールに6,000ドルを分けて銘柄数を比べる。etf: 倍増ツールで2倍ETFを使う形を比べる。cash: 倍増用に25%を取っておく形で、待っている資金の置き場所を比べる。18000: 資金18,000ドルで、1銘柄の金額の決め方と切り替えの形を比べる。entry: 倍増ツールの合図を買い逃さない形・新分析に資金を入れる形を比べる")
     ap.add_argument("--form", default="current", choices=("current", "old"), help="新分析ツールの形。current: 50日線の傾きが小さい順・2倍ETF（今の形）")
     a = ap.parse_args()
     {"newtrades": cmd_newtrades, "run": cmd_run}[a.cmd](a)
