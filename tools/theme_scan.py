@@ -623,7 +623,10 @@ def main():
         else:
             v2_top_, v2_rank_, where = v2_top, v2_rank, "監視銘柄"
         s50_ = (sum(d["c"][i - 49:i + 1]) / sum(d["c"][i - 69:i - 19]) - 1) if i >= 70 else 0.0   # 50日線の傾き（20日前からの上昇率）
-        base = {"sym": s, "group": grp, "outside": is_out, "close": d["c"][i], "rs": rs, "chg": d["c"][i] / d["c"][i - 1] - 1, "s50": s50_,
+        r14_ = rsi_wilder(d["c"], 14)[i]
+        # 過熱（終値が+2σより上かつRSI(14)が70超え）。記録だけ（record.json）で、判定・表示には使わない（2026-10-10 ユーザーの指示。傾向を見てから採用を検討）
+        hot_ = bool(d["bb_up"][i] is not None and d["c"][i] > d["bb_up"][i] and r14_ is not None and r14_ > 70)
+        base = {"sym": s, "group": grp, "outside": is_out, "close": d["c"][i], "rs": rs, "chg": d["c"][i] / d["c"][i - 1] - 1, "s50": s50_, "hot": hot_, "rsi14": r14_,
                 "regime": "上昇相場" if regime_up(i, d) else "レンジ"}
         pb, ii = d["pctb"][i], d["ii21"][i]
         lvl05 = d["bb_dn"][i] + 0.05 * (d["bb_up"][i] - d["bb_dn"][i])
@@ -792,6 +795,9 @@ def main():
                   if m.group(1) in today_pat else "今日の条件では候補なし（新しいエントリーの条件がそろうまで待つ）", text)
     os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
     open(a.out, "w").write(text)
+    # 候補ごとの過熱の記録（theme_review.py record が record.json に移す。レポート・レビューには出さない）
+    json.dump({x["sym"]: {"hot": x.get("hot"), "rsi14": x.get("rsi14"), "s50": x.get("s50")} for x in cands},
+              open(os.path.join(os.path.dirname(os.path.abspath(a.out)), "cands_meta.json"), "w", encoding="utf-8"), ensure_ascii=False)
     print(text)
 
 

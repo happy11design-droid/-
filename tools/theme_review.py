@@ -88,6 +88,13 @@ def cmd_record(a):
                       "limit": float(lim.group(1)) if lim else None,
                       "stop_buy": float(stp.group(1)) if stp else None, "limit_buy": float(lmt.group(1)) if lmt else None,
                       "verdict": vv[0], "author": vv[1]})
+    # 過熱（+2σより上かつRSI(14)>70）の記録。theme_scan が書く cands_meta.json から移す（レビューには出さない。2026-10-10 ユーザーの指示）
+    mp = os.path.join(d, "cands_meta.json")
+    if os.path.exists(mp):
+        meta = json.load(open(mp, encoding="utf-8"))
+        for c in cands:
+            m_ = meta.get(c["sym"]) or {}
+            c["hot"], c["rsi14"], c["s50"] = m_.get("hot"), m_.get("rsi14"), m_.get("s50")
     holds = []
     cand_syms = {c["sym"] for c in cands}
     for r in table_rows(scan, "## 5."):

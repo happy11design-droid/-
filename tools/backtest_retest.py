@@ -346,7 +346,7 @@ def main():
     r.add_argument("--etf", default=None, help="etf2x: 2倍ETFにする銘柄（カンマ区切り）。省略すると backtest_2x.HAS_2X")
     r.add_argument("--drag", default=None, help="etf2x: 2倍ETFの目減り（年率）。数値なら全部同じ、'measured' なら 新分析ツール/2倍ETFの対応表.json の実測（ないものは0.12）")
     r.add_argument("--tag", default="", help="etf2x: 結果のファイル名と見出しに付ける名前（例: ムームー証券）")
-    r.add_argument("--stage", default="all", choices=("sell", "combo", "half", "filter", "rule", "stats", "dd", "robust", "earn", "realized", "etf2x", "etfrule", "weinstein", "rsi", "pivot", "exits", "pullback", "recover", "prio", "slope", "slope2", "slope3", "all"))
+    r.add_argument("--stage", default="all", choices=("sell", "combo", "half", "filter", "rule", "stats", "dd", "robust", "earn", "realized", "etf2x", "etfrule", "weinstein", "rsi", "pivot", "exits", "pullback", "recover", "prio", "slope", "slope2", "slope3", "swap", "premium", "hot", "hotyear", "ideas", "all"))
     a = ap.parse_args()
     ctx = cb.setup(a.cache, with_parts=False)
     data, members, ind, days, G, end = (ctx[k] for k in ("data", "members", "ind", "days", "G", "end"))
@@ -720,6 +720,16 @@ def main():
         open(OUTDIR + "銘柄の下落率で見送る・優先する.md", "w", encoding="utf-8").write("\n".join(L) + "\n")
         print("書き出し", file=sys.stderr)
         return
+    if a.stage == "ideas":
+        return ideas_stage(cur_tr, base, data, build, ind, days, is_hi, oos_lo, ctx, G, from_gen, a.cache)
+    if a.stage == "hotyear":
+        return hotyear_stage(base, data, build, port, days)
+    if a.stage == "hot":
+        return hot_stage(base, data, build, ev, rec, days)
+    if a.stage == "premium":
+        return premium_stage(cur_tr, base, data, ind, days, is_hi, oos_lo)
+    if a.stage == "swap":
+        return swap_stage(cur_tr, base, data, build, ind, days, is_hi, oos_lo)
     if a.stage == "slope3":
         return slope3_stage(base, data, build, port, days)
     if a.stage == "slope2":
@@ -796,6 +806,606 @@ def main():
         os.makedirs(OUTDIR, exist_ok=True)
         open(out, "w", encoding="utf-8").write("\n".join(L) + "\n")
         print(f"書き出し: {out}", file=sys.stderr)
+
+
+def swap_port(trs, seed, lo, hi, ind, days, prem=None, th=0.0, stats=None, curve=None, pick="gain"):
+    """port と同じ資金の計算に、乗り換えを足したもの。枠が埋まっている日に prem(t) の合図が出たら、含み益が th より大きい保有のうち
+    含み益が一番大きいものを、その日の寄り付き（前日の終値で近似、片道の手数料込み）で売って、その合図を買う"""
+    dd = [d for d in days if lo <= d <= hi]
+    by_in = {}
+    for t in trs:
+        if lo <= t["in"] and t["out"] <= hi:
+            by_in.setdefault(t["in"], []).append(t)
+    rnd = random.Random(seed)
+    cash, held, peak, mdd, eq = 1.0, [], 1.0, 0.0, 1.0
+    for d in dd:
+        still = []
+        for h in held:
+            h["vp"] = h["v"]
+            v = h["t"]["path"].get(d)
+            if v is not None:
+                h["v"] = v
+            if h["t"]["out"] == d:
+                cash += h["size"] * h["v"]
+            else:
+                still.append(h)
+        held = still
+        eq = cash + sum(h["size"] * h["v"] for h in held)
+        for t in sorted(by_in.get(d, []), key=lambda t: (t["prio"], rnd.random())):
+            if any(h["t"]["sym"] == t["sym"] for h in held):
+                continue
+            if len(held) >= SLOTS:
+                if not (prem and prem(t)):
+                    continue
+                if pick == "gain":   # 含み益が th より大きい保有のうち、一番大きいもの
+                    gain = [h for h in held if h["vp"] / h["v0"] - 1 > th]
+                    if not gain:
+                        continue
+                    h = max(gain, key=lambda h: h["vp"] / h["v0"])
+                else:                # 含み損の保有のうち、一番損の大きいもの（弱っている保有を売る）
+                    gain = [h for h in held if h["vp"] / h["v0"] - 1 < -th]
+                    if not gain:
+                        continue
+                    h = min(gain, key=lambda h: h["vp"] / h["v0"])
+                cash += h["size"] * h["vp"] * (1 - COST)
+                held.remove(h)
+                if stats is not None:
+                    stats.append(h["vp"] / h["v0"] - 1)
+            if sum(1 for h in held if ind.get(h["t"]["sym"]) == ind.get(t["sym"])) >= 2:
+                continue
+            size = min(eq / SLOTS * t.get("w", 1.0), cash)
+            if size <= 0:
+                break
+            cash -= size
+            v0 = t["path"].get(d, 1.0)
+            if t["out"] == d:
+                cash += size * v0
+                continue
+            held.append({"t": t, "size": size, "v": v0, "vp": v0, "v0": 1.0})
+        eq = cash + sum(h["size"] * h["v"] for h in held)
+        peak = max(peak, eq)
+        mdd = max(mdd, 1 - eq / peak)
+        if curve is not None:
+            curve.append(eq)
+    yrs = (dt.date.fromisoformat(dd[-1]) - dt.date.fromisoformat(dd[0])).days / 365.25
+    return eq ** (1 / yrs) - 1, mdd
+
+
+def ideas_stage(cur_tr, base, data, build, ind, days, is_hi, oos_lo, ctx, G, from_gen, cache):
+    """効率を上げる案（2026-10-10 ユーザーの指示）: ①待っている現金をQQQに置く ②QQQの短期の逆張り（待っている現金で）
+    ③決算後のドリフト（空いた枠で買う新しいルール）。今の運用（50日線の傾きが小さい順・2倍ETF込み）を土台に、資金全体で比べる"""
+    import json
+    from backtest_lib import load_prices
+    sma = lambda c, j, n: sum(c[j - n + 1:j + 1]) / n
+    def s50(sym, j):
+        c = data[sym]["c"]
+        return sma(c, j, 50) / sma(c, j - 20, 50) - 1 if j >= 70 else 0.0
+    # ③ 決算後のドリフト: 決算の反応の日（決算日かその翌日）に、寄り付きが前日の終値より5%以上高く、陽線で、出来高が50日平均の2倍以上 → 翌日の寄り付きで買う。
+    #    手じまいは引けで50日線割れ・損切り15%・最長40取引日
+    earn = json.load(open(os.path.join(cache, "earnings.json"), encoding="utf-8"))
+    edays = {sym: {x[0] for x in v} for sym, v in earn.items()}
+    def E_pead(i, s):
+        sym = s.get("_sym")
+        ed = edays.get(sym)
+        if not ed or i < 1:
+            return None
+        if s["date"][i] not in ed and s["date"][i - 1] not in ed:
+            return None
+        gap = s["o"][i] / s["c"][i - 1] - 1
+        v50 = s["vol50"][i - 1] if s.get("vol50") else None
+        if gap >= 0.05 and s["c"][i] >= s["o"][i] and v50 and s["v"][i] >= 2 * v50:
+            return -gap
+        return None
+    for sym, s in data.items():
+        s["_sym"] = sym
+    pead = from_gen(G(E_pead, ctx["below50"], ctx["ok_rot"], STOP, 40), "E", prio=1)
+    print("決算後のドリフトの合図", len(pead), file=sys.stderr)
+    bmap = {(data[t["sym"]]["date"][t["i0"]], t["sym"], t["rule"]): t for t in base + pead}
+    def prio(trs):
+        out = []
+        for t in trs:
+            b = bmap.get((t["in"], t["sym"], t["rule"]))
+            v = s50(t["sym"], b["i0"] - 1) if b else 0.0
+            out.append({**t, "prio": (1 if t["rule"] == "E" else 0, v)})
+        return out
+    tab = json.load(open(os.path.join(os.path.dirname(OUTDIR.rstrip("/")), "2倍ETFの対応表.json"), encoding="utf-8"))
+    drag = {u: -x["drag"] for u, x in tab.items() if isinstance(x, dict) and "drag" in x}
+    HAS = {u for u, d in drag.items() if d < 0.15}
+    def to2x(trs):
+        out = []
+        for t in trs:
+            if t["sym"] not in HAS:
+                out.append(t)
+                continue
+            fee = drag[t["sym"]] / 252
+            e, prev, pv = 1 - COST, 1 - COST, {}
+            for d in sorted(t["path"]):
+                g_ = t["path"][d]
+                e = max(0.0, e * (1 + 2 * (g_ / prev - 1)) * (1 - fee))
+                prev = g_
+                pv[d] = e
+            out.append({**t, "path": pv})
+        return out
+    tool = to2x(prio(build()))
+    tool_e = to2x(prio(build(add=pead)))
+    # QQQの日ごとの値動き（配当込み）と、短期の逆張りの合図（引けで RSI(2)≦10 かつ 200日線より上 → 翌日から持つ、引けで5日線より上になったら翌日から持たない）
+    q = load_prices(cache, "QQQ")
+    qc, qd = q["c"], q["date"]
+    qret = {qd[k]: qc[k] / qc[k - 1] - 1 for k in range(1, len(qc))}
+    r2 = rsi_wilder(qc, 2)
+    hold, on = {}, False
+    for k in range(200, len(qc) - 1):
+        if not on and r2[k] is not None and r2[k] <= 10 and qc[k] > sma(qc, k, 200):
+            on = True
+        elif on and qc[k] > sma(qc, k, 5):
+            on = False
+        hold[qd[k + 1]] = on
+    mr_days = sum(1 for d in days if hold.get(d))
+    def ret_q(lev, only_signal):
+        r = {}
+        for d in days:
+            x = qret.get(d, 0.0)
+            if only_signal and not hold.get(d):
+                x = 0.0
+            r[d] = (lev * x - (0.0095 / 252 if lev == 2 else 0.0)) if (not only_signal or hold.get(d)) else 0.0
+        return r
+    R_qqq, R_mr, R_mr2 = ret_q(1, False), ret_q(1, True), ret_q(2, True)
+    def sim(trs, seed, lo, hi, cret=None):
+        dd = [d for d in days if lo <= d <= hi]
+        by_in = {}
+        for t in trs:
+            if lo <= t["in"] and t["out"] <= hi:
+                by_in.setdefault(t["in"], []).append(t)
+        rnd = random.Random(seed)
+        cash, held, peak, mdd, eq = 1.0, [], 1.0, 0.0, 1.0
+        for d in dd:
+            if cret:
+                cash *= 1 + cret.get(d, 0.0)
+            still = []
+            for h in held:
+                v = h["t"]["path"].get(d)
+                if v is not None:
+                    h["v"] = v
+                if h["t"]["out"] == d:
+                    cash += h["size"] * h["v"]
+                else:
+                    still.append(h)
+            held = still
+            eq = cash + sum(h["size"] * h["v"] for h in held)
+            for t in sorted(by_in.get(d, []), key=lambda t: (t["prio"], rnd.random())):
+                if any(h["t"]["sym"] == t["sym"] for h in held):
+                    continue
+                if len(held) >= SLOTS:
+                    break
+                if sum(1 for h in held if ind.get(h["t"]["sym"]) == ind.get(t["sym"])) >= 2:
+                    continue
+                size = min(eq / SLOTS, cash)
+                if size <= 0:
+                    break
+                cash -= size
+                v0 = t["path"].get(d, 1.0)
+                if t["out"] == d:
+                    cash += size * v0
+                    continue
+                held.append({"t": t, "size": size, "v": v0})
+            eq = cash + sum(h["size"] * h["v"] for h in held)
+            peak = max(peak, eq)
+            mdd = max(mdd, 1 - eq / peak)
+        yrs = (dt.date.fromisoformat(dd[-1]) - dt.date.fromisoformat(dd[0])).days / 365.25
+        return eq ** (1 / yrs) - 1, mdd
+    forms = [("新分析ツールだけ（待っている現金は現金のまま＝今）", tool, None),
+             ("① 待っている現金をQQQに置く", tool, R_qqq),
+             ("② 待っている現金で、QQQの短期の逆張り（合図のときだけQQQ）", tool, R_mr),
+             ("② 同じ・2倍（QLD相当）", tool, R_mr2),
+             ("③ 決算後のドリフトを、空いた枠で買う新しいルールとして足す", tool_e, None),
+             ("③＋① 決算後のドリフト＋待っている現金をQQQ", tool_e, R_qqq),
+             ("③＋② 決算後のドリフト＋QQQの短期の逆張り", tool_e, R_mr)]
+    med = lambda xs: sorted(xs)[len(xs) // 2]
+    L = []
+    w = L.append
+    w(f"---\ntype: backtest\ntitle: 効率を上げる案（QQQ・指数の逆張り・決算後のドリフト）\ncreated: {dt.date.today()}\nscript: tools/backtest_retest.py --stage ideas\n---\n")
+    w("# 効率を上げる案: ①待っている現金をQQQ ②QQQの短期の逆張り ③決算後のドリフト\n")
+    w("2026-10-10、ユーザーの指示。土台は今の運用（新分析ツール、同じ日の候補は50日線の傾きが小さい順、目減り年15%未満の2倍ETFがある銘柄は2倍ETF、4銘柄・1銘柄25%）。"
+      "後知恵なしの監視銘柄、2015年〜、片道0.1%込み、**税は引かない**（恩株ツールの記録は税引き後なので数字を直接は比べない）。乱数50通り×2組の中央値。\n")
+    w(f"- ② QQQの短期の逆張り: 引けで RSI(2)≦10 かつ 200日線より上なら翌日から持ち、引けで5日線より上になったら翌日から持たない（コナーズの形）。持つ日は{mr_days}日（全体の{mr_days / len(days) * 100:.0f}%）。")
+    pe = [t["path"][t["out"]] - 1 for t in build(add=pead) if t["rule"] == "E"]
+    if pe:
+        w(f"- ③ 決算後のドリフト: 決算の反応の日に寄り付きが+5%以上の窓・陽線・出来高2倍 → 翌日の寄り付きで買う。手じまいは引けで50日線割れ・損切り15%・最長40取引日。"
+          f"合図 {len(pe)}回（年{len(pe) / 11.7:.0f}回）、勝率 {pct(sum(1 for x in pe if x > 0) / len(pe), 0)}、1回平均 {pct(sum(pe) / len(pe), 2)}（株、1回ごと）。今の4つのルールの候補より後に買う（空いた枠だけ）。")
+    w("")
+    w("| 形 | 1組目 年率 | 最大下落率（含み損込み） | 2015〜2021年 | 2022年〜 | 2組目 年率 | 最大下落率 | 2015〜2021年 | 2022年〜 |")
+    w("|---|---|---|---|---|---|---|---|---|")
+    for nm, trs, cr in forms:
+        cells = []
+        for s0 in (5000, 7300):
+            a_, m_, i_, o_ = [], [], [], []
+            for k in range(50):
+                g, m = sim(trs, s0 + k, days[0], days[-1], cr)
+                a_.append(g); m_.append(m)
+                i_.append(sim(trs, s0 + k, days[0], is_hi, cr)[0])
+                o_.append(sim(trs, s0 + k, oos_lo, days[-1], cr)[0])
+            cells += [pct(med(a_)), pct(med(m_)), pct(med(i_)), pct(med(o_))]
+        w(f"| {nm} | " + " | ".join(cells) + " |")
+        print(nm, cells, file=sys.stderr)
+    w("\n- QQQの売買のコストと、QQQを売って株を買うときのずれは入れていない（毎日の値動きをそのまま現金に掛けた近似）。2倍（QLD相当）は2倍の値動きから年0.95%の経費を引いた。")
+    w("- この結果はルールの条件どおりに機械的に計算したもので、Claudeによる個別銘柄の売買判断ではない。")
+    os.makedirs(OUTDIR, exist_ok=True)
+    open(OUTDIR + "効率を上げる案_QQQ・指数の逆張り・決算後のドリフト.md", "w", encoding="utf-8").write("\n".join(L) + "\n")
+    print("書き出し", file=sys.stderr)
+
+
+def hotyear_stage(base, data, build, port, days):
+    """過熱した順張りの合図を見送る形の、年ごとの成績（2026-10-10 ユーザーの指示）。乱数50通り（5000〜5049）の中央値"""
+    sma = lambda c, j, n: sum(c[j - n + 1:j + 1]) / n
+    rsis = {}
+    def hot(t):
+        s, j = data[t["sym"]], t["i0"] - 1
+        if t["sym"] not in rsis:
+            rsis[t["sym"]] = rsi_wilder(s["c"], 14)
+        r = rsis[t["sym"]][j]
+        return t["rule"] in ("V", "M") and s["bb_up"][j] is not None and s["c"][j] > s["bb_up"][j] and r is not None and r > 70
+    def s50(sym, j):
+        c = data[sym]["c"]
+        return sma(c, j, 50) / sma(c, j - 20, 50) - 1 if j >= 70 else 0.0
+    bmap = {(data[t["sym"]]["date"][t["i0"]], t["sym"], t["rule"]): t for t in base}
+    prio = lambda trs: [{**t, "prio": s50(t["sym"], bmap[(t["in"], t["sym"], t["rule"])]["i0"] - 1)} for t in trs]
+    hot_ids = {id(t) for t in base if hot(t)}
+    forms = [("今のルール", prio(build())), ("過熱した合図は見送る", prio(build(drop=lambda t: id(t) in hot_ids)))]
+    yrs = sorted({d[:4] for d in days})
+    med = lambda xs: sorted(xs)[len(xs) // 2]
+    rows = {}
+    for nm, trs in forms:
+        per = {y: [] for y in yrs}
+        for k in range(50):
+            curve = []
+            port(trs, 5000 + k, days[0], days[-1], curve=curve)
+            ends = {}
+            for d, e in zip(days, curve):
+                ends[d[:4]] = e
+            prev = 1.0
+            for y in yrs:
+                if y in ends:
+                    per[y].append(ends[y] / prev - 1)
+                    prev = ends[y]
+        rows[nm] = {y: med(v) for y, v in per.items() if v}
+    nh = {y: sum(1 for t in base if id(t) in hot_ids and data[t["sym"]]["date"][t["i0"]][:4] == y) for y in yrs}
+    L = []
+    w = L.append
+    w(f"---\ntype: backtest\ntitle: 過熱した順張りの合図を見送る形の年ごとの成績\ncreated: {dt.date.today()}\nscript: tools/backtest_retest.py --stage hotyear\n---\n")
+    w("# 過熱した順張りの合図（+2σより上かつRSI(14)>70）を見送る形の、年ごとの成績\n")
+    w("今のルール（同じ日の候補は50日線の傾きが小さい順）と比べる。株だけ、4銘柄・1銘柄25%、乱数50通りの中央値。2026年は10月まで。\n")
+    w("| 年 | 今のルール | 過熱した合図は見送る | 差 | 過熱した合図の数 |")
+    w("|---|---|---|---|---|")
+    better = 0
+    for y in yrs:
+        a, b = rows["今のルール"].get(y), rows["過熱した合図は見送る"].get(y)
+        if a is None or b is None:
+            continue
+        better += b > a
+        w(f"| {y} | {pct(a, 0)} | {pct(b, 0)} | {(b - a) * 100:+.0f}ポイント | {nh[y]} |")
+    w(f"\n- 見送る方が良かった年: {better} / {len(yrs)}")
+    w("- この結果はルールの条件どおりに機械的に計算したもので、Claudeによる個別銘柄の売買判断ではない。")
+    os.makedirs(OUTDIR, exist_ok=True)
+    open(OUTDIR + "過熱した順張りの合図を見送る形の年ごとの成績.md", "w", encoding="utf-8").write("\n".join(L) + "\n")
+    print("書き出し", file=sys.stderr)
+
+
+def hot_stage(base, data, build, ev, rec, days):
+    """順張り（新高値V2・ミネルヴィニ）で、合図の日に終値が+2σより上かつRSI(14)が70超え（過熱）のとき、見送る・数日待つ・中心線まで待つ（2026-10-10 ユーザーの指示）。
+    比べる元は今のルール（同じ日の候補は50日線の傾きが小さい順）"""
+    sma = lambda c, j, n: sum(c[j - n + 1:j + 1]) / n
+    rsis = {}
+    def rsi14(sym, j):
+        if sym not in rsis:
+            rsis[sym] = rsi_wilder(data[sym]["c"], 14)
+        return rsis[sym][j]
+    def s50(sym, j):
+        c = data[sym]["c"]
+        return sma(c, j, 50) / sma(c, j - 20, 50) - 1 if j >= 70 else 0.0
+    def hot(t):
+        s, j = data[t["sym"]], t["i0"] - 1
+        r = rsi14(t["sym"], j)
+        return t["rule"] in ("V", "M") and s["bb_up"][j] is not None and s["c"][j] > s["bb_up"][j] and r is not None and r > 70
+    def exit_from(s, k, px):
+        c, floor = s["c"], px * (1 - STOP)
+        for jj in range(k, len(c) - 1):
+            if c[jj] <= floor or (s["ma50"][jj] is not None and c[jj] < s["ma50"][jj]):
+                return jj + 1
+        return None
+    hots = [t for t in base if hot(t)]
+    def delayed(n):
+        out = []
+        for t in hots:
+            s, sym, i0 = data[t["sym"]], t["sym"], t["i0"]
+            k = i0 + n
+            if k >= len(s["c"]) - 1:
+                continue
+            j = i0 - 1
+            lvl = max(s["c"][max(0, j - 20):j])   # 抜けた水準（合図の日の直前20日の最高値（終値））
+            if s["c"][k - 1] < lvl:              # 待つ間にこの水準より下に戻ったら見送る
+                continue
+            px = s["o"][k]
+            x = exit_from(s, k, px)
+            if x:
+                out.append({**rec(sym, k, x, px, s["o"][x], t["rule"]), "prio": s50(sym, j), "add": True})
+        return out
+    def to_mid(days_):
+        out = []
+        for t in hots:
+            s, sym, i0 = data[t["sym"]], t["sym"], t["i0"]
+            k = next((k for k in range(i0, min(len(s["c"]) - 1, i0 + days_)) if s["bb_mid"][k - 1] and s["l"][k] <= s["bb_mid"][k - 1]), None)
+            if k is None:
+                continue
+            px = min(s["o"][k], s["bb_mid"][k - 1])
+            x = exit_from(s, k, px)
+            if x:
+                out.append({**rec(sym, k, x, px, s["o"][x], t["rule"]), "prio": s50(sym, i0 - 1), "add": True})
+        return out
+    bmap = {(data[t["sym"]]["date"][t["i0"]], t["sym"], t["rule"]): t for t in base}
+    def prio(trs):
+        out = []
+        for t in trs:
+            b = bmap.get((t["in"], t["sym"], t["rule"]))
+            out.append({**t, "prio": s50(t["sym"], b["i0"] - 1)} if b and not t.get("add") else t)
+        return out
+    hot_ids = {id(t) for t in hots}
+    drop_hot = lambda t: id(t) in hot_ids
+    forms = [("今のルール（50日線の傾きが小さい順）", lambda: prio(build()))]
+    forms.append(("1. 過熱した合図は見送る", lambda: prio(build(drop=drop_hot))))
+    for n in (1, 2, 3):
+        forms.append((f"2. 過熱した合図は{n}日待ち、抜けた水準より上なら{n}日後の寄り付きで買う", (lambda n=n: prio(build(drop=drop_hot, add=delayed(n))))))
+    for d_ in (5, 10):
+        forms.append((f"3. 過熱した合図は、{d_}日以内に20日線（バンドの中心）まで下がったら指値で買う", (lambda d_=d_: prio(build(drop=drop_hot, add=to_mid(d_))))))
+    L = []
+    w = L.append
+    nV = sum(1 for t in hots if t["rule"] == "V"); nM = len(hots) - nV
+    allT = sum(1 for t in base if t["rule"] in ("V", "M"))
+    w(f"---\ntype: backtest\ntitle: 過熱した順張りの合図を見送る・待つ\ncreated: {dt.date.today()}\nscript: tools/backtest_retest.py --stage hot\n---\n")
+    w("# 順張りの合図が過熱している（+2σより上かつRSI(14)が70超え）とき、見送る・数日待つ・中心線まで待つ\n")
+    w(f"2026-10-10、ユーザーの指示（保有4銘柄がどれも+2σ付近で買い、2つは20日線まで下げたことから）。過熱した合図: 合図の日の終値がボリンジャーの+2σより上、かつRSI(14)が70超え。"
+      f"順張りの合図{allT}件のうち{len(hots)}件（新高値V2 {nV}件・ミネルヴィニ {nM}件）。押し目・急落の底はそのまま。"
+      "比べる元は今のルール（同じ日の候補は50日線の傾きが小さい順）。後知恵なしの監視銘柄、2015年〜、4銘柄・1銘柄25%、株だけ、片道0.1%込み。乱数20通り・50通り×2組の中央値。\n")
+    sets = ((1000, 20), (5000, 50), (7300, 50))
+    res = {}
+    for nm, fn in forms:
+        trs = fn()
+        res[nm] = [ev(trs, sd) for sd in sets]
+        print(nm, [round(e["all"], 3) for e in res[nm]], file=sys.stderr)
+    b0 = res[forms[0][0]]
+    w("| 形 | 年率（3組） | 最大下落率（組2） | 2015〜2021年（3組） | 2022年〜（3組） | 3組とも両方の期間で今のルールを上回ったか |")
+    w("|---|---|---|---|---|---|")
+    for nm, _ in forms:
+        r = res[nm]
+        ok = all(r[k]["is"] > b0[k]["is"] and r[k]["oos"] > b0[k]["oos"] for k in range(3)) if nm != forms[0][0] else None
+        w(f"| {nm} | {'／'.join(pct(e['all']) for e in r)} | {pct(r[1]['mdd'])} | {'／'.join(pct(e['is']) for e in r)} | {'／'.join(pct(e['oos']) for e in r)} | {'—' if ok is None else ('**確か**' if ok else 'いいえ')} |")
+    w("\n- この結果はルールの条件どおりに機械的に計算したもので、Claudeによる個別銘柄の売買判断ではない。")
+    os.makedirs(OUTDIR, exist_ok=True)
+    open(OUTDIR + "過熱した順張りの合図を見送る・待つ.md", "w", encoding="utf-8").write("\n".join(L) + "\n")
+    print("書き出し", file=sys.stderr)
+
+
+def side_sim(trs, lo, hi, days, slots, cap=None, tool_curve=None, tool_cap=1.0, rate=0.0):
+    """良い合図だけを買う別の枠。cap があれば、その現金で同時に slots 銘柄まで（1銘柄＝その枠の時価÷slots）。
+    cap が None なら信用取引: 全体（ツール＋この枠の損益）の時価÷4 を借りて買い、年 rate の金利を日割りで払う。日ごとの価値（損益の累計）を返す"""
+    dd = [d for d in days if lo <= d <= hi]
+    by_in = {}
+    for t in trs:
+        if lo <= t["in"] and t["out"] <= hi:
+            by_in.setdefault(t["in"], []).append(t)
+    cash = cap if cap is not None else 0.0
+    held, out = [], []
+    for k, d in enumerate(dd):
+        still = []
+        for h in held:
+            v = h["t"]["path"].get(d)
+            if v is not None:
+                h["v"] = v
+            if cap is None:
+                cash -= h["size"] * rate / 252
+            if h["t"]["out"] == d:
+                cash += h["size"] * (h["v"] - (0 if cap is not None else 1))
+            else:
+                still.append(h)
+        held = still
+        for t in sorted(by_in.get(d, []), key=lambda t: t["prio"]):
+            if len(held) >= slots or any(h["t"]["sym"] == t["sym"] for h in held):
+                continue
+            if cap is not None:
+                eq = cash + sum(h["size"] * h["v"] for h in held)
+                size = min(eq / slots, cash)
+                if size <= 0:
+                    break
+                cash -= size
+            else:
+                tot = tool_cap * tool_curve[k] + cash + sum(h["size"] * (h["v"] - 1) for h in held)
+                size = tot / 4
+            v0 = t["path"].get(d, 1.0)
+            if t["out"] == d:
+                cash += size * (v0 - (0 if cap is not None else 1))
+                continue
+            held.append({"t": t, "size": size, "v": v0})
+        out.append(cash + sum(h["size"] * (h["v"] - (0 if cap is not None else 1)) for h in held))
+    return out
+
+
+def premium_stage(cur_tr, base, data, ind, days, is_hi, oos_lo):
+    """良い合図（急落の底のうち50日線の傾きが小さい20%）をうまく使う案1〜4と、余剰の現金を全部ツールに入れる形を、同じ資金（18,000ドル＝1.5）で比べる（2026-10-10 ユーザーの指示）"""
+    import json
+    sma = lambda c, j, n: sum(c[j - n + 1:j + 1]) / n
+    def s50(b):
+        c, j = data[b["sym"]]["c"], b["i0"] - 1
+        return sma(c, j, 50) / sma(c, j - 20, 50) - 1 if j >= 70 else 0.0
+    bmap = {(data[t["sym"]]["date"][t["i0"]], t["sym"], t["rule"]): t for t in base}
+    B = lambda t: bmap[(t["in"], t["sym"], t["rule"])]
+    trs = [{**t, "prio": s50(B(t))} for t in cur_tr]
+    cs = sorted(t["prio"] for t in trs if t["rule"] == "C" and t["in"] <= is_hi)
+    c20 = cs[len(cs) // 5]   # 境目は設計期間（2015〜2021年）の急落の底の下位20%
+    prem = lambda t: t["rule"] == "C" and t["prio"] <= c20
+    ptrs = [t for t in trs if prem(t)]
+    tab = json.load(open(os.path.join(os.path.dirname(OUTDIR.rstrip("/")), "2倍ETFの対応表.json"), encoding="utf-8"))
+    drag = {u: -x["drag"] for u, x in tab.items() if isinstance(x, dict) and "drag" in x}
+    HAS = {u for u, d in drag.items() if d < 0.15}
+    def to2x(xs, only=None):
+        out = []
+        for t in xs:
+            if t["sym"] not in HAS or (only and not only(t)):
+                out.append(t)
+                continue
+            fee = drag[t["sym"]] / 252
+            e, prev, pv = 1 - COST, 1 - COST, {}
+            for d in sorted(t["path"]):
+                g_ = t["path"][d]
+                e = max(0.0, e * (1 + 2 * (g_ / prev - 1)) * (1 - fee))
+                prev = g_
+                pv[d] = e
+            out.append({**t, "path": pv})
+        return out
+    trs2, ptrs2 = to2x(trs), to2x(ptrs)
+    TOT = 1.5   # 18,000ドル（ツール12,000ドル＝1.0＋余剰6,000ドル＝0.5）
+    RATE = 0.07  # 信用取引の金利（年。仮定）
+    def total(seed, lo, hi, form, etf):
+        dd = [d for d in days if lo <= d <= hi]
+        tt = trs2 if etf else trs
+        pt = ptrs2 if (etf or form == "1x2") else ptrs
+        tc = []
+        if form == "all":         # 全部（1.5）をツールに
+            swap_port(tt, seed, lo, hi, ind, days, curve=tc)
+            tot = [TOT * x for x in tc]
+        elif form == "big":       # 全部ツール、良い合図だけ1銘柄の金額を1.5倍
+            swap_port([{**t, "w": 1.5} if prem(t) else t for t in tt], seed, lo, hi, ind, days, curve=tc)
+            tot = [TOT * x for x in tc]
+        elif form == "swaploss":  # 全部ツール、枠が埋まっていれば含み損が一番大きい保有を売って乗り換える
+            swap_port(tt, seed, lo, hi, ind, days, prem=prem, th=0.0, curve=tc, pick="loss")
+            tot = [TOT * x for x in tc]
+        elif form == "margin":    # 全部ツール、良い合図は信用取引で別に買う
+            swap_port(tt, seed, lo, hi, ind, days, curve=tc)
+            side = side_sim(pt, lo, hi, days, 1, None, tc, TOT, RATE)
+            tot = [TOT * x + y for x, y in zip(tc, side)]
+        else:                     # ツールは1.0、余剰の0.5は idle（何もしない）か、良い合図専用の枠
+            swap_port(tt, seed, lo, hi, ind, days, curve=tc)
+            side = [0.5] * len(dd) if form == "idle" else side_sim(pt, lo, hi, days, 2, 0.5)
+            tot = [x + y for x, y in zip(tc, side)]
+        yrs = (dt.date.fromisoformat(dd[-1]) - dt.date.fromisoformat(dd[0])).days / 365.25
+        pk, m = 0.0, 0.0
+        for x in tot:
+            pk = max(pk, x)
+            m = max(m, 1 - x / pk)
+        return (tot[-1] / TOT) ** (1 / yrs) - 1, m
+    forms = [("余剰の6,000ドルは現金のまま（今の形）", "idle"),
+             ("全部（18,000ドル）をツールに入れる", "all"),
+             ("案1: 余剰の6,000ドルを良い合図専用の枠に（同時に2銘柄、株）", "side"),
+             ("案1＋2: 専用の枠を2倍ETFで（2倍ETFがある銘柄）", "1x2"),
+             ("案2: 全部ツールに入れ、良い合図だけ1銘柄の金額を1.5倍", "big"),
+             ("案3: 全部ツールに入れ、良い合図は信用取引で別に買う（金利 年7%と仮定）", "margin"),
+             ("案4: 全部ツールに入れ、枠が埋まっていれば含み損が一番大きい保有を売って乗り換える", "swaploss")]
+    med = lambda xs: sorted(xs)[len(xs) // 2]
+    L = []
+    w = L.append
+    w(f"---\ntype: backtest\ntitle: 良い合図をうまく使う案と余剰の現金\ncreated: {dt.date.today()}\nscript: tools/backtest_retest.py --stage premium\n---\n")
+    w("# 良い合図（急落の底のうち50日線の傾きが小さい20%）をうまく使う案と、余剰の現金の使い方\n")
+    w(f"2026-10-10、ユーザーの指示。資金は全部で18,000ドル（ツール12,000ドル＋余剰6,000ドル）として、資金全体の年率・最大下落率（含み損込み）で比べる。"
+      f"良い合図の境目は、設計期間の急落の底の合図のうち50日線の傾きの下位20%（{pct(c20, 1)}以下）。年に約{len(ptrs) / 11.7:.0f}回。"
+      "ツールは今のルール（同じ日の候補は50日線の傾きが小さい順、4銘柄・1銘柄25%）。後知恵なしの監視銘柄、2015年〜、片道0.1%込み。乱数50通り×2組の中央値。\n")
+    for etf in (False, True):
+        w(f"## {'2倍ETF込み（今の運用）' if etf else '株だけ'}\n")
+        w("| 形 | 1組目 年率 | 最大下落率 | 2015〜2021年 | 2022年〜 | 2組目 年率 | 最大下落率 | 2015〜2021年 | 2022年〜 |")
+        w("|---|---|---|---|---|---|---|---|---|")
+        for nm, fm in forms:
+            if etf and fm == "1x2":
+                continue
+            cells = []
+            for s0 in (5000, 7300):
+                a_, m_, i_, o_ = [], [], [], []
+                for k in range(50):
+                    g, m = total(s0 + k, days[0], days[-1], fm, etf)
+                    a_.append(g); m_.append(m)
+                    i_.append(total(s0 + k, days[0], is_hi, fm, etf)[0])
+                    o_.append(total(s0 + k, oos_lo, days[-1], fm, etf)[0])
+                cells += [pct(med(a_)), pct(med(m_)), pct(med(i_)), pct(med(o_))]
+            w(f"| {nm} | " + " | ".join(cells) + " |")
+            print(nm, etf, cells, file=sys.stderr)
+        w("")
+    w("- 案1の専用の枠: 余剰の6,000ドルで同時に2銘柄まで（1銘柄＝その枠の時価÷2）。良い合図は年に十数回で、保有は4取引日ほどなので、ほとんどの日は現金。")
+    w("- 案3の信用取引: 全体の時価÷4 を借りて買い、金利は年7%を日割りで払うと仮定（ムームー証券の実際の金利は要確認）。")
+    w("- この結果はルールの条件どおりに機械的に計算したもので、Claudeによる個別銘柄の売買判断ではない。")
+    os.makedirs(OUTDIR, exist_ok=True)
+    open(OUTDIR + "良い合図をうまく使う案と余剰の現金.md", "w", encoding="utf-8").write("\n".join(L) + "\n")
+    print("書き出し", file=sys.stderr)
+
+
+def swap_stage(cur_tr, base, data, build, ind, days, is_hi, oos_lo):
+    """出る回数は少ないが勝率が高く下落が小さい合図が出たら、含み益の保有を利確して乗り換えるか（2026-10-10 ユーザーの指示）"""
+    sma = lambda c, j, n: sum(c[j - n + 1:j + 1]) / n
+    def s50(b):
+        c, j = data[b["sym"]]["c"], b["i0"] - 1
+        return sma(c, j, 50) / sma(c, j - 20, 50) - 1 if j >= 70 else 0.0
+    bmap = {(data[t["sym"]]["date"][t["i0"]], t["sym"], t["rule"]): t for t in base}
+    B = lambda t: bmap[(t["in"], t["sym"], t["rule"])]
+    rs = lambda t: data[t["sym"]]["rs"][B(t)["i0"] - 1] or 0
+    yrs = 11.7
+    groups = {
+        "新高値V2（全部）": lambda t: t["rule"] == "V",
+        "ミネルヴィニ（全部）": lambda t: t["rule"] == "M",
+        "押し目（全部）": lambda t: t["rule"] == "B",
+        "押し目・RS≧80": lambda t: t["rule"] == "B" and rs(t) >= 80,
+        "押し目・RS≧90": lambda t: t["rule"] == "B" and rs(t) >= 90,
+        "急落の底（全部）": lambda t: t["rule"] == "C",
+        "急落の底・RS≧80": lambda t: t["rule"] == "C" and rs(t) >= 80,
+        "急落の底・50日線の傾きが小さい20%": None,
+    }
+    cs = sorted(s50(B(t)) for t in cur_tr if t["rule"] == "C")
+    c20 = cs[len(cs) // 5]
+    groups["急落の底・50日線の傾きが小さい20%"] = lambda t: t["rule"] == "C" and s50(B(t)) <= c20
+    L = []
+    w = L.append
+    w(f"---\ntype: backtest\ntitle: 良い合図が出たら含み益の保有を利確して乗り換える\ncreated: {dt.date.today()}\nscript: tools/backtest_retest.py --stage swap\n---\n")
+    w("# 出る回数は少ないが勝率が高く下落が小さい合図が出たら、含み益の保有を利確して乗り換えるか\n")
+    w("2026-10-10、ユーザーの指示。後知恵なしの監視銘柄、2015年〜、今のルール（同じ日の候補は50日線の傾きが小さい順）、4銘柄・1銘柄25%、株だけ、片道0.1%込み。\n")
+    w("## 1. 合図の種類ごとの成績（全部の合図、1回ごと）\n")
+    w("「保有中の一番深い下げ」は、買ってから売るまでの終値で一番下がった割合の平均。\n")
+    w("| 合図 | 回数（年あたり） | 勝率 | 1回平均 | 保有中の一番深い下げ（平均） | 1回の最悪 | 保有日数（中央値、取引日） |")
+    w("|---|---|---|---|---|---|---|")
+    for nm, f in groups.items():
+        ts = [t for t in cur_tr if f(t)]
+        if not ts:
+            continue
+        r = [t["path"][t["out"]] - 1 for t in ts]
+        mae = [min(v for d, v in t["path"].items() if d <= t["out"]) - 1 for t in ts]
+        hold = sorted(len([d for d in t["path"] if d <= t["out"]]) for t in ts)
+        w(f"| {nm} | {len(ts)}（年{len(ts) / yrs:.0f}回） | {pct(sum(1 for x in r if x > 0) / len(r), 0)} | {pct(sum(r) / len(r), 2)} | {pct(sum(mae) / len(mae), 1)} | {pct(min(r), 0)} | {hold[len(hold) // 2]}日 |")
+    trs = [{**t, "prio": s50(B(t))} for t in cur_tr]
+    w("\n## 2. 乗り換えを資金全体で試す（今のルールと比べる）\n")
+    w("枠（4つ）が埋まっている日に、下の合図が出たら、含み益（前日の終値で、買値から）が条件を超える保有のうち一番大きいものを、その日の寄り付きで売り、その合図を買う。"
+      "乗り換えの合図が出なければ今のルールと同じ。乱数50通り×2組の中央値。\n")
+    w("| 乗り換える合図 | 利確する保有の条件 | 1組目 年率 | 最大下落率 | 設計 | 確認 | 2組目 年率 | 最大下落率 | 設計 | 確認 | 乗り換えの回数（年あたり）・売った保有の含み益の平均 |")
+    w("|---|---|---|---|---|---|---|---|---|---|---|")
+    med = lambda xs: sorted(xs)[len(xs) // 2]
+    def run(prem, th):
+        out = []
+        for s0 in (5000, 7300):
+            a_, m_, i_, o_ = [], [], [], []
+            st = []
+            for k in range(50):
+                g, m = swap_port(trs, s0 + k, days[0], days[-1], ind, days, prem, th, st if s0 == 5000 else None)
+                a_.append(g); m_.append(m)
+                i_.append(swap_port(trs, s0 + k, days[0], is_hi, ind, days, prem, th)[0])
+                o_.append(swap_port(trs, s0 + k, oos_lo, days[-1], ind, days, prem, th)[0])
+            out.append((med(a_), med(m_), med(i_), med(o_), st))
+        return out
+    base_r = run(None, 0)
+    def row(nm, cond, r):
+        st = r[0][4]
+        n = f"年{len(st) / 50 / yrs:.1f}回・{pct(sum(st) / len(st), 1)}" if st else "—"
+        w(f"| {nm} | {cond} | {pct(r[0][0])} | {pct(r[0][1])} | {pct(r[0][2])} | {pct(r[0][3])} | {pct(r[1][0])} | {pct(r[1][1])} | {pct(r[1][2])} | {pct(r[1][3])} | {n} |")
+    row("（乗り換えなし＝今のルール）", "—", base_r)
+    for nm in ("急落の底（全部）", "急落の底・RS≧80", "急落の底・50日線の傾きが小さい20%", "押し目・RS≧90", "押し目・RS≧80"):
+        for th in (0.0, 0.10):
+            row(nm, f"含み益 {'+' + str(int(th * 100)) + '%超' if th else 'プラス'}", run(groups[nm], th))
+    w("\n- 「設計」は2015〜2021年、「確認」は2022年〜。採用の目安は、今のルールより両方の期間で上回ること（2組とも）。")
+    w("- この結果はルールの条件どおりに機械的に計算したもので、Claudeによる個別銘柄の売買判断ではない。")
+    os.makedirs(OUTDIR, exist_ok=True)
+    open(OUTDIR + "良い合図が出たら含み益の保有を利確して乗り換える.md", "w", encoding="utf-8").write("\n".join(L) + "\n")
+    print("書き出し", file=sys.stderr)
 
 
 def slope3_stage(base, data, build, port, days):
