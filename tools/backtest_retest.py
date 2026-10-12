@@ -346,7 +346,7 @@ def main():
     r.add_argument("--etf", default=None, help="etf2x: 2倍ETFにする銘柄（カンマ区切り）。省略すると backtest_2x.HAS_2X")
     r.add_argument("--drag", default=None, help="etf2x: 2倍ETFの目減り（年率）。数値なら全部同じ、'measured' なら 新分析ツール/2倍ETFの対応表.json の実測（ないものは0.12）")
     r.add_argument("--tag", default="", help="etf2x: 結果のファイル名と見出しに付ける名前（例: ムームー証券）")
-    r.add_argument("--stage", default="all", choices=("sell", "combo", "half", "filter", "rule", "stats", "dd", "robust", "earn", "realized", "etf2x", "etfrule", "weinstein", "rsi", "pivot", "exits", "pullback", "recover", "prio", "slope", "slope2", "slope3", "swap", "premium", "hot", "hotyear", "ideas", "all"))
+    r.add_argument("--stage", default="all", choices=("sell", "combo", "half", "filter", "rule", "stats", "dd", "robust", "earn", "realized", "etf2x", "etfrule", "weinstein", "rsi", "pivot", "exits", "pullback", "recover", "prio", "slope", "slope2", "slope3", "swap", "premium", "hot", "hotyear", "ideas", "theme", "all"))
     a = ap.parse_args()
     ctx = cb.setup(a.cache, with_parts=False)
     data, members, ind, days, G, end = (ctx[k] for k in ("data", "members", "ind", "days", "G", "end"))
@@ -720,6 +720,8 @@ def main():
         open(OUTDIR + "銘柄の下落率で見送る・優先する.md", "w", encoding="utf-8").write("\n".join(L) + "\n")
         print("書き出し", file=sys.stderr)
         return
+    if a.stage == "theme":
+        return theme_stage(base, data, build, ind, days, a.cache)
     if a.stage == "ideas":
         return ideas_stage(cur_tr, base, data, build, ind, days, is_hi, oos_lo, ctx, G, from_gen, a.cache)
     if a.stage == "hotyear":
@@ -1471,6 +1473,177 @@ def slope3_stage(base, data, build, port, days):
     w("\n- この結果はルールの条件どおりに機械的に計算したもので、Claudeによる個別銘柄の売買判断ではない。")
     os.makedirs(OUTDIR, exist_ok=True)
     open(OUTDIR + "50日線の傾きが小さい順の確定した損益の下落率.md", "w", encoding="utf-8").write("\n".join(L) + "\n")
+    print("書き出し", file=sys.stderr)
+
+
+def theme_stage(base, data, build, ind, days, cache):
+    """保有が同じテーマ・セクターに固まったときの成績と、テーマ・セクターの上限を足す形（2026-10-12 ユーザーの指示）。
+    今のルール（50日線の傾きが小さい順・2倍ETF込み・同じ業種2銘柄まで）が土台"""
+    import json
+    from backtest_caps import THEME
+    u = json.load(open(os.path.join(cache, "universe.json")))
+    ex = os.path.join(cache, "industry_extra.json")
+    if os.path.exists(ex):
+        u.update(json.load(open(ex)))
+    sec = {s: (u.get(s) or {}).get("sector") for s in data}
+    theme = {s: THEME.get(ind.get(s), ind.get(s)) for s in data}
+    sma_ = lambda c, j, n: sum(c[j - n + 1:j + 1]) / n
+    def s50(b):
+        c, j = data[b["sym"]]["c"], b["i0"] - 1
+        return sma_(c, j, 50) / sma_(c, j - 20, 50) - 1 if j >= 70 else 0.0
+    bmap = {(data[t["sym"]]["date"][t["i0"]], t["sym"], t["rule"]): t for t in base}
+    tab = json.load(open(os.path.join(os.path.dirname(OUTDIR.rstrip("/")), "2倍ETFの対応表.json"), encoding="utf-8"))
+    drag = {s: -x["drag"] for s, x in tab.items() if isinstance(x, dict) and "drag" in x}
+    HAS = {s for s, d in drag.items() if d < 0.15}
+    def to2x(trs):
+        out = []
+        for t in trs:
+            if t["sym"] not in HAS:
+                out.append(t)
+                continue
+            fee = drag[t["sym"]] / 252
+            e, prev, pv = 1 - COST, 1 - COST, {}
+            for d in sorted(t["path"]):
+                g_ = t["path"][d]
+                e = max(0.0, e * (1 + 2 * (g_ / prev - 1)) * (1 - fee))
+                prev = g_
+                pv[d] = e
+            out.append({**t, "path": pv})
+        return out
+    trs = to2x([{**t, "prio": s50(bmap[(t["in"], t["sym"], t["rule"])])} for t in build()])
+    is_hi = max(d for d in days if d <= cb.IS_END)
+    oos_lo = min(d for d in days if d >= cb.OOS_START)
+
+    def port(seed, lo, hi, caps=(), buys=None, rcurve=None, ddinfo=None):
+        """今の port と同じ（業種2銘柄まで）に caps=[(銘柄→まとまり, 上限)] を足したもの。
+        buys: 買うたびに (同じセクターの数, 同じテーマの数, その売買の損益) を足す（数は買う銘柄を含む）"""
+        dd = [d for d in days if lo <= d <= hi]
+        by_in = {}
+        for t in trs:
+            if lo <= t["in"] and t["out"] <= hi:
+                by_in.setdefault(t["in"], []).append(t)
+        rnd = random.Random(seed)
+        cash, held, peak, mdd, eq = 1.0, [], 1.0, 0.0, 1.0
+        pk_d, best = None, None
+        for d in dd:
+            still = []
+            for h in held:
+                v = h["t"]["path"].get(d)
+                if v is not None:
+                    h["v"] = v
+                if h["t"]["out"] == d:
+                    cash += h["size"] * h["v"]
+                else:
+                    still.append(h)
+            held = still
+            eq = cash + sum(h["size"] * h["v"] for h in held)
+            for t in sorted(by_in.get(d, []), key=lambda t: (t["prio"], rnd.random())):
+                if any(h["t"]["sym"] == t["sym"] for h in held):
+                    continue
+                if len(held) >= SLOTS:
+                    break
+                if sum(1 for h in held if ind.get(h["t"]["sym"]) == ind.get(t["sym"])) >= 2:
+                    continue
+                if any(sum(1 for h in held if g.get(h["t"]["sym"]) == g.get(t["sym"])) >= n for g, n in caps):
+                    continue
+                size = min(eq / SLOTS * t.get("w", 1.0), cash)
+                if size <= 0:
+                    break
+                if buys is not None:
+                    buys.append((1 + sum(1 for h in held if sec.get(h["t"]["sym"]) == sec.get(t["sym"])),
+                                 1 + sum(1 for h in held if theme.get(h["t"]["sym"]) == theme.get(t["sym"])),
+                                 t["path"][t["out"]] - 1))
+                cash -= size
+                v0 = t["path"].get(d, 1.0)
+                if t["out"] == d:
+                    cash += size * v0
+                    continue
+                held.append({"t": t, "size": size, "v": v0})
+            eq = cash + sum(h["size"] * h["v"] for h in held)
+            if eq > peak:
+                peak, pk_d = eq, d
+                pk_sec = max([sum(1 for x in held if sec.get(x["t"]["sym"]) == sec.get(h["t"]["sym"])) for h in held] or [0])
+            if 1 - eq / peak > mdd:
+                mdd = 1 - eq / peak
+                best = (pk_d, d, pk_sec if pk_d else 0)
+            if rcurve is not None:
+                rcurve.append(cash + sum(h["size"] for h in held))
+        if ddinfo is not None:
+            ddinfo.append(best)
+        yrs = (dt.date.fromisoformat(dd[-1]) - dt.date.fromisoformat(dd[0])).days / 365.25
+        return eq ** (1 / yrs) - 1, mdd
+
+    med = lambda xs: sorted(xs)[len(xs) // 2]
+    L = []
+    w = L.append
+    w(f"---\ntype: backtest\ntitle: 同じテーマ・セクターに固まったとき\ncreated: {dt.date.today()}\nscript: tools/backtest_retest.py --stage theme\n---\n")
+    w("# 保有が同じテーマ・セクターに固まったときの成績と、上限を足す形\n")
+    w("2026-10-12、保有4銘柄（LITE・NVDA・HPE・AMD）がすべてAI・半導体関連で一緒に下げたのを受けて、ユーザーの指示で調べた。"
+      "土台は今のルール（4銘柄・1銘柄25%、同じ業種2銘柄まで、50日線の傾きが小さい順、2倍ETFがある銘柄は2倍ETF〔実測の目減り〕、損切り15%）。"
+      "後知恵なしの監視銘柄、2015年〜、片道0.1%込み。セクターはYahooの大きな分類（Technologyなど11種）、テーマは `backtest_caps.THEME`"
+      "（半導体／製造装置／ハード・端末／通信機器・部品・計測／ソフト・ITサービス／ネット。それ以外は業種のまま）。\n")
+
+    # 1. 固まったときの売買の成績（今のルール、乱数50通りの全部の売買）
+    buys, ddi = [], []
+    for k in range(50):
+        port(5000 + k, days[0], days[-1], buys=buys, ddinfo=ddi)
+    for name, col in (("セクター", 0), ("テーマ", 1)):
+        w(f"\n## 1. 買ったとき、同じ{name}の保有が何銘柄になったか（買う銘柄を含む）と、その売買の成績（今のルール、乱数50通りの全部の売買）\n")
+        w("| 同じ" + name + "の数 | 売買の数（割合） | 勝率 | 1回平均（2倍ETFはETFの損益） | 1回の中央値 |")
+        w("|---|---|---|---|---|")
+        for n in (1, 2, 3, 4):
+            xs = [b[2] for b in buys if b[col] == n]
+            if not xs:
+                continue
+            w(f"| {n}銘柄 | {len(xs)}（{len(xs) / len(buys) * 100:.0f}%） | {sum(x > 0 for x in xs) / len(xs) * 100:.0f}% | {pct(sum(xs) / len(xs))} | {pct(med(xs))} |")
+    w("\n## 2. 一番大きい下落（含み損込み）が始まった日に、同じセクターの保有が最も多くて何銘柄だったか（乱数50通り）\n")
+    cnt = {}
+    for b in ddi:
+        if b:
+            cnt[b[2]] = cnt.get(b[2], 0) + 1
+    w("| 同じセクターの数 | 回数 |")
+    w("|---|---|")
+    for n in sorted(cnt):
+        w(f"| {n}銘柄 | {cnt[n]} |")
+    starts = {}
+    for b in ddi:
+        if b:
+            starts[(b[0], b[1])] = starts.get((b[0], b[1]), 0) + 1
+    top = sorted(starts.items(), key=lambda x: -x[1])[:3]
+    w("\nよく出た下落の期間（始まり→底、乱数50通りのうちの回数）: " + "、".join(f"{a}→{b}（{n}回）" for (a, b), n in top) + "\n")
+
+    # 3. 上限を足す形
+    forms = [("今のルール（同じ業種2銘柄まで）", ()),
+             ("＋同じテーマ2銘柄まで", ((theme, 2),)),
+             ("＋同じテーマ3銘柄まで", ((theme, 3),)),
+             ("＋同じセクター2銘柄まで", ((sec, 2),)),
+             ("＋同じセクター3銘柄まで", ((sec, 3),))]
+    w("\n## 3. テーマ・セクターの上限を足す形（乱数50通り×2組の中央値）\n")
+    w("確定した損益だけの下落率: 持っている株は買った額のまま数え、売って損益が確定したときだけ資金が増減するとした場合。\n")
+    w("| 形 | 組 | 年率 | 含み損込みの最大下落率（中央値／最悪） | 確定した損益だけの最大下落率（中央値／最悪） | 2015〜2021年 | 2022年〜 |")
+    w("|---|---|---|---|---|---|---|")
+    res = {}
+    for nm, caps in forms:
+        for s0 in (5000, 7300):
+            cg, mm, rm, ii, oo = [], [], [], [], []
+            for k in range(50):
+                rc = []
+                g, m = port(s0 + k, days[0], days[-1], caps, rcurve=rc)
+                pk, r = 0.0, 0.0
+                for x in rc:
+                    pk = max(pk, x)
+                    r = max(r, 1 - x / pk)
+                cg.append(g); mm.append(m); rm.append(r)
+                ii.append(port(s0 + k, days[0], is_hi, caps)[0]); oo.append(port(s0 + k, oos_lo, days[-1], caps)[0])
+            res[(nm, s0)] = (med(ii), med(oo))
+            w(f"| {nm} | {'1組目' if s0 == 5000 else '2組目'} | {pct(med(cg))} | {pct(med(mm))}／{pct(max(mm))} | {pct(med(rm))}／{pct(max(rm))} | {pct(med(ii))} | {pct(med(oo))} |")
+            print(nm, s0, file=sys.stderr)
+    w("\n両方の組で、2015〜2021年・2022年〜の両方とも今のルールを上回った形: " +
+      ("、".join(nm for nm, _ in forms[1:] if all(res[(nm, s)][0] > res[(forms[0][0], s)][0] and res[(nm, s)][1] > res[(forms[0][0], s)][1] for s in (5000, 7300))) or "なし") + "\n")
+    w("- 後知恵なしの監視銘柄は全業種から選ばれる。実際の監視銘柄（87銘柄）はAI・半導体のテーマに絞っているため、実際の運用ではこの表より同じテーマに固まりやすい。")
+    w("- この結果はルールの条件どおりに機械的に計算したもので、Claudeによる個別銘柄の売買判断ではない。")
+    os.makedirs(OUTDIR, exist_ok=True)
+    open(OUTDIR + "同じテーマ・セクターに固まったとき.md", "w", encoding="utf-8").write("\n".join(L) + "\n")
     print("書き出し", file=sys.stderr)
 
 
