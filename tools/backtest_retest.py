@@ -346,7 +346,7 @@ def main():
     r.add_argument("--etf", default=None, help="etf2x: 2倍ETFにする銘柄（カンマ区切り）。省略すると backtest_2x.HAS_2X")
     r.add_argument("--drag", default=None, help="etf2x: 2倍ETFの目減り（年率）。数値なら全部同じ、'measured' なら 新分析ツール/2倍ETFの対応表.json の実測（ないものは0.12）")
     r.add_argument("--tag", default="", help="etf2x: 結果のファイル名と見出しに付ける名前（例: ムームー証券）")
-    r.add_argument("--stage", default="all", choices=("sell", "combo", "half", "filter", "rule", "stats", "dd", "robust", "earn", "realized", "etf2x", "etfrule", "weinstein", "rsi", "pivot", "exits", "pullback", "recover", "prio", "slope", "slope2", "slope3", "swap", "premium", "hot", "hotyear", "ideas", "theme", "halfadd", "all"))
+    r.add_argument("--stage", default="all", choices=("sell", "combo", "half", "filter", "rule", "stats", "dd", "robust", "earn", "realized", "etf2x", "etfrule", "weinstein", "rsi", "pivot", "exits", "pullback", "recover", "prio", "slope", "slope2", "slope3", "swap", "premium", "hot", "hotyear", "ideas", "theme", "halfadd", "replay", "all"))
     a = ap.parse_args()
     ctx = cb.setup(a.cache, with_parts=False)
     data, members, ind, days, G, end = (ctx[k] for k in ("data", "members", "ind", "days", "G", "end"))
@@ -720,6 +720,8 @@ def main():
         open(OUTDIR + "銘柄の下落率で見送る・優先する.md", "w", encoding="utf-8").write("\n".join(L) + "\n")
         print("書き出し", file=sys.stderr)
         return
+    if a.stage == "replay":
+        return replay_stage(base, data, build, ind, days)
     if a.stage == "halfadd":
         return halfadd_stage(base, data, build, port, days)
     if a.stage == "theme":
@@ -1647,6 +1649,137 @@ def theme_stage(base, data, build, ind, days, cache):
     os.makedirs(OUTDIR, exist_ok=True)
     open(OUTDIR + "同じテーマ・セクターに固まったとき.md", "w", encoding="utf-8").write("\n".join(L) + "\n")
     print("書き出し", file=sys.stderr)
+
+
+def replay_stage(base, data, build, ind, days, lo="2026-06-01", hi="2026-09-30"):
+    """一斉の下げの期間（2026-06-22〜07-29の半導体の下げ）の売買を1件ずつ並べる（2026-10-13 ユーザーの指示）。
+    今のルール（50日線の傾きが小さい順・2倍ETF込み・同じ業種2銘柄まで）、乱数50通りのうち2015年〜の年率が中央値の1通り"""
+    import json
+    sma_ = lambda c, j, n: sum(c[j - n + 1:j + 1]) / n
+    def s50(b):
+        c, j = data[b["sym"]]["c"], b["i0"] - 1
+        return sma_(c, j, 50) / sma_(c, j - 20, 50) - 1 if j >= 70 else 0.0
+    bmap = {(data[t["sym"]]["date"][t["i0"]], t["sym"], t["rule"]): t for t in base}
+    tab = json.load(open(os.path.join(os.path.dirname(OUTDIR.rstrip("/")), "2倍ETFの対応表.json"), encoding="utf-8"))
+    drag = {s: -x["drag"] for s, x in tab.items() if isinstance(x, dict) and "drag" in x}
+    etf = {s: x.get("etf") or x.get("ticker") or "2倍ETF" for s, x in tab.items() if isinstance(x, dict) and "drag" in x and -x["drag"] < 0.15}
+    stock = [{**t, "prio": s50(bmap[(t["in"], t["sym"], t["rule"])])} for t in build()]
+    trs = []
+    for t in stock:
+        t = {**t, "stock_ret": t["path"][t["out"]] - 1}
+        if t["sym"] in etf:
+            fee = drag[t["sym"]] / 252
+            e, prev, pv = 1 - COST, 1 - COST, {}
+            for d in sorted(t["path"]):
+                g_ = t["path"][d]
+                e = max(0.0, e * (1 + 2 * (g_ / prev - 1)) * (1 - fee))
+                prev = g_
+                pv[d] = e
+            t["path"] = pv
+        trs.append(t)
+    RN = {"B": "押し目（ボリンジャーIII）", "C": "急落の底", "M": "ミネルヴィニ", "V": "新高値V2"}
+
+    def port(seed, log=None, curve=None):
+        dd = days
+        by_in = {}
+        for t in trs:
+            by_in.setdefault(t["in"], []).append(t)
+        rnd = random.Random(seed)
+        cash, held, eq = 1.0, [], 1.0
+        for d in dd:
+            still = []
+            for h in held:
+                v = h["t"]["path"].get(d)
+                if v is not None:
+                    h["v"] = v
+                if h["t"]["out"] == d:
+                    cash += h["size"] * h["v"]
+                    if log is not None:
+                        log.append(("売り", d, h["t"], h["size"] * (h["v"] - 1), eq))
+                else:
+                    still.append(h)
+            held = still
+            eq = cash + sum(h["size"] * h["v"] for h in held)
+            for t in sorted(by_in.get(d, []), key=lambda t: (t["prio"], rnd.random())):
+                if any(h["t"]["sym"] == t["sym"] for h in held):
+                    continue
+                if len(held) >= SLOTS:
+                    break
+                if sum(1 for h in held if ind.get(h["t"]["sym"]) == ind.get(t["sym"])) >= 2:
+                    continue
+                size = min(eq / SLOTS * t.get("w", 1.0), cash)
+                if size <= 0:
+                    break
+                cash -= size
+                if log is not None:
+                    log.append(("買い", d, t, size, eq))
+                v0 = t["path"].get(d, 1.0)
+                if t["out"] == d:
+                    cash += size * v0
+                    continue
+                held.append({"t": t, "size": size, "v": v0})
+            eq = cash + sum(h["size"] * h["v"] for h in held)
+            if curve is not None:
+                curve[d] = (eq, [h["t"]["sym"] for h in held])
+        yrs = (dt.date.fromisoformat(dd[-1]) - dt.date.fromisoformat(dd[0])).days / 365.25
+        return eq ** (1 / yrs) - 1
+
+    g = sorted((port(5000 + k), 5000 + k) for k in range(50))
+    seed = g[len(g) // 2][1]
+    log, curve = [], {}
+    port(seed, log, curve)
+    win = [d for d in days if lo <= d <= hi]
+    e0 = curve[win[0]][0]
+    pk_d = max((d for d in win if d <= "2026-07-31"), key=lambda d: curve[d][0])
+    tr_d = min((d for d in win if d >= pk_d), key=lambda d: curve[d][0])
+    L = []
+    w = L.append
+    w(f"---\ntype: backtest\ntitle: 一斉の下げのときの売買（2026年6〜9月）\ncreated: {dt.date.today()}\nscript: tools/backtest_retest.py --stage replay\n---\n")
+    w("# 一斉の下げのとき、ツールは何を売り、何を買ったか（2026年6〜9月の再現）\n")
+    w("2026-10-13、ユーザーの質問「一斉に下げたとき、すぐ損切りが始まり、また買ってもすぐ損切りする感じか」から確かめた。"
+      "バックテストで一番大きい下落が出た2026-06-22〜07-29（半導体の一斉の下げ）の前後を、今のルール"
+      "（4銘柄・1銘柄25%、同じ業種2銘柄まで、50日線の傾きが小さい順、2倍ETFがある銘柄は2倍ETF〔実測の目減り〕、損切り15%）で1件ずつ並べた。"
+      f"後知恵なしの監視銘柄（全業種。実際の87銘柄とは違う）、片道0.1%込み。同じ日の候補の順番の乱数は、50通りのうち2015年〜の年率が中央値の1通り（{seed}、年率 {pct(g[len(g) // 2][0])}）。\n")
+    w(f"## 1. 資金の動き（{win[0]} を100とする）\n")
+    w(f"- この期間の一番高い日: {pk_d}（{curve[pk_d][0] / e0 * 100:.1f}）→ 一番低い日: {tr_d}（{curve[tr_d][0] / e0 * 100:.1f}、"
+      f"{(1 - curve[tr_d][0] / curve[pk_d][0]) * 100:.1f}%の下落）→ {win[-1]}（{curve[win[-1]][0] / e0 * 100:.1f}）\n")
+    w("| 週の最後の日 | 資金 | 持っている銘柄 |")
+    w("|---|---|---|")
+    for k, d in enumerate(win):
+        if k + 1 == len(win) or dt.date.fromisoformat(win[k + 1]).isocalendar()[1] != dt.date.fromisoformat(d).isocalendar()[1]:
+            w(f"| {d} | {curve[d][0] / e0 * 100:.1f} | {'・'.join(curve[d][1]) or '（なし）'} |")
+    w("\n## 2. 売買の一覧（期間中に売った・買ったもの）\n")
+    w("損益は1枠の損益（2倍ETFはETFの損益）。「資金比」は、その売買の損益を売った日の資金で割った値。売りの理由は、株の損益が−14%以下なら損切り、それ以外はルールの売り"
+      "（順張りは50日線割れ・かぶせ線・半分売り、押し目は上部バンドの指値・大陰線、急落の底は5日線超え・大陰線）。\n")
+    w("| 日付 | 売買 | 銘柄 | ルール | 2倍ETF | 買った日 | 売った日 | 株の損益 | 1枠の損益 | 資金比 | 売りの理由 |")
+    w("|---|---|---|---|---|---|---|---|---|---|---|")
+    n_stop, n_sell, by_rule = 0, 0, {}
+    for kind, d, t, x, eq in log:
+        if not (lo <= d <= hi):
+            continue
+        r1 = t["path"][t["out"]] - 1
+        if kind == "売り":
+            n_sell += 1
+            stop = t["stock_ret"] <= -0.14
+            n_stop += stop
+            by_rule.setdefault(t["rule"], []).append(r1)
+            w(f"| {d} | 売り | {t['sym']} | {RN[t['rule']]} | {etf.get(t['sym'], '')} | {t['in']} | {t['out']} | {pct(t['stock_ret'])} | {pct(r1)} | {pct(x / eq)} | {'**損切り**' if stop else 'ルールの売り'} |")
+        else:
+            w(f"| {d} | 買い | {t['sym']} | {RN[t['rule']]} | {etf.get(t['sym'], '')} | {t['in']} | {t['out']} | {pct(t['stock_ret'])} | {pct(r1)} | — | — |")
+    w(f"\n期間中に売った売買 {n_sell} 件、うち損切り {n_stop} 件。\n")
+    w("| ルール | 売った件数 | 勝ち | 1回平均（1枠） |")
+    w("|---|---|---|---|")
+    for r, xs in sorted(by_rule.items()):
+        w(f"| {RN[r]} | {len(xs)} | {sum(x > 0 for x in xs)} | {pct(sum(xs) / len(xs))} |")
+    w("\n## 3. 出た合図の数（枠に入らなかったものも含む、月ごと）\n")
+    w("| 月 | " + " | ".join(RN[r] for r in "BCMV") + " |")
+    w("|---|---|---|---|---|")
+    for m in sorted({d[:7] for d in win}):
+        w(f"| {m} | " + " | ".join(str(sum(1 for t in trs if t["in"][:7] == m and t["rule"] == r)) for r in "BCMV") + " |")
+    w("\n- この結果はルールの条件どおりに機械的に計算したもので、Claudeによる個別銘柄の売買判断ではない。")
+    os.makedirs(OUTDIR, exist_ok=True)
+    open(OUTDIR + "一斉の下げのときの売買.md", "w", encoding="utf-8").write("\n".join(L) + "\n")
+    print("書き出し", seed, file=sys.stderr)
 
 
 def halfadd_stage(base, data, build, port, days):
