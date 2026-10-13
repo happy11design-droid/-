@@ -200,7 +200,7 @@ class Account:
 def run(feats, new_trades, ind, days, dbl_sig, mode, seed=0, cash_px=None, split=None, fund="free", slots_d=3, slots_n=4,
         use_new=True, use_dbl=True, capital=6000.0, dedup=True, dbl_frac=None, adopt=False, lev_info=None, trace=None, new_frac=None, reserve=0.0, wait=0, dbl_etf=False, judge="etf", etf_stop=0.3, after2x="keep", delay=0,
         reg=None, lev_regs=None, lev_hold=False, cash_regs=None, margin_regs=None, slots_m=6, m_rate=0.07, m_max=0.5,
-        dbl_skip_regs=None, dbl_wait=0):
+        dbl_skip_regs=None, dbl_wait=0, margin_stock_only=False):
     """new_frac: 新分析ツールの1銘柄の金額（資金に対する割合。None なら 1/slots_n）。
     reserve: 新分析ツールが使える額を資金の (1−reserve) までにして、残りを倍増ツール用に取っておく。
     wait: 倍増ツールの合図を現金がなくて買えなかったら、wait 取引日まで待ち、現金ができた日に新分析ツールの買いより先に終値で買う"""
@@ -218,6 +218,7 @@ def run(feats, new_trades, ind, days, dbl_sig, mode, seed=0, cash_px=None, split
     cash_regs: 待っている現金をQQQに置くのは、前日の局面がこの中のときだけ（ほかは現金）。None なら今の形（いつもQQQ）。
     margin_regs: 前日の局面がこの中のときは、新分析ツールを slots_m 銘柄まで（1銘柄の額は今のまま）、現金がマイナスになってよい（信用取引。
       借りられるのは新分析ツールの資産の m_max まで、金利は年 m_rate）。ほかの局面では新しく借りない（持っている分はそのまま）。
+    margin_stock_only: 信用取引で借りるのは元の株で買うときだけ（2倍ETFで買うときは手元の現金の範囲だけ）。
     dbl_skip_regs: 倍増ツールの合図の日の局面がこの中なら買わない。dbl_wait>0 なら、局面が変わるまで最大 dbl_wait 取引日待ち、変わった翌日の寄り付きで買う"""
     rnd = random.Random(seed)
     pos = {s: {d: k for k, d in enumerate(f["date"])} for s, f in feats.items()}
@@ -279,6 +280,13 @@ def run(feats, new_trades, ind, days, dbl_sig, mode, seed=0, cash_px=None, split
         if margin_regs is not None:
             for acc in accts:
                 if acc.cash < 0:
+                    mg = STATS.setdefault("mg", {}).setdefault(d[:4], [0, 0.0, 0.0, 0.0])   # 借りた日数・最大の額・金利の合計・最大の額の資産比
+                    mg[0] += 1
+                    mg[1] = max(mg[1], -acc.cash)
+                    mg[2] += -acc.cash * m_rate / 252
+                    eq_ = work(acc)
+                    if eq_ > 0:
+                        mg[3] = max(mg[3], -acc.cash / eq_)
                     acc.cash *= 1 + m_rate / 252
         # 1) 倍増ツール: 寄り付きで買う
         if use_dbl:
@@ -376,7 +384,9 @@ def run(feats, new_trades, ind, days, dbl_sig, mode, seed=0, cash_px=None, split
                     break
                 if sum(1 for x in B.new if ind.get(x) == ind.get(s)) >= 2:
                     continue
-                size = min(eqB * nfrac, B.cash + (eqB * m_max if margin_on else 0.0))
+                is_etf = tr.get("lev2") and (prev_reg in lev_regs if flow_new else True)
+                can_borrow = margin_on and not (margin_stock_only and is_etf)
+                size = min(eqB * nfrac, B.cash + (eqB * m_max if can_borrow else 0.0))
                 if reserve:
                     size = min(size, eqB * (1 - reserve) - sum(h["size"] * h["v"] for h in B.new.values()))
                 if size <= 50:
@@ -655,6 +665,16 @@ VARIANTS_FLOW2 = [
     ("案5 2倍ETFは上昇の局面だけ（20週線）＋上昇の局面だけ信用取引で6銘柄まで", dict(_M, reg="SPY100", lev_regs={UP}, margin_regs={UP})),
 ]
 
+# 3回目（2026-10-13 ユーザーの指示）: 信用取引で借りるのを元の株のときだけにする形
+VARIANTS_FLOW3 = [
+    ("今の形（新分析12,000ドル・2倍ETF・倍増4,500ドル1銘柄・待っている現金はQQQ）", dict(_M)),
+    ("案1 2倍ETFは上昇の局面だけ（20週線）", dict(_M, reg="SPY100", lev_regs={UP})),
+    ("案5 案1＋いつも信用取引で5銘柄まで（2倍ETFも信用で買う）", dict(_M, reg="SPY100", lev_regs={UP}, margin_regs=_ALL, slots_m=5)),
+    ("案5' 案1＋いつも信用取引で5銘柄まで・借りるのは元の株のときだけ", dict(_M, reg="SPY100", lev_regs={UP}, margin_regs=_ALL, slots_m=5, margin_stock_only=True)),
+    ("案5' 案1＋いつも信用取引で6銘柄まで・借りるのは元の株のときだけ", dict(_M, reg="SPY100", lev_regs={UP}, margin_regs=_ALL, slots_m=6, margin_stock_only=True)),
+    ("（参考）今の形＋いつも信用取引で5銘柄まで・借りるのは元の株のときだけ", dict(_M, reg="SPY100", margin_regs=_ALL, slots_m=5, margin_stock_only=True)),
+]
+
 
 def regimes(cache=DEFAULT_CACHE):
     """{名前: {日付: 局面}}。終値と n 日線（30週線≒150日）と、その線の20日前からの傾きで3つに分ける（backtest_lib.market_regime と同じ考え方）"""
@@ -720,12 +740,12 @@ def cmd_run(a):
             c = [d0["c"][d0["date"].index(x)] for x in days]
             bench[(name, sym)] = metrics(c, days)
     rows = []
-    VS = VARIANTS_FLOW2 if a.set == "flow2" else VARIANTS_FLOW if a.set == "flow" else VARIANTS_MOM if a.set == "mom" else VARIANTS_DELAY if a.set == "delay" else VARIANTS_SLOTS if a.set == "slots" else VARIANTS_ETF if a.set == "etf" else VARIANTS_CASH if a.set == "cash" else VARIANTS_E if a.set == "entry" else VARIANTS18 if a.set == "18000" else VARIANTS
+    VS = VARIANTS_FLOW3 if a.set == "flow3" else VARIANTS_FLOW2 if a.set == "flow2" else VARIANTS_FLOW if a.set == "flow" else VARIANTS_MOM if a.set == "mom" else VARIANTS_DELAY if a.set == "delay" else VARIANTS_SLOTS if a.set == "slots" else VARIANTS_ETF if a.set == "etf" else VARIANTS_CASH if a.set == "cash" else VARIANTS_E if a.set == "entry" else VARIANTS18 if a.set == "18000" else VARIANTS
     root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
     tab = json.load(open(os.path.join(root, "新分析ツール", "2倍ETFの対応表.json"), encoding="utf-8"))
     lev_info = {u: (2, -x["drag"] / 252) for u, x in tab.items() if isinstance(x, dict) and "drag" in x and u in has2x}
-    REGS = regimes() if a.set in ("flow", "flow2") else {}
-    cap = 16500.0 if a.set in ("mom", "flow", "flow2") else 18000.0 if a.set in ("18000", "entry", "cash", "etf", "slots", "delay") else 6000.0
+    REGS = regimes() if a.set in ("flow", "flow2", "flow3") else {}
+    cap = 16500.0 if a.set in ("mom", "flow", "flow2", "flow3") else 18000.0 if a.set in ("18000", "entry", "cash", "etf", "slots", "delay") else 6000.0
     cash_prices = {}
     for sym, _ in CASH_SYMS:
         if sym:
