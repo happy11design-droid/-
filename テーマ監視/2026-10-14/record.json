@@ -1,0 +1,111 @@
+{
+ "trade_date": "2026-10-13",
+ "run_date": "2026-10-14",
+ "theme_stage": "【ステージ2】（テーマ指数が30週移動平均線より上にあり、線自体も上昇基調であるため。第2章、第3章）",
+ "candidates": [
+  {
+   "sym": "NBIS",
+   "kind": "逆張り: 急落の底（担当: コナーズ）",
+   "pattern": "A",
+   "close": 206.86,
+   "limit": null,
+   "stop_buy": null,
+   "limit_buy": null,
+   "verdict": "買い",
+   "author": "コナーズ",
+   "hot": false,
+   "rsi14": 41.68518045778621,
+   "s50": 0.06240951515189863
+  },
+  {
+   "sym": "SNDK",
+   "kind": "逆張り: ボリンジャー メソッドIII",
+   "pattern": "A",
+   "close": 1482.33,
+   "limit": null,
+   "stop_buy": null,
+   "limit_buy": null,
+   "verdict": "買い",
+   "author": "ボリンジャー",
+   "hot": false,
+   "rsi14": 38.30278467269135,
+   "s50": 0.05437675500553385
+  },
+  {
+   "sym": "WDC",
+   "kind": "逆張り: ボリンジャー メソッドIII",
+   "pattern": "A",
+   "close": 380.71,
+   "limit": null,
+   "stop_buy": null,
+   "limit_buy": null,
+   "verdict": "買い",
+   "author": "ボリンジャー",
+   "hot": false,
+   "rsi14": 35.19105343706583,
+   "s50": -0.07705111400790743
+  },
+  {
+   "sym": "NTAP",
+   "kind": "予約: 新高値（V2、担当: ミネルヴィニ）",
+   "pattern": "B",
+   "close": 239.01,
+   "limit": null,
+   "stop_buy": 239.8,
+   "limit_buy": null,
+   "verdict": "買い（予約）",
+   "author": "ミネルヴィニ",
+   "hot": false,
+   "rsi14": 75.40527003222147,
+   "s50": 0.09852789378447668
+  },
+  {
+   "sym": "AAPL",
+   "kind": "予約: ミネルヴィニ（ピボットの手前）",
+   "pattern": "B",
+   "close": 341.27,
+   "limit": 355.7,
+   "stop_buy": 345.34,
+   "limit_buy": null,
+   "verdict": "買い（予約）",
+   "author": "ミネルヴィニ",
+   "hot": false,
+   "rsi14": 60.495205451648374,
+   "s50": 0.0158819762317981
+  }
+ ],
+ "holdings": [
+  {
+   "sym": "LITE",
+   "rule": "新高値V2",
+   "buy_date": "2026-10-05",
+   "buy_price": 1095.12,
+   "verdict": "売り",
+   "author": "ミネルヴィニ"
+  },
+  {
+   "sym": "NVDA",
+   "rule": "ミネルヴィニ",
+   "buy_date": "2026-10-05",
+   "buy_price": 237.47,
+   "verdict": "保有継続",
+   "author": "ミネルヴィニ"
+  },
+  {
+   "sym": "HPE",
+   "rule": "新高値V2",
+   "buy_date": "2026-10-06",
+   "buy_price": 70.38,
+   "verdict": "保有継続",
+   "author": "ミネルヴィニ"
+  },
+  {
+   "sym": "AMD",
+   "rule": "新高値V2",
+   "buy_date": "2026-10-06",
+   "buy_price": 648.43,
+   "verdict": "保有継続",
+   "author": "ミネルヴィニ"
+  }
+ ]
+}
