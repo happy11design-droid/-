@@ -639,6 +639,22 @@ VARIANTS_FLOW = [
     ("案4 倍増の合図が横ばい・下落の局面なら買わない", dict(_M, reg="SPY150", dbl_skip_regs={SIDE, DOWN})),
 ]
 
+# 1回目（VARIANTS_FLOW）の結果を見てから決めた2回目: 20週線の切り替えの両隣の値と、信用取引との組み合わせ（案5）
+_ALL = {UP, SIDE, DOWN}
+VARIANTS_FLOW2 = [
+    ("今の形（新分析12,000ドル・2倍ETF・倍増4,500ドル1銘柄・待っている現金はQQQ）", dict(_M)),
+    ("案1 2倍ETFは上昇の局面だけ（15週線）", dict(_M, reg="SPY75", lev_regs={UP})),
+    ("案1 2倍ETFは上昇の局面だけ（20週線）", dict(_M, reg="SPY100", lev_regs={UP})),
+    ("案1 2倍ETFは上昇の局面だけ（25週線）", dict(_M, reg="SPY125", lev_regs={UP})),
+    ("案1 2倍ETFは上昇の局面だけ（20週線・NASDAQ100）", dict(_M, reg="QQQ100", lev_regs={UP})),
+    ("案1 2倍ETFは上昇の局面だけ（20週線）・保有中も毎日切り替え", dict(_M, reg="SPY100", lev_regs={UP}, lev_hold=True)),
+    ("（参考）いつも信用取引で6銘柄まで", dict(_M, reg="SPY150", margin_regs=_ALL)),
+    ("（参考）いつも信用取引で5銘柄まで", dict(_M, reg="SPY150", margin_regs=_ALL, slots_m=5)),
+    ("案5 2倍ETFは上昇の局面だけ（20週線）＋いつも信用取引で6銘柄まで", dict(_M, reg="SPY100", lev_regs={UP}, margin_regs=_ALL)),
+    ("案5 2倍ETFは上昇の局面だけ（20週線）＋いつも信用取引で5銘柄まで", dict(_M, reg="SPY100", lev_regs={UP}, margin_regs=_ALL, slots_m=5)),
+    ("案5 2倍ETFは上昇の局面だけ（20週線）＋上昇の局面だけ信用取引で6銘柄まで", dict(_M, reg="SPY100", lev_regs={UP}, margin_regs={UP})),
+]
+
 
 def regimes(cache=DEFAULT_CACHE):
     """{名前: {日付: 局面}}。終値と n 日線（30週線≒150日）と、その線の20日前からの傾きで3つに分ける（backtest_lib.market_regime と同じ考え方）"""
@@ -646,7 +662,7 @@ def regimes(cache=DEFAULT_CACHE):
     for sym in ("SPY", "QQQ"):
         d = load_prices(cache, sym)
         c = np.array(d["c"], float)
-        for n in (100, 150, 200):
+        for n in (75, 100, 125, 150, 200):
             m = np.convolve(c, np.ones(n) / n)[:len(c)]
             r = {}
             for i in range(n + 20, len(c)):
@@ -704,12 +720,12 @@ def cmd_run(a):
             c = [d0["c"][d0["date"].index(x)] for x in days]
             bench[(name, sym)] = metrics(c, days)
     rows = []
-    VS = VARIANTS_FLOW if a.set == "flow" else VARIANTS_MOM if a.set == "mom" else VARIANTS_DELAY if a.set == "delay" else VARIANTS_SLOTS if a.set == "slots" else VARIANTS_ETF if a.set == "etf" else VARIANTS_CASH if a.set == "cash" else VARIANTS_E if a.set == "entry" else VARIANTS18 if a.set == "18000" else VARIANTS
+    VS = VARIANTS_FLOW2 if a.set == "flow2" else VARIANTS_FLOW if a.set == "flow" else VARIANTS_MOM if a.set == "mom" else VARIANTS_DELAY if a.set == "delay" else VARIANTS_SLOTS if a.set == "slots" else VARIANTS_ETF if a.set == "etf" else VARIANTS_CASH if a.set == "cash" else VARIANTS_E if a.set == "entry" else VARIANTS18 if a.set == "18000" else VARIANTS
     root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
     tab = json.load(open(os.path.join(root, "新分析ツール", "2倍ETFの対応表.json"), encoding="utf-8"))
     lev_info = {u: (2, -x["drag"] / 252) for u, x in tab.items() if isinstance(x, dict) and "drag" in x and u in has2x}
-    REGS = regimes() if a.set == "flow" else {}
-    cap = 16500.0 if a.set in ("mom", "flow") else 18000.0 if a.set in ("18000", "entry", "cash", "etf", "slots", "delay") else 6000.0
+    REGS = regimes() if a.set in ("flow", "flow2") else {}
+    cap = 16500.0 if a.set in ("mom", "flow", "flow2") else 18000.0 if a.set in ("18000", "entry", "cash", "etf", "slots", "delay") else 6000.0
     cash_prices = {}
     for sym, _ in CASH_SYMS:
         if sym:
