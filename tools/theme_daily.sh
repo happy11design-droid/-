@@ -95,8 +95,13 @@ if os.path.exists(news):
         theme += "\n\nテーマ全体のニュース（サブエージェントの調査）:\n" + "\n".join(body)
 # NotebookLM の1回の送信は8,000文字まで（2026-09-30 実測、tools/build_theme_prompt.py の LIMIT）。
 # 超えるときは雛形（出力形式の指示）を削らず、テーマ全体のニュース → ヒートマップ（3節）の下位の行の順に縮める
-LIMIT, CUT = 8000, "（文字数の上限のため、ここから後を省略）"
+# ワインスタインのノートブックは、ほかの著者より短い文字数で空の応答になる（2026-10-05: 7,450・6,000文字は空、1,944文字は回答）。
+# 6,000文字までに縮め、それでも空の応答なら、1〜2節（テーマの強さ・全体の状態）だけの短い版（prompt_theme_short.txt）で送り直す
+LIMIT, CUT = 6000, "（文字数の上限のため、ここから後を省略）"
 t = open(tpl, encoding="utf-8").read()
+short = theme[:theme.index("## 3.")] if "## 3." in theme else theme
+open(os.path.join(d, "prompt_theme_short.txt"), "w", encoding="utf-8").write(
+    t.replace("{{THEME}}", short.rstrip() + "\n\n（ヒートマップ・急騰急落・ニュースは、文字数の都合で省略）"))
 fill = lambda th: t.replace("{{THEME}}", th)
 over = len(fill(theme)) - LIMIT
 if over > 0 and "テーマ全体のニュース" in theme:
@@ -125,7 +130,16 @@ send() {  # $1=ノートブックID $2=プロンプト $3=回答ファイル
   ( nlm_chat "$1" "$2" "$3" "$3.err" || echo "送信に失敗: $(tail -1 "$3.err")" >> "$3" ) &
   JOBS+=($!)
 }
-send "${NB[ワインスタイン]}" "$D/prompt_theme.txt" "$D/answers/0_テーマの局面_ワインスタイン.txt"
+# テーマの局面: まず全体の版を1回だけ送り、空の応答なら短い版で送り直す
+( A="$D/answers/0_テーマの局面_ワインスタイン.txt"
+  if ! NLM_RETRY_EMPTY=0 nlm_chat "${NB[ワインスタイン]}" "$D/prompt_theme.txt" "$A" "$A.err"; then
+    if grep -q "exit 6" "$A.err" && nlm_chat "${NB[ワインスタイン]}" "$D/prompt_theme_short.txt" "$A" "$A.err"; then
+      printf '\n（全体の版が空の応答だったため、1〜2節だけの短い版で送り直した回答。ヒートマップ・急騰急落・ニュースは渡していない）\n' >> "$A"
+    else
+      echo "送信に失敗: $(tail -1 "$A.err")" >> "$A"
+    fi
+  fi ) &
+JOBS+=($!)
 
 for KIND in ボリンジャー ミネルヴィニ ワインスタイン コナーズ; do
   ARGS=()

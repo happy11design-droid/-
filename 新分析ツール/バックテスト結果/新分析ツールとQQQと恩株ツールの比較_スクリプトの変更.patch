@@ -1,0 +1,50 @@
+diff --git a/tools/backtest_onkabu_combined.py b/tools/backtest_onkabu_combined.py
+index 08078f9..fd1d001 100644
+--- a/tools/backtest_onkabu_combined.py
++++ b/tools/backtest_onkabu_combined.py
+@@ -471,6 +471,11 @@ VARIANTS_E = [
+     ("⑦倍増用に25%を取っておく＋合図を5日待たせる（QQQ）", dict(mode="pool", fund="free", cash="QQQ", dedup=False, dbl_frac=0.25, reserve=0.25, wait=5)),
+ ]
+ 
++VARIANTS_FAIR = [  # 2026-10-11 ユーザーの指示: 税などの条件を合わせて比べる（資金18,000ドル）
++    ("新分析ツールだけ（待っている現金は現金のまま）", dict(mode="pool", use_dbl=False, cash=None)),
++    ("新分析ツールだけ（待っている現金はQQQ）", dict(mode="pool", use_dbl=False, cash="QQQ")),
++    ("新分析＋恩株ツール（倍増用に25%を取っておく・待っている現金はQQQ）", dict(mode="pool", fund="free", cash="QQQ", dedup=False, dbl_frac=0.25, reserve=0.25)),
++]
+ CASH_SYMS = [("QQQ", "NASDAQ100（QQQ）"), ("SPY", "S&P500（SPY）"), ("SSO", "S&P500の2倍（SSO）"), ("UPRO", "S&P500の3倍（UPRO）"),
+              ("QLD", "NASDAQ100の2倍（QLD）"), ("TQQQ", "NASDAQ100の3倍（TQQQ）"), ("SMH", "半導体（SMH）"), ("SOXX", "半導体（SOXX）"),
+              ("XLK", "IT（XLK）"), ("VGT", "IT（VGT）"), ("BIL", "短期国債（BIL）"), (None, "現金のまま")]
+@@ -519,16 +524,17 @@ def cmd_run(a):
+             c = [d0["c"][d0["date"].index(x)] for x in days]
+             bench[(name, sym)] = metrics(c, days)
+     rows = []
+-    VS = VARIANTS_CASH if a.set == "cash" else VARIANTS_E if a.set == "entry" else VARIANTS18 if a.set == "18000" else VARIANTS
++    VS = VARIANTS_FAIR if a.set == "fair" else VARIANTS_CASH if a.set == "cash" else VARIANTS_E if a.set == "entry" else VARIANTS18 if a.set == "18000" else VARIANTS
+     root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+     tab = json.load(open(os.path.join(root, "新分析ツール", "2倍ETFの対応表.json"), encoding="utf-8"))
+     lev_info = {u: (2, -x["drag"] / 252) for u, x in tab.items() if isinstance(x, dict) and "drag" in x and u in has2x}
+-    cap = 18000.0 if a.set in ("18000", "entry", "cash") else 6000.0
++    cap = 18000.0 if a.set in ("18000", "entry", "cash", "fair") else 6000.0
+     cash_prices = {}
+     for sym, _ in CASH_SYMS:
+         if sym:
+             d0 = load_prices(DEFAULT_CACHE, sym)
+-            cash_prices[sym] = dict(zip(d0["date"], d0["c"]))
++            if d0:
++                cash_prices[sym] = dict(zip(d0["date"], d0["c"]))
+     stats_rows = []
+     for label, kw in (VS[-a.last:] if a.last else VS):
+         cells = []
+@@ -594,8 +600,12 @@ def main():
+     ap.add_argument("--summary")
+     ap.add_argument("--last", type=int, default=0, help="最後のN通りだけ計算する")
+     ap.add_argument("--set", default="", help="cash: 倍増用に25%を取っておく形で、待っている資金の置き場所を比べる。18000: 資金18,000ドルで、1銘柄の金額の決め方と切り替えの形を比べる。entry: 倍増ツールの合図を買い逃さない形・新分析に資金を入れる形を比べる")
++    ap.add_argument("--notax", action="store_true", help="税をかけない（新分析ツールの記録と同じ条件）")
+     ap.add_argument("--form", default="current", choices=("current", "old"), help="新分析ツールの形。current: 50日線の傾きが小さい順・2倍ETF（今の形）")
+     a = ap.parse_args()
++    if getattr(a, "notax", False):
++        global TAX
++        TAX = 0.0
+     {"newtrades": cmd_newtrades, "run": cmd_run}[a.cmd](a)
+ 
+ 

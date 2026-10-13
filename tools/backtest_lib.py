@@ -308,7 +308,7 @@ def portfolio(trades, cost, slots, days, data, weight=None, seed=None, cash_asse
     group_of（{銘柄: グループ}）と group_cap を指定すると、同じグループの同時保有を group_cap 銘柄までにする。
     group2_of と group2_cap で、2つ目のまとまり（セクターなど）の上限も同時にかけられる。
     day_cap を指定すると、1日に新しく買う銘柄数をその数までにする。log（リスト）を渡すと、実際に買った売買を足していく。
-    per_sym は同じ銘柄を同時に持てる数（2なら、持っている銘柄に別のルールの合図が出たときに2枠目で買い増す）。返り値の curve は毎日の資金（最初を1とする）。"""
+    売買の辞書に w があれば、その売買はその割合で建てる（値動きに合わせた建玉など）。per_sym は同じ銘柄を同時に持てる数（2なら、持っている銘柄に別のルールの合図が出たときに2枠目で買い増す）。返り値の curve は毎日の資金（最初を1とする）。"""
     weight = weight or 1 / slots
     for sym in {t["sym"] for t in trades}:
         key = id(data[sym]["date"])
@@ -354,7 +354,7 @@ def portfolio(trades, cost, slots, days, data, weight=None, seed=None, cash_asse
                 continue
             if group2_cap and sum(1 for h in held if group2_of.get(h["sym"]) == group2_of.get(t["sym"])) >= group2_cap:
                 continue
-            size = min(equity * weight, cash)
+            size = min(equity * t.get("w", weight), cash)   # 売買ごとに額を変えるときは t["w"]（資金に対する割合）
             if size <= 0:
                 break
             cash -= size

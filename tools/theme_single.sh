@@ -38,7 +38,7 @@ fi
 python3 - "$D" "$T" "$ROOT/新分析ツール/個別分析_送信プロンプト雛形.txt" <<'PY'
 import os, sys
 d, t, tpl = sys.argv[1:4]
-rules = open(os.path.join(d, "rules.md"), encoding="utf-8").read().strip()
+rules = open(os.path.join(d, "rules.md"), encoding="utf-8").read().split("\n## 株数の目安")[0].strip()   # 株数の目安は著者に渡さない
 data = ""
 p = os.path.join(d, f"{t}_data.txt")
 if os.path.exists(p):

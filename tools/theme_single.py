@@ -26,7 +26,7 @@ import backtest_crash as bcr
 import backtest_compare2 as c2
 from fundamentals import text as fund_text
 from backtest_lib import MEMBERS_URL, curl, rsi_wilder
-from theme_scan import cut, earnings_date, fetch_daily, pct
+from theme_scan import buy_usd, cut, earnings_date, etf2x_of, fetch_daily, pct, shares_note
 
 STOP = 0.15
 
@@ -52,7 +52,8 @@ def who(rules):
     m = re.search(r"ボリンジャーIII: (\S+?)／ミネルヴィニ: (\S+?)／ワインスタイン10週: (\S+?)(?:／急落の底: (\S+?))?(?:／新高値: (\S+?))?（", rules)
     if m:
         pats = dict(zip(("ボリンジャー", "ミネルヴィニ", "ワインスタイン", "コナーズ", "新高値"), m.groups()))   # 急落の底はコナーズ、新高値はミネルヴィニ
-        out = [a for a in authors if pats[a] in ("A", "B") or (a == "ミネルヴィニ" and pats["新高値"] in ("A", "B"))]
+        # ワインスタイン10週の合図だけでは送らない（参考の表示だけ。2026-10-04 ユーザー決定）。保有中なら下で加える
+        out = [a for a in authors if a != "ワインスタイン" and (pats[a] in ("A", "B") or (a == "ミネルヴィニ" and pats["新高値"] in ("A", "B")))]
     else:
         out = list(authors)
     h = re.search(r"## \d\. 保有中の確認\n\n- ルール: ([^／]+)", rules)
@@ -129,7 +130,7 @@ def report(sym, d, pool_series, asof=None, hold=None, earn=None, wl_rs10=None):
     w(f"- ボリンジャーバンド(20日, 2σ): 上 {d['bb_up'][i]:.2f}／中 {d['bb_mid'][i]:.2f}／下 {d['bb_dn'][i]:.2f}。%bが0.05になる価格の目安 {lvl05:.2f}")
     w(f"- スクリプトのパターン判定: **{pat_b}**（A=条件成立、B=%bが0.2未満かつII%>0で成立が目前）")
     if b3:
-        w("- 注文の目安（A）: 翌日の寄り付きで買い、損切りは買値の15%下、引けで上部バンド以上になった翌日の寄り付きで手じまい")
+        w("- 注文の目安（A）: 翌日の寄り付きで買い、損切りは買値の15%下、手じまいは買った日の夜から売りの指値をその日の上部バンドに置き、毎晩その日の値に置き直す")
     elif pat_b == "B":
         w(f"- 予約注文の目安（B）: 指値買い {lvl05:.2f}（今日のバンドで%b=0.05になる価格。本のルールは引け値で判定するので近似）")
     w("")
@@ -176,7 +177,7 @@ def report(sym, d, pool_series, asof=None, hold=None, earn=None, wl_rs10=None):
     # ワインスタイン10週
     wk = dt.date.fromisoformat(day).weekday() == 4
     w10 = bt.E_weinstein(10, ma="10")(i, d) is not None if wk else False
-    w("## 3. 上抜け: ワインスタイン10週\n")
+    w("## 3. 参考: ワインスタイン10週（売買には使わない・著者には送らない。後知恵なしのバックテストで成績が下がったため。2026-10-04）\n")
     w(f"- 週足の終値 {d['w_c'][i] or c:.2f}、直前10週の高値 {d['w_hi_prev'][10][i] or float('nan'):.2f}、10週線 {d['w_ma10'][i] or float('nan'):.2f}（前週 {d['w_ma10_1'][i] or float('nan'):.2f}）、30週線 {d['w_ma30'][i] or float('nan'):.2f}")
     w(f"- 条件（週足の終値が直前10週の高値を出来高2倍で上抜け、10週線が上向き）: **{mark(w10)}**" + ("" if wk else "（判定は週の最終取引日だけ。今日の値は週の途中の参考）"))
     h10, m10, m10p = d["w_hi_prev"][10][i], d["w_ma10"][i], d["w_ma10_1"][i]
@@ -251,13 +252,47 @@ def report(sym, d, pool_series, asof=None, hold=None, earn=None, wl_rs10=None):
             ma5 = sum(d["c"][i - 4:i + 1]) / 5
             w(f"- 手じまい条件（終値が5日線を上回る。コナーズ）: {mark(c > ma5)}（5日線 {ma5:.2f}）")
         elif "ボリンジャー" in rule:
-            w(f"- 手じまい条件（引けで上部バンド以上）: {mark(pb >= 1)}（上部バンド {d['bb_up'][i]:.2f}）")
+            w(f"- 手じまい: 売りの指値を上部バンド {d['bb_up'][i]:.2f} に置く（毎晩その日の値に置き直す。届いた日に売れる）。引けで上部バンド以上: {mark(pb >= 1)}")
         elif "ミネルヴィニ" in rule:
             w(f"- 手じまい条件（引けで50日線割れ）: {mark(c < m50)}（50日線 {m50:.2f}）")
         elif "ワインスタイン" in rule:
             w(f"- 手じまい条件（週足の終値が10週線割れ、週の最終取引日に判定）: {mark(wk and d['w_c'][i] < d['w_ma10'][i])}（10週線 {d['w_ma10'][i]:.2f}）")
+        if "ボリンジャー" in rule or "急落" in rule:
+            import theme_scan as ts_
+            bb_ = ts_.big_bear_signal(d, bd)
+            w("- 全部売りの合図＝出来高2倍の大陰線（2026-10-02 採用）: "
+              + ("まだ出ていない" if not bb_ else f"**{bb_} に出た**（まだ持っていれば、次の寄り付きで全部売る）"))
+        if "新高値" in rule or "ミネルヴィニ" in rule:
+            import theme_scan as ts_
+            hd = ts_.half_signal(d, bd)
+            dc = ts_.dark_cloud_signal(d, bd)
+            w("- 全部売りの合図＝かぶせ線（2026-10-01 採用。半分売りより優先）: "
+              + ("まだ出ていない" if not dc else f"**{dc} に出た**（まだ持っていれば、次の寄り付きで全部売る）"))
+            w("- 半分売りの合図（反転のローソク足＋出来高1.5倍＋RSI70。2026-10-01 採用）: "
+              + ("まだ出ていない" if not hd else f"**{hd} に出た**（半分売っていなければ、次の寄り付きで半分売る。残りはルールの手じまいまで持つ）"))
         w("")
+    if not asof:
+        L += shares_section(sym, c, L)
     return "\n".join(L) + "\n"
+
+
+SHARES_HEAD = "## 株数の目安"   # theme_single.sh send はこの見出しから後を著者に渡さない
+
+
+def shares_section(sym, close, lines):
+    """合図（A・B）が出ているルールごとに、buy_usd()（資金÷4）で買える株数の目安（2026-10-04 ユーザーの指示）。参考のワインスタイン10週は除く"""
+    out, sec = [], ""
+    ex_ = etf2x_of(sym)
+    for l in lines:
+        if l.startswith("## "):
+            sec = l[3:].split("（")[0].strip()
+        m = re.match(r"- (?:予約)?注文の目安（([AB])）: (.*)", l)
+        if m and "ワインスタイン" not in sec:
+            out.append(f"- {sec}（{m.group(1)}）: {shares_note({'order': m.group(2), 'close': close}, ex_).lstrip('。')}")
+    if not out:
+        return []
+    return [f"\n{SHARES_HEAD}（{buy_usd():,}ドル分＝資金÷4。著者には渡さない）\n"] + out + (
+        [f"- 2倍ETFで買う銘柄（{ex_[0]}）なので、ETFの株数。合図・損切り・手じまいは元の株 {sym} の値段で判定する"] if ex_ else [])
 
 
 if __name__ == "__main__":
