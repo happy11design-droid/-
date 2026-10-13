@@ -222,6 +222,7 @@ def run(feats, new_trades, ind, days, dbl_sig, mode, seed=0, cash_px=None, split
     rnd = random.Random(seed)
     pos = {s: {d: k for k, d in enumerate(f["date"])} for s, f in feats.items()}
     rg = (lambda d: reg.get(d)) if reg else (lambda d: None)
+    day0_prev = max((x for x in reg if x < days[0]), default=None) if reg else None   # 期間の初日の前の取引日
     flow_new = lev_regs is not None
     dbl_hold = []   # [(sym, 期限のt)]（倍増ツールの合図で、局面が変わるのを待っているもの）
     if mode == "split":
@@ -323,7 +324,7 @@ def run(feats, new_trades, ind, days, dbl_sig, mode, seed=0, cash_px=None, split
             pending = []
         # 2) 新分析ツール: その日の値動きと手じまい
         if use_new:
-            prev_reg = rg(days[t - 1]) if t else None
+            prev_reg = rg(days[t - 1] if t else day0_prev)
             for s in list(B.new):
                 h = B.new[s]
                 if flow_new:
