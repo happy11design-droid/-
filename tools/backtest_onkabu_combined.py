@@ -218,7 +218,8 @@ def run(feats, new_trades, ind, days, dbl_sig, mode, seed=0, cash_px=None, split
     cash_regs: 待っている現金をQQQに置くのは、前日の局面がこの中のときだけ（ほかは現金）。None なら今の形（いつもQQQ）。
     margin_regs: 前日の局面がこの中のときは、新分析ツールを slots_m 銘柄まで（1銘柄の額は今のまま）、現金がマイナスになってよい（信用取引。
       借りられるのは新分析ツールの資産の m_max まで、金利は年 m_rate）。ほかの局面では新しく借りない（持っている分はそのまま）。
-    margin_stock_only: 信用取引で借りるのは元の株で買うときだけ（2倍ETFで買うときは手元の現金の範囲だけ）。
+    margin_stock_only: "strict" 信用取引で借りるのは元の株で買うときだけ（2倍ETFは手元の現金の範囲だけ。借りている間は2倍ETFを買えない）／
+      "slot5" 4枠までは今のまま（2倍ETFも可）、5枠目より先は元の株だけ（借りる分は元の株の分に当たる）。
     dbl_skip_regs: 倍増ツールの合図の日の局面がこの中なら買わない。dbl_wait>0 なら、局面が変わるまで最大 dbl_wait 取引日待ち、変わった翌日の寄り付きで買う"""
     rnd = random.Random(seed)
     pos = {s: {d: k for k, d in enumerate(f["date"])} for s, f in feats.items()}
@@ -382,14 +383,18 @@ def run(feats, new_trades, ind, days, dbl_sig, mode, seed=0, cash_px=None, split
                 margin_on = margin_regs is not None and prev_reg in margin_regs
                 if len(B.new) >= (slots_m if margin_on else slots_n):
                     break
+                is_etf = tr.get("lev2") and (prev_reg in lev_regs if flow_new else True)
+                if margin_on and margin_stock_only == "slot5" and is_etf and len(B.new) >= slots_n:
+                    continue      # 5枠目より先は元の株だけ
                 if sum(1 for x in B.new if ind.get(x) == ind.get(s)) >= 2:
                     continue
-                is_etf = tr.get("lev2") and (prev_reg in lev_regs if flow_new else True)
-                can_borrow = margin_on and not (margin_stock_only and is_etf)
+                can_borrow = margin_on and not (margin_stock_only == "strict" and is_etf)
                 size = min(eqB * nfrac, B.cash + (eqB * m_max if can_borrow else 0.0))
                 if reserve:
                     size = min(size, eqB * (1 - reserve) - sum(h["size"] * h["v"] for h in B.new.values()))
                 if size <= 50:
+                    if margin_on and margin_stock_only == "strict" and is_etf:
+                        continue  # 2倍ETFは借りずに買えないだけ。同じ日の元の株の候補は続けて見る
                     break
                 B.cash -= size
                 if flow_new:
@@ -670,9 +675,10 @@ VARIANTS_FLOW3 = [
     ("今の形（新分析12,000ドル・2倍ETF・倍増4,500ドル1銘柄・待っている現金はQQQ）", dict(_M)),
     ("案1 2倍ETFは上昇の局面だけ（20週線）", dict(_M, reg="SPY100", lev_regs={UP})),
     ("案5 案1＋いつも信用取引で5銘柄まで（2倍ETFも信用で買う）", dict(_M, reg="SPY100", lev_regs={UP}, margin_regs=_ALL, slots_m=5)),
-    ("案5' 案1＋いつも信用取引で5銘柄まで・借りるのは元の株のときだけ", dict(_M, reg="SPY100", lev_regs={UP}, margin_regs=_ALL, slots_m=5, margin_stock_only=True)),
-    ("案5' 案1＋いつも信用取引で6銘柄まで・借りるのは元の株のときだけ", dict(_M, reg="SPY100", lev_regs={UP}, margin_regs=_ALL, slots_m=6, margin_stock_only=True)),
-    ("（参考）今の形＋いつも信用取引で5銘柄まで・借りるのは元の株のときだけ", dict(_M, reg="SPY100", margin_regs=_ALL, slots_m=5, margin_stock_only=True)),
+    ("案5' 案1＋信用取引で5銘柄まで・5枠目は元の株だけ", dict(_M, reg="SPY100", lev_regs={UP}, margin_regs=_ALL, slots_m=5, margin_stock_only="slot5")),
+    ("案5' 案1＋信用取引で6銘柄まで・5〜6枠目は元の株だけ", dict(_M, reg="SPY100", lev_regs={UP}, margin_regs=_ALL, slots_m=6, margin_stock_only="slot5")),
+    ("案5'' 案1＋信用取引で5銘柄まで・借りている間は2倍ETFを買わない（厳しい形）", dict(_M, reg="SPY100", lev_regs={UP}, margin_regs=_ALL, slots_m=5, margin_stock_only="strict")),
+    ("（参考）今の形＋信用取引で5銘柄まで・5枠目は元の株だけ", dict(_M, reg="SPY100", margin_regs=_ALL, slots_m=5, margin_stock_only="slot5")),
 ]
 
 
