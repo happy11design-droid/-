@@ -26,7 +26,8 @@ import backtest_crash as bcr
 import backtest_compare2 as c2
 from fundamentals import text as fund_text
 from backtest_lib import MEMBERS_URL, curl, rsi_wilder
-from theme_scan import buy_usd, cut, earnings_date, etf2x_of, fetch_daily, pct, shares_note
+import theme_scan
+from theme_scan import buy_usd, cut, earnings_date, etf2x_buy, etf_skip_note, fetch_daily, pct, shares_note
 
 STOP = 0.15
 
@@ -96,6 +97,7 @@ def watchlist_rs10(pool):
 
 def report(sym, d, pool_series, asof=None, hold=None, earn=None, wl_rs10=None):
     """d（日足）を asof の引けまでに切って3つのルールに当てはめた文章を返す。RSは pool_series（S&P500の日足）の中での百分位"""
+    theme_scan.ETF_REG_ASOF = asof
     if asof:
         d = cut(d, asof)
         if not d["date"] or d["date"][-1] != asof:
@@ -282,7 +284,7 @@ SHARES_HEAD = "## 株数の目安"   # theme_single.sh send はこの見出し�
 def shares_section(sym, close, lines):
     """合図（A・B）が出ているルールごとに、buy_usd()（資金÷4）で買える株数の目安（2026-10-04 ユーザーの指示）。参考のワインスタイン10週は除く"""
     out, sec = [], ""
-    ex_ = etf2x_of(sym)
+    ex_ = etf2x_buy(sym)
     for l in lines:
         if l.startswith("## "):
             sec = l[3:].split("（")[0].strip()
@@ -292,7 +294,8 @@ def shares_section(sym, close, lines):
     if not out:
         return []
     return [f"\n{SHARES_HEAD}（{buy_usd():,}ドル分＝資金÷4。著者には渡さない）\n"] + out + (
-        [f"- 2倍ETFで買う銘柄（{ex_[0]}）なので、ETFの株数。合図・損切り・手じまいは元の株 {sym} の値段で判定する"] if ex_ else [])
+        [f"- 2倍ETFで買う銘柄（{ex_[0]}）なので、ETFの株数。合図・損切り・手じまいは元の株 {sym} の値段で判定する"] if ex_ else
+        [f"- {etf_skip_note(sym).lstrip('。')}"] if etf_skip_note(sym) else [])
 
 
 if __name__ == "__main__":
