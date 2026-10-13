@@ -219,7 +219,7 @@ def run(feats, new_trades, ind, days, dbl_sig, mode, seed=0, cash_px=None, split
     margin_regs: 前日の局面がこの中のときは、新分析ツールを slots_m 銘柄まで（1銘柄の額は今のまま）、現金がマイナスになってよい（信用取引。
       借りられるのは新分析ツールの資産の m_max まで、金利は年 m_rate）。ほかの局面では新しく借りない（持っている分はそのまま）。
     margin_stock_only: "strict" 信用取引で借りるのは元の株で買うときだけ（2倍ETFは手元の現金の範囲だけ。借りている間は2倍ETFを買えない）／
-      "slot5" 4枠までは今のまま（2倍ETFも可）、5枠目より先は元の株だけ（借りる分は元の株の分に当たる）。
+      "slot5" 2倍ETFは4銘柄まで（今と同じ）、5銘柄目より先は元の株だけ（借りる分は元の株の分に当たる）。
     dbl_skip_regs: 倍増ツールの合図の日の局面がこの中なら買わない。dbl_wait>0 なら、局面が変わるまで最大 dbl_wait 取引日待ち、変わった翌日の寄り付きで買う"""
     rnd = random.Random(seed)
     pos = {s: {d: k for k, d in enumerate(f["date"])} for s, f in feats.items()}
@@ -384,8 +384,9 @@ def run(feats, new_trades, ind, days, dbl_sig, mode, seed=0, cash_px=None, split
                 if len(B.new) >= (slots_m if margin_on else slots_n):
                     break
                 is_etf = tr.get("lev2") and (prev_reg in lev_regs if flow_new else True)
-                if margin_on and margin_stock_only == "slot5" and is_etf and len(B.new) >= slots_n:
-                    continue      # 5枠目より先は元の株だけ
+                if margin_on and margin_stock_only == "slot5" and is_etf and \
+                        sum(1 for h_ in B.new.values() if (h_["L"] == 2 if flow_new else h_["t"].get("lev2"))) >= slots_n:
+                    continue      # 2倍ETFは4銘柄まで。5枠目より先は元の株だけ
                 if sum(1 for x in B.new if ind.get(x) == ind.get(s)) >= 2:
                     continue
                 can_borrow = margin_on and not (margin_stock_only == "strict" and is_etf)
