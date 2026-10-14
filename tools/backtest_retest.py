@@ -1904,27 +1904,31 @@ def crashstops_stage(base, data, sim, days, ind, cache, lo="2026-06-01", hi="202
     med = lambda xs: sorted(xs)[len(xs) // 2]
     n_s2 = sum(1 for d in days if d in S2)
     n_no = len(days) - n_s2
-    per_s2, per_no, again, base_rate, cl2, cl2_s2, runs = [], [], [], [], [], [], []
+    yrs = (dt.date.fromisoformat(days[-1]) - dt.date.fromisoformat(days[0])).days / 365.25
+    KINDS = (("損で終わった売買（ルールの手じまいの損を含む。ユーザーの数え方の「損切り」）", lambda t: t["ret"] < 0),
+             ("うち日中の逆指値15%の損切り", lambda t: t["stop"]))
+    M = {k: {"s2": [], "no": [], "again": [], "base": [], "cl": [], "cls2": [], "yr": []} for k, _ in KINDS}
+    runs = []
     for k in range(50):
         g, taken = run(5000 + k)
         runs.append((g, 5000 + k))
-        st = [t for t in taken if t["stop"]]
-        st_days = sorted(t["out"] for t in st)
-        per_s2.append(sum(1 for d in st_days if d in S2) / n_s2 * 21)
-        per_no.append(sum(1 for d in st_days if d not in S2) / n_no * 21)
-        # 損切りの後20取引日以内に買った売買のうち、損切りになった割合
-        after = [t for t in taken if any(0 < di[t["in"]] - di[x] <= 20 for x in st_days)]
-        again.append(sum(t["stop"] for t in after) / max(1, len(after)))
-        base_rate.append(len(st) / max(1, len(taken)))
-        # 10取引日以内に損切りが2回以上重なった回数（重なりの始まりで数える）
-        c2 = c2s = 0
-        for i in range(1, len(st_days)):
-            if di[st_days[i]] - di[st_days[i - 1]] <= 10:
-                c2 += 1
-                c2s += st_days[i] in S2
-        cl2.append(c2)
-        cl2_s2.append(c2s)
-    yrs = (dt.date.fromisoformat(days[-1]) - dt.date.fromisoformat(days[0])).days / 365.25
+        for nm, f in KINDS:
+            m = M[nm]
+            bad = [t for t in taken if f(t)]
+            ds_ = sorted(t["out"] for t in bad)
+            m["yr"].append(len(bad) / yrs)
+            m["s2"].append(sum(1 for d in ds_ if d in S2) / n_s2 * 21)
+            m["no"].append(sum(1 for d in ds_ if d not in S2) / n_no * 21)
+            after = [t for t in taken if any(0 < di[t["in"]] - di[x] <= 20 for x in ds_)]   # 損の後20取引日以内に買った売買
+            m["again"].append(sum(1 for t in after if f(t)) / max(1, len(after)))
+            m["base"].append(len(bad) / max(1, len(taken)))
+            c2 = c2s = 0
+            for i in range(1, len(ds_)):
+                if di[ds_[i]] - di[ds_[i - 1]] <= 10:
+                    c2 += 1
+                    c2s += ds_[i] in S2
+            m["cl"].append(c2)
+            m["cls2"].append(c2s)
     seed = sorted(runs)[len(runs) // 2][1]
     log, curve = [], {}
     run(seed, log, curve)
@@ -1933,20 +1937,23 @@ def crashstops_stage(base, data, sim, days, ind, cache, lo="2026-06-01", hi="202
     w = L.append
     w(f"---\ntype: backtest\ntitle: 急落の期間の損切りの回数と続けての損切り\ncreated: {dt.date.today()}\nscript: tools/backtest_retest.py --stage crashstops\n---\n")
     w("# テーマ全体の急落の期間の損切りの回数と、損切りの後に買った売買がまた損切りになる割合（今のルール）\n")
-    w("2026-10-14、ユーザーの指示「7月の急落のときの損切りの回数を今のルールに置き換えて数え直して」。"
+    w("2026-10-14、ユーザーの指示「7月の急落のときの損切りの回数を今のルールに置き換えて数え直して。途中で手じまいして損をしたのも損切りとして扱って」。"
       "今のルール: 実際の運用に近い形（後知恵なしの監視銘柄で、AI・半導体・データセンター関連の業種を先に買う）、4銘柄・1銘柄＝その日の資金÷4、同じ業種2銘柄まで、50日線の傾きが小さい順、"
       "案1（S&P500が20週線で上昇の局面の日だけ2倍ETF）、**損切りは全部のルールで日中の逆指値15%**（元の株の値段で判定）。2015年〜、片道0.1%込み。乱数50通りの中央値。"
-      f"テーマ全体の急落の期間＝S2（SOXが直近60取引日の最高値から10%以上下）の日。2015年〜で {n_s2 / len(days) * 100:.0f}% の日。\n")
-    w("## 1. 1か月（21取引日）あたりの損切りの回数\n")
-    w("| 期間 | 1か月あたりの損切り | 年に直すと |")
-    w("|---|---|---|")
-    w(f"| 平常時（S2でない日） | {med(per_no):.2f}回 | {med(per_no) * 12:.1f}回 |")
-    w(f"| テーマ全体の急落の期間（S2の日） | **{med(per_s2):.2f}回** | {med(per_s2) * 12:.1f}回 |")
-    w(f"| 倍率 | **{med(per_s2) / max(1e-9, med(per_no)):.1f}倍** | |\n")
-    w("## 2. 損切りが続くか\n")
-    w(f"- 買った売買のうち損切りになった割合（全体）: {pct(med(base_rate))}")
-    w(f"- 損切りの後20取引日以内に買った売買のうち、また損切りになった割合: **{pct(med(again))}**")
-    w(f"- 10取引日以内に損切りが2回続いたこと: 2015年〜で {med(cl2)} 回（年 {med(cl2) / yrs:.1f} 回）、そのうちS2の期間 {med(cl2_s2)} 回\n")
+      f"テーマ全体の急落の期間＝S2（SOXが直近60取引日の最高値から10%以上下）の日。2015年〜で {n_s2 / len(days) * 100:.0f}% の日。"
+      "損で終わった＝元の株の買値より安く売った売買（2倍ETFで持った売買も、元の株の値段で判定）。\n")
+    for nm, _ in KINDS:
+        m = M[nm]
+        w(f"## {nm}\n")
+        w("| 期間 | 1か月（21取引日）あたり | 年に直すと |")
+        w("|---|---|---|")
+        w(f"| 全期間 | {med(m['yr']) / 12:.2f}回 | {med(m['yr']):.1f}回 |")
+        w(f"| 平常時（S2でない日） | {med(m['no']):.2f}回 | {med(m['no']) * 12:.1f}回 |")
+        w(f"| テーマ全体の急落の期間（S2の日） | **{med(m['s2']):.2f}回** | {med(m['s2']) * 12:.1f}回 |")
+        w(f"| 倍率（S2÷平常時） | **{med(m['s2']) / max(1e-9, med(m['no'])):.1f}倍** | |\n")
+        w(f"- 買った売買のうちの割合（全体）: {pct(med(m['base']))}")
+        w(f"- その後20取引日以内に買った売買のうち、また同じ終わり方をした割合: **{pct(med(m['again']))}**")
+        w(f"- 10取引日以内に2回続いたこと: 2015年〜で {med(m['cl'])} 回（年 {med(m['cl']) / yrs:.1f} 回）、そのうちS2の期間 {med(m['cls2'])} 回\n")
     w(f"## 3. 2026年6〜9月の売買（乱数50通りのうち2015年〜の年率が中央値の1通り、{seed}）\n")
     win = [d for d in days if lo <= d <= hi]
     e0 = curve[win[0]][0]
@@ -1963,10 +1970,10 @@ def crashstops_stage(base, data, sim, days, ind, cache, lo="2026-06-01", hi="202
         why = "—"
         if kind == "売り":
             nsell += 1
-            ns += t["stop"]
-            why = "**損切り（日中の逆指値）**" if t["stop"] else "ルールの売り"
+            ns += t["ret"] < 0
+            why = "**損切り（日中の逆指値15%）**" if t["stop"] else ("**損で手じまい**" if t["ret"] < 0 else "ルールの売り（利益）")
         w(f"| {d} | {kind} | {t['sym']} | {RN[t['rule']]} | {t['etf']} | {t['in']} | {t['out']} | {pct(t['ret'])} | {pct(r1)} | {why} | {'S2' if d in S2 else ''} |")
-    w(f"\n期間中に売った {nsell} 件のうち、損切り {ns} 件。\n")
+    w(f"\n期間中に売った {nsell} 件のうち、損で終わった（損切り）{ns} 件、そのうち日中の逆指値15% {sum(1 for k_, d_, t_, *_ in log if k_ == '売り' and lo <= d_ <= hi and t_['stop'])} 件。\n")
     w("- この結果はルールの条件どおりに機械的に計算したもので、Claudeによる個別銘柄の売買判断ではない。")
     open(OUTDIR + "急落の期間の損切りの回数と続けての損切り.md", "w", encoding="utf-8").write("\n".join(L) + "\n")
     print("書き出し", seed, file=sys.stderr)
