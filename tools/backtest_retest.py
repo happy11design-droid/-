@@ -346,10 +346,24 @@ def main():
     r.add_argument("--etf", default=None, help="etf2x: 2倍ETFにする銘柄（カンマ区切り）。省略すると backtest_2x.HAS_2X")
     r.add_argument("--drag", default=None, help="etf2x: 2倍ETFの目減り（年率）。数値なら全部同じ、'measured' なら 新分析ツール/2倍ETFの対応表.json の実測（ないものは0.12）")
     r.add_argument("--tag", default="", help="etf2x: 結果のファイル名と見出しに付ける名前（例: ムームー証券）")
-    r.add_argument("--stage", default="all", choices=("sell", "combo", "half", "filter", "rule", "stats", "dd", "robust", "earn", "realized", "etf2x", "etfrule", "weinstein", "rsi", "pivot", "exits", "pullback", "recover", "prio", "slope", "slope2", "slope3", "swap", "premium", "hot", "hotyear", "ideas", "theme", "halfadd", "replay", "stopcheck", "all"))
+    r.add_argument("--stage", default="all", choices=("sell", "combo", "half", "filter", "rule", "stats", "dd", "robust", "earn", "realized", "etf2x", "etfrule", "weinstein", "rsi", "pivot", "exits", "pullback", "recover", "prio", "slope", "slope2", "slope3", "swap", "premium", "hot", "hotyear", "ideas", "theme", "halfadd", "replay", "stopcheck", "actual", "all"))
+    r.add_argument("--watch87", action="store_true", help="actual: 監視銘柄を後知恵なしの一覧ではなく 新分析ツール/テーマ監視銘柄.md の銘柄に固定する（後知恵あり。S&P500の構成銘柄かどうかは問わない）")
     a = ap.parse_args()
     ctx = cb.setup(a.cache, with_parts=False)
     data, members, ind, days, G, end = (ctx[k] for k in ("data", "members", "ind", "days", "G", "end"))
+    if a.watch87:   # 今のテーマ監視銘柄（87銘柄）だけにルールを当てる（2026-10-14 ユーザーの指示。後知恵あり）
+        import re as re_
+        md = open(os.path.join(os.path.dirname(OUTDIR.rstrip("/")), "テーマ監視銘柄.md"), encoding="utf-8").read()
+        W87 = {m.group(1) for m in re_.finditer(r"(?m)^\| ([A-Z][A-Z0-9.\-]*) \|", md) if m.group(1) != "ティッカー"} & set(data)
+        print(f"テーマ監視銘柄 {len(W87)} 銘柄（データあり）", file=sys.stderr)
+        liq = lambda s_, i: s_["vol50"][i] is not None and s_["c"][i] >= 5 and s_["vol50"][i] >= 250_000
+        rank10 = {}
+        posm = {x: {d_: k for k, d_ in enumerate(data[x]["date"])} for x in W87}
+        for d_ in days:
+            xs = sorted(((data[x]["rs"][posm[x][d_]] or 0, x) for x in W87 if d_ in posm[x]), reverse=True)
+            rank10[d_] = {x for _, x in xs[:10]}
+        ctx["ok_rot"] = lambda s_, i, sp: s_["sym"] in W87 and liq(s_, i)
+        ctx["ok10"] = lambda s_, i, sp: s_["sym"] in W87 and liq(s_, i) and s_["sym"] in rank10.get(s_["date"][i], ())
     pos = {}
 
     def idx(sym, d):
@@ -720,6 +734,8 @@ def main():
         open(OUTDIR + "銘柄の下落率で見送る・優先する.md", "w", encoding="utf-8").write("\n".join(L) + "\n")
         print("書き出し", file=sys.stderr)
         return
+    if a.stage == "actual":
+        return actual_stage(base, data, sim, port, days, ind, a.watch87)
     if a.stage == "stopcheck":
         return stopcheck_stage(base, data, sim, port, days)
     if a.stage == "replay":
@@ -1650,6 +1666,115 @@ def theme_stage(base, data, build, ind, days, cache):
     w("- この結果はルールの条件どおりに機械的に計算したもので、Claudeによる個別銘柄の売買判断ではない。")
     os.makedirs(OUTDIR, exist_ok=True)
     open(OUTDIR + "同じテーマ・セクターに固まったとき.md", "w", encoding="utf-8").write("\n".join(L) + "\n")
+    print("書き出し", file=sys.stderr)
+
+
+def actual_stage(base, data, sim, port, days, ind, watch87):
+    """実際の運用に近い条件での今のルールの成績（2026-10-14 ユーザーの指示）。
+    今のルール: 4銘柄・1銘柄25%、同じ業種2銘柄まで、50日線の傾きが小さい順、2倍ETF（実測の目減り）、損切りは全部のルールで日中の逆指値15%。
+    watch87=False: 後知恵なしの監視銘柄で ①全業種（今までの基準） ②AI・半導体・データセンター関連の業種を先に買う ③その業種だけ。
+    watch87=True : 監視銘柄を今のテーマ監視銘柄（87銘柄）に固定（後知恵あり）。結果は同じファイルの後ろに足す"""
+    import json
+    from backtest_caps import THEME
+    DC = {"Electrical Equipment & Parts", "Specialty Industrial Machinery", "Engineering & Construction", "Building Products & Equipment",
+          "Utilities—Independent Power Producers", "REIT—Specialty"}   # backtest_theme_only.DC と同じ
+    AI = set(THEME) | DC
+    sma_ = lambda c, j, n: sum(c[j - n + 1:j + 1]) / n
+    def s50(b):
+        c, j = data[b["sym"]]["c"], b["i0"] - 1
+        return sma_(c, j, 50) / sma_(c, j - 20, 50) - 1 if j >= 70 else 0.0
+    tab = json.load(open(os.path.join(os.path.dirname(OUTDIR.rstrip("/")), "2倍ETFの対応表.json"), encoding="utf-8"))
+    drag = {s: -x["drag"] for s, x in tab.items() if isinstance(x, dict) and "drag" in x}
+    HAS = {s for s, d in drag.items() if d < 0.15}
+    def to2x(trs):
+        out = []
+        for t in trs:
+            if t["sym"] not in HAS:
+                out.append(t)
+                continue
+            fee = drag[t["sym"]] / 252
+            e, prev, pv = 1 - COST, 1 - COST, {}
+            for d in sorted(t["path"]):
+                g_ = t["path"][d]
+                e = max(0.0, e * (1 + 2 * (g_ / prev - 1)) * (1 - fee))
+                prev = g_
+                pv[d] = e
+            out.append({**t, "path": pv})
+        return out
+    def intraday(b):   # 損切りを日中の逆指値15%に（押し目は元から）。stopcheck_stage.restop と同じ
+        if b["rule"] == "B":
+            return b
+        s = data[b["sym"]]
+        floor = b["px"] * (1 - STOP)
+        for j in range(b["i0"], b["i1"]):
+            if s["l"][j] <= floor:
+                return {**b, "i1": j, "xp": min(s["o"][j] if j > b["i0"] else b["px"], floor)}
+        return b
+    stock = []
+    for b in base:
+        b2 = intraday(b)
+        p = sim(b2, half=xc.c1)
+        stock.append({"sym": b2["sym"], "in": data[b2["sym"]]["date"][b2["i0"]], "out": max(p), "path": p,
+                      "s50": s50(b2), "rule": b2["rule"], "w": 1.0, "ai": ind.get(b2["sym"]) in AI})
+    trs = to2x(stock)
+    last3 = (dt.date.fromisoformat(days[-1]) - dt.timedelta(days=365 * 3)).isoformat()
+    l3 = min(d for d in days if d >= last3)
+    is_hi = max(d for d in days if d <= cb.IS_END)
+    oos_lo = min(d for d in days if d >= cb.OOS_START)
+    med = lambda xs: sorted(xs)[len(xs) // 2]
+    if watch87:
+        forms = [("③ 監視銘柄を今の87銘柄に固定（後知恵あり）", [{**t, "prio": t["s50"]} for t in trs])]
+    else:
+        forms = [("① 後知恵なしの監視銘柄・全業種（今までの基準）", [{**t, "prio": t["s50"]} for t in trs]),
+                 ("② 後知恵なしの監視銘柄・AI・半導体・データセンター関連を先に買う（実際の運用に近い）", [{**t, "prio": (0 if t["ai"] else 1, t["s50"])} for t in trs]),
+                 ("②' 後知恵なしの監視銘柄・AI・半導体・データセンター関連だけ（参考）", [{**t, "prio": t["s50"]} for t in trs if t["ai"]])]
+    L = []
+    w = L.append
+    path = OUTDIR + "実際の運用に近い条件での成績.md"
+    if not watch87:
+        w(f"---\ntype: backtest\ntitle: 実際の運用に近い条件での成績\ncreated: {dt.date.today()}\nscript: tools/backtest_retest.py --stage actual（③は --watch87）\n---\n")
+        w("# 実際の運用に近い条件での今のルールの成績\n")
+        w("2026-10-14、ユーザーの指摘「実際と同じ状況でないとバックテストの意味がない」（バックテストの監視銘柄は全業種から選ぶ後知恵なしの一覧で、実際は87銘柄のAI・半導体が中心）を受けて確かめた。"
+          "今のルール: 4銘柄・1銘柄25%、同じ業種2銘柄まで、同じ日の候補は50日線の傾きが小さい順、2倍ETFがある銘柄は2倍ETF（実測の目減り）、"
+          "**損切りは全部のルールで日中の逆指値15%（実際の運用どおり）**、手じまい・半分売りは今のとおり。片道0.1%込み。乱数50通り×2組の中央値。\n")
+        w("- ①②: 後知恵なしの監視銘柄（毎週その時点のS&P500の構成銘柄から、その時点の数値で最大100銘柄を選び直す）。"
+          "②は実際の毎朝のスキャン（87銘柄＝AI・半導体を中心に、空き枠があるときだけテーマの外も買う）に近づけた形で、同じ日の候補はAI・半導体・データセンター関連の業種"
+          "（`backtest_caps.THEME` と `backtest_theme_only.DC`）を先に買う。②'はその業種だけを買う参考。")
+        w("- ③: 監視銘柄を今のテーマ監視銘柄（87銘柄、S&P500の構成銘柄かどうかを問わない）に固定。**今の時点で伸びた銘柄を選んでいるので後知恵があり、実際より良く出る上限の目安。**"
+          "新高値V2の「RS上位10」は87銘柄の中での順位。テーマの外の銘柄は買わない。\n")
+        w(f"直近3年 = {l3}〜{days[-1]}。\n")
+        w("| 形 | 組 | 2015年〜 年率 | 含み損込みの最大下落率（中央値／最悪） | 確定した損益だけの最大下落率（中央値／最悪） | 2015〜2021年 | 2022年〜 | **直近3年 年率** | 直近3年 含み損込みの最大下落率 |")
+        w("|---|---|---|---|---|---|---|---|---|")
+    for nm, tr_ in forms:
+        for s0 in (5000, 7300):
+            cg, mm, rm, ii, oo, g3, m3 = [], [], [], [], [], [], []
+            for k in range(50):
+                rc = []
+                g, m = port(tr_, s0 + k, days[0], days[-1], rcurve=rc)
+                pk, r = 0.0, 0.0
+                for x in rc:
+                    pk = max(pk, x)
+                    r = max(r, 1 - x / pk)
+                cg.append(g); mm.append(m); rm.append(r)
+                ii.append(port(tr_, s0 + k, days[0], is_hi)[0]); oo.append(port(tr_, s0 + k, oos_lo, days[-1])[0])
+                a3, b3 = port(tr_, s0 + k, l3, days[-1])
+                g3.append(a3); m3.append(b3)
+            w(f"| {nm} | {'1組目' if s0 == 5000 else '2組目'} | {pct(med(cg))} | {pct(med(mm))}／{pct(max(mm))} | {pct(med(rm))}／{pct(max(rm))} | {pct(med(ii))} | {pct(med(oo))} | **{pct(med(g3))}** | {pct(med(m3))} |")
+            print(nm, s0, file=sys.stderr)
+    w("")
+    w("| 形 | 合図の数（2015年〜、年あたり） | うち直近3年 | 勝率 | 1回平均（株） |" if not watch87 else "")
+    if not watch87:
+        w("|---|---|---|---|---|")
+    yrs = (dt.date.fromisoformat(days[-1]) - dt.date.fromisoformat(days[0])).days / 365.25
+    for nm, tr_ in forms:
+        st = [t for t in stock if not nm.startswith("②'") or t["ai"]]
+        rr = [t["path"][t["out"]] - 1 for t in st]
+        w(f"| {nm} | {len(st)}（{len(st) / yrs:.0f}） | {sum(1 for t in st if t['in'] >= l3)} | {sum(x > 0 for x in rr) / max(1, len(rr)) * 100:.0f}% | {pct(sum(rr) / max(1, len(rr)))} |")
+    if watch87:
+        w("\n- この結果はルールの条件どおりに機械的に計算したもので、Claudeによる個別銘柄の売買判断ではない。")
+        open(path, "a", encoding="utf-8").write("\n".join(L) + "\n")
+    else:
+        open(path, "w", encoding="utf-8").write("\n".join(L) + "\n")
     print("書き出し", file=sys.stderr)
 
 
