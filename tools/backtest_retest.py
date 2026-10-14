@@ -735,9 +735,9 @@ def main():
         print("書き出し", file=sys.stderr)
         return
     if a.stage == "actual":
-        return actual_stage(base, data, sim, port, days, ind, a.watch87)
+        return actual_stage(base, data, sim, port, days, ind, a.watch87, a.cache)
     if a.stage == "stopcheck":
-        return stopcheck_stage(base, data, sim, port, days)
+        return stopcheck_stage(base, data, sim, port, days, a.cache)
     if a.stage == "replay":
         return replay_stage(base, data, build, ind, days)
     if a.stage == "halfadd":
@@ -1669,7 +1669,23 @@ def theme_stage(base, data, build, ind, days, cache):
     print("書き出し", file=sys.stderr)
 
 
-def actual_stage(base, data, sim, port, days, ind, watch87):
+def etf_up_days(cache):
+    """案1（2026-10-13 採用）の局面: S&P500（SPY）の終値が100日線（20週線）より上かつ線が20取引日前より上の日。
+    買う日の前の取引日（引け後に判定する日）がこの集合に入っていれば2倍ETFで買う。(上昇の日の集合, 前の取引日を返す関数)"""
+    from backtest_lib import load_prices
+    g = load_prices(cache, "SPY")
+    c, ds = g["c"], g["date"]
+    up = set()
+    for i in range(120, len(c)):
+        m = sum(c[i - 99:i + 1]) / 100
+        m20 = sum(c[i - 119:i - 19]) / 100
+        if c[i] > m and m > m20:
+            up.add(ds[i])
+    k = {d: i for i, d in enumerate(ds)}
+    return up, (lambda d: ds[k[d] - 1] if k.get(d, 0) > 0 else None)
+
+
+def actual_stage(base, data, sim, port, days, ind, watch87, cache):
     """実際の運用に近い条件での今のルールの成績（2026-10-14 ユーザーの指示）。
     今のルール: 4銘柄・1銘柄25%、同じ業種2銘柄まで、50日線の傾きが小さい順、2倍ETF（実測の目減り）、損切りは全部のルールで日中の逆指値15%。
     watch87=False: 後知恵なしの監視銘柄で ①全業種（今までの基準） ②AI・半導体・データセンター関連の業種を先に買う ③その業種だけ。
@@ -1686,10 +1702,10 @@ def actual_stage(base, data, sim, port, days, ind, watch87):
     tab = json.load(open(os.path.join(os.path.dirname(OUTDIR.rstrip("/")), "2倍ETFの対応表.json"), encoding="utf-8"))
     drag = {s: -x["drag"] for s, x in tab.items() if isinstance(x, dict) and "drag" in x}
     HAS = {s for s, d in drag.items() if d < 0.15}
-    def to2x(trs):
+    def to2x(trs, reg=None):   # reg=(上昇の日, 前の取引日) なら案1（上昇の局面の日に買う売買だけ2倍ETF）
         out = []
         for t in trs:
-            if t["sym"] not in HAS:
+            if t["sym"] not in HAS or (reg and reg[1](t["in"]) not in reg[0]):
                 out.append(t)
                 continue
             fee = drag[t["sym"]] / 252
@@ -1716,21 +1732,26 @@ def actual_stage(base, data, sim, port, days, ind, watch87):
         p = sim(b2, half=xc.c1)
         stock.append({"sym": b2["sym"], "in": data[b2["sym"]]["date"][b2["i0"]], "out": max(p), "path": p,
                       "s50": s50(b2), "rule": b2["rule"], "w": 1.0, "ai": ind.get(b2["sym"]) in AI})
-    trs = to2x(stock)
+    reg = etf_up_days(cache)
+    trs0 = to2x(stock)        # 2倍ETFをいつでも使う（案1の前）
+    trs = to2x(stock, reg)    # 案1（今のルール）
     last3 = (dt.date.fromisoformat(days[-1]) - dt.timedelta(days=365 * 3)).isoformat()
     l3 = min(d for d in days if d >= last3)
     is_hi = max(d for d in days if d <= cb.IS_END)
     oos_lo = min(d for d in days if d >= cb.OOS_START)
     med = lambda xs: sorted(xs)[len(xs) // 2]
     if watch87:
-        forms = [("③ 監視銘柄を今の87銘柄に固定（後知恵あり）", [{**t, "prio": t["s50"]} for t in trs])]
+        forms = [("③ 監視銘柄を今の87銘柄に固定（後知恵あり）・案1", [{**t, "prio": t["s50"]} for t in trs]),
+                 ("③ 監視銘柄を今の87銘柄に固定（後知恵あり）・2倍ETFをいつでも使う（案1の前）", [{**t, "prio": t["s50"]} for t in trs0])]
         w("\n## ③ 監視銘柄を今の87銘柄に固定（`--watch87`、後知恵あり）\n")
         w("| 形 | 組 | 2015年〜 年率 | 含み損込みの最大下落率（中央値／最悪） | 確定した損益だけの最大下落率（中央値／最悪） | 2015〜2021年 | 2022年〜 | **直近3年 年率** | 直近3年 含み損込みの最大下落率 |")
         w("|---|---|---|---|---|---|---|---|---|")
     else:
-        forms = [("① 後知恵なしの監視銘柄・全業種（今までの基準）", [{**t, "prio": t["s50"]} for t in trs]),
-                 ("② 後知恵なしの監視銘柄・AI・半導体・データセンター関連を先に買う（実際の運用に近い）", [{**t, "prio": (0 if t["ai"] else 1, t["s50"])} for t in trs]),
-                 ("②' 後知恵なしの監視銘柄・AI・半導体・データセンター関連だけ（参考）", [{**t, "prio": t["s50"]} for t in trs if t["ai"]])]
+        forms = [("① 後知恵なしの監視銘柄・全業種（今までの基準）・案1", [{**t, "prio": t["s50"]} for t in trs]),
+                 ("② 後知恵なしの監視銘柄・AI・半導体・データセンター関連を先に買う（実際の運用に近い）・案1", [{**t, "prio": (0 if t["ai"] else 1, t["s50"])} for t in trs]),
+                 ("②' 後知恵なしの監視銘柄・AI・半導体・データセンター関連だけ（参考）・案1", [{**t, "prio": t["s50"]} for t in trs if t["ai"]]),
+                 ("① 全業種・2倍ETFをいつでも使う（案1の前）", [{**t, "prio": t["s50"]} for t in trs0]),
+                 ("② AI・半導体を先に買う・2倍ETFをいつでも使う（案1の前）", [{**t, "prio": (0 if t["ai"] else 1, t["s50"])} for t in trs0])]
     L = []
     w = L.append
     path = OUTDIR + "実際の運用に近い条件での成績.md"
@@ -1739,7 +1760,9 @@ def actual_stage(base, data, sim, port, days, ind, watch87):
         w("# 実際の運用に近い条件での今のルールの成績\n")
         w("2026-10-14、ユーザーの指摘「実際と同じ状況でないとバックテストの意味がない」（バックテストの監視銘柄は全業種から選ぶ後知恵なしの一覧で、実際は87銘柄のAI・半導体が中心）を受けて確かめた。"
           "今のルール: 4銘柄・1銘柄25%、同じ業種2銘柄まで、同じ日の候補は50日線の傾きが小さい順、2倍ETFがある銘柄は2倍ETF（実測の目減り）、"
-          "**損切りは全部のルールで日中の逆指値15%（実際の運用どおり）**、手じまい・半分売りは今のとおり。片道0.1%込み。乱数50通り×2組の中央値。\n")
+          "**損切りは全部のルールで日中の逆指値15%（実際の運用どおり）**、手じまい・半分売りは今のとおり。"
+          "**案1（2026-10-13 採用）: 2倍ETFは、買う日の前の取引日にS&P500（SPY）が100日線（20週線）より上かつ線が20取引日前より上（上昇の局面）のときだけ。それ以外は元の株**。"
+          "比べるため、案1の前（2倍ETFをいつでも使う）も載せる。片道0.1%込み。乱数50通り×2組の中央値。\n")
         w("- ①②: 後知恵なしの監視銘柄（毎週その時点のS&P500の構成銘柄から、その時点の数値で最大100銘柄を選び直す）。"
           "②は実際の毎朝のスキャン（87銘柄＝AI・半導体を中心に、空き枠があるときだけテーマの外も買う）に近づけた形で、同じ日の候補はAI・半導体・データセンター関連の業種"
           "（`backtest_caps.THEME` と `backtest_theme_only.DC`）を先に買う。②'はその業種だけを買う参考。")
@@ -1780,7 +1803,7 @@ def actual_stage(base, data, sim, port, days, ind, watch87):
     print("書き出し", file=sys.stderr)
 
 
-def stopcheck_stage(base, data, sim, port, days):
+def stopcheck_stage(base, data, sim, port, days, cache):
     """損切りの判定の仕方（引け値か、日中の逆指値か）と幅（15%・10%）を比べる（2026-10-14 ユーザーの指示）。
     これまでのバックテストは、急落の底・ミネルヴィニ・新高値V2の損切りを「引け値が買値の15%下以下 → 翌日の寄り付きで売る」で計算していた
     （backtest_lib.gen_trades）。実際の運用は日中の逆指値（買値の15%下に届いたらその場で売る）。押し目は前から日中の逆指値"""
@@ -1792,10 +1815,10 @@ def stopcheck_stage(base, data, sim, port, days):
     tab = json.load(open(os.path.join(os.path.dirname(OUTDIR.rstrip("/")), "2倍ETFの対応表.json"), encoding="utf-8"))
     drag = {s: -x["drag"] for s, x in tab.items() if isinstance(x, dict) and "drag" in x}
     HAS = {s for s, d in drag.items() if d < 0.15}
-    def to2x(trs):
+    def to2x(trs, reg=None):   # reg=(上昇の日, 前の取引日) なら案1（上昇の局面の日に買う売買だけ2倍ETF）
         out = []
         for t in trs:
-            if t["sym"] not in HAS:
+            if t["sym"] not in HAS or (reg and reg[1](t["in"]) not in reg[0]):
                 out.append(t)
                 continue
             fee = drag[t["sym"]] / 252
@@ -1830,6 +1853,7 @@ def stopcheck_stage(base, data, sim, port, days):
                         "prio": s50(b2), "rule": b2["rule"], "w": 1.0, "ret": b2["xp"] / b2["px"] - 1, "pct": pct})
         return out
 
+    reg = etf_up_days(cache)
     T15C, T15I, T10C, T10I = (0.15, False), (0.15, True), (0.10, False), (0.10, True)
     forms = [("今までのバックテスト（押し目は日中の逆指値15%、ほかは引け値で15%）", {}),
              ("実際の運用どおり（全部のルールで日中の逆指値15%）", {"C": T15I, "M": T15I, "V": T15I}),
@@ -1847,7 +1871,7 @@ def stopcheck_stage(base, data, sim, port, days):
       "**これまでのバックテストは、急落の底・ミネルヴィニ・新高値V2の損切りを「引け値が買値の15%下以下になったら翌日の寄り付きで売る」で計算していた**（`backtest_lib.gen_trades`）。"
       "実際の運用は日中の逆指値（買値の15%下に届いたらその場で売る）で、押し目（ボリンジャーIII）だけが前から日中の逆指値で計算されていた。"
       "日中の逆指値は、届いた日に買値の15%下（寄り付きで下に窓を開けたら寄り付きの値段）で売る。損切りの後は枠が空き、次の合図を買う。"
-      "土台は今のルール（4銘柄・1銘柄25%、同じ業種2銘柄まで、50日線の傾きが小さい順、2倍ETFがある銘柄は2倍ETF〔実測の目減り〕。損切り・手じまいは元の株の値段で判定）。"
+      "土台は今のルール（4銘柄・1銘柄25%、同じ業種2銘柄まで、50日線の傾きが小さい順、2倍ETFがある銘柄は2倍ETF〔実測の目減り〕で**案1〔S&P500が20週線で上昇の局面の日に買うときだけ2倍ETF〕**。損切り・手じまいは元の株の値段で判定）。"
       "後知恵なしの監視銘柄、2015年〜、片道0.1%込み。乱数50通り×2組の中央値。\n")
     w("## 1. 資金全体\n")
     w("| 形 | 組 | 年率 | 含み損込みの最大下落率（中央値／最悪） | 確定した損益だけの最大下落率（中央値／最悪） | 2015〜2021年 | 2022年〜 |")
@@ -1856,7 +1880,7 @@ def stopcheck_stage(base, data, sim, port, days):
     for nm, spec in forms:
         stock = make(spec)
         per[nm] = stock
-        trs = to2x(stock)
+        trs = to2x(stock, reg)   # 案1（2026-10-13 採用）
         for s0 in (5000, 7300):
             cg, mm, rm, ii, oo = [], [], [], [], []
             for k in range(50):
