@@ -346,7 +346,7 @@ def main():
     r.add_argument("--etf", default=None, help="etf2x: 2倍ETFにする銘柄（カンマ区切り）。省略すると backtest_2x.HAS_2X")
     r.add_argument("--drag", default=None, help="etf2x: 2倍ETFの目減り（年率）。数値なら全部同じ、'measured' なら 新分析ツール/2倍ETFの対応表.json の実測（ないものは0.12）")
     r.add_argument("--tag", default="", help="etf2x: 結果のファイル名と見出しに付ける名前（例: ムームー証券）")
-    r.add_argument("--stage", default="all", choices=("sell", "combo", "half", "filter", "rule", "stats", "dd", "robust", "earn", "realized", "etf2x", "etfrule", "weinstein", "rsi", "pivot", "exits", "pullback", "recover", "prio", "slope", "slope2", "slope3", "swap", "premium", "hot", "hotyear", "ideas", "theme", "halfadd", "replay", "stopcheck", "actual", "all"))
+    r.add_argument("--stage", default="all", choices=("sell", "combo", "half", "filter", "rule", "stats", "dd", "robust", "earn", "realized", "etf2x", "etfrule", "weinstein", "rsi", "pivot", "exits", "pullback", "recover", "prio", "slope", "slope2", "slope3", "swap", "premium", "hot", "hotyear", "ideas", "theme", "halfadd", "replay", "stopcheck", "actual", "stopfreq", "all"))
     r.add_argument("--watch87", action="store_true", help="actual: 監視銘柄を後知恵なしの一覧ではなく 新分析ツール/テーマ監視銘柄.md の銘柄に固定する（後知恵あり。S&P500の構成銘柄かどうかは問わない）")
     a = ap.parse_args()
     ctx = cb.setup(a.cache, with_parts=False)
@@ -734,6 +734,8 @@ def main():
         open(OUTDIR + "銘柄の下落率で見送る・優先する.md", "w", encoding="utf-8").write("\n".join(L) + "\n")
         print("書き出し", file=sys.stderr)
         return
+    if a.stage == "stopfreq":
+        return stopfreq_stage(base, data, sim, days, ind, a.cache)
     if a.stage == "actual":
         return actual_stage(base, data, sim, port, days, ind, a.watch87, a.cache)
     if a.stage == "stopcheck":
@@ -1801,6 +1803,149 @@ def actual_stage(base, data, sim, port, days, ind, watch87, cache):
         open(path, "a", encoding="utf-8").write("\n".join(L) + "\n")
     else:
         open(path, "w", encoding="utf-8").write("\n".join(L) + "\n")
+    print("書き出し", file=sys.stderr)
+
+
+def stopfreq_stage(base, data, sim, days, ind, cache):
+    """4枠の実際の運用で、日中の逆指値15%の損切りが年に何回起きるかと、運用を始めた直後に損切りが重なる確率（2026-10-14 ユーザーの指示）。
+    今のルール: 実際の運用に近い形（後知恵なしの監視銘柄でAI・半導体・データセンター関連を先に買う）、案1、損切りは全部のルールで日中の逆指値15%"""
+    import json
+    from backtest_caps import THEME
+    DC = {"Electrical Equipment & Parts", "Specialty Industrial Machinery", "Engineering & Construction", "Building Products & Equipment",
+          "Utilities—Independent Power Producers", "REIT—Specialty"}
+    AI = set(THEME) | DC
+    sma_ = lambda c, j, n: sum(c[j - n + 1:j + 1]) / n
+    def s50(b):
+        c, j = data[b["sym"]]["c"], b["i0"] - 1
+        return sma_(c, j, 50) / sma_(c, j - 20, 50) - 1 if j >= 70 else 0.0
+    tab = json.load(open(os.path.join(os.path.dirname(OUTDIR.rstrip("/")), "2倍ETFの対応表.json"), encoding="utf-8"))
+    drag = {s: -x["drag"] for s, x in tab.items() if isinstance(x, dict) and "drag" in x}
+    HAS = {s for s, d in drag.items() if d < 0.15}
+    up, prev = etf_up_days(cache)
+    trs = []
+    for b in base:
+        s = data[b["sym"]]
+        floor = b["px"] * (1 - STOP)
+        stop = b["rule"] == "B" and b["xp"] <= floor * 1.0001
+        if b["rule"] != "B":
+            for j in range(b["i0"], b["i1"]):
+                if s["l"][j] <= floor:
+                    b = {**b, "i1": j, "xp": min(s["o"][j] if j > b["i0"] else b["px"], floor)}
+                    stop = True
+                    break
+        p = sim(b, half=xc.c1)
+        t = {"sym": b["sym"], "in": s["date"][b["i0"]], "out": max(p), "path": p, "rule": b["rule"], "stop": stop,
+             "prio": (0 if ind.get(b["sym"]) in AI else 1, s50(b)), "etf": False}
+        if b["sym"] in HAS and prev(t["in"]) in up:   # 案1
+            fee = drag[b["sym"]] / 252
+            e, pr, pv = 1 - COST, 1 - COST, {}
+            for d in sorted(p):
+                e = max(0.0, e * (1 + 2 * (p[d] / pr - 1)) * (1 - fee))
+                pr = p[d]
+                pv[d] = e
+            t["path"], t["etf"] = pv, True
+        trs.append(t)
+    by_in = {}
+    for t in trs:
+        by_in.setdefault(t["in"], []).append(t)
+    di = {d: k for k, d in enumerate(days)}
+
+    def run(seed, lo, hi):
+        """lo から空の4枠で始める。買った売買の一覧（買った順）と、日ごとの資金を返す"""
+        rnd = random.Random(seed)
+        cash, held, taken, curve = 1.0, [], [], {}
+        for d in days[di[lo]:di[hi] + 1]:
+            still = []
+            for h in held:
+                v = h["t"]["path"].get(d)
+                if v is not None:
+                    h["v"] = v
+                if h["t"]["out"] == d:
+                    cash += h["size"] * h["v"]
+                else:
+                    still.append(h)
+            held = still
+            eq = cash + sum(h["size"] * h["v"] for h in held)
+            for t in sorted(by_in.get(d, []), key=lambda t: (t["prio"], rnd.random())):
+                if any(h["t"]["sym"] == t["sym"] for h in held):
+                    continue
+                if len(held) >= SLOTS:
+                    break
+                if sum(1 for h in held if ind.get(h["t"]["sym"]) == ind.get(t["sym"])) >= 2:
+                    continue
+                size = min(eq / SLOTS, cash)
+                if size <= 0:
+                    break
+                cash -= size
+                taken.append(t)
+                v0 = t["path"].get(d, 1.0)
+                if t["out"] == d:
+                    cash += size * v0
+                    continue
+                held.append({"t": t, "size": size, "v": v0})
+            curve[d] = cash + sum(h["size"] * h["v"] for h in held)
+        return taken, curve
+
+    yrs = (dt.date.fromisoformat(days[-1]) - dt.date.fromisoformat(days[0])).days / 365.25
+    med = lambda xs: sorted(xs)[len(xs) // 2]
+    RN = {"B": "押し目", "C": "急落の底", "M": "ミネルヴィニ", "V": "新高値V2"}
+    L = []
+    w = L.append
+    w(f"---\ntype: backtest\ntitle: 実際の4枠での損切りの回数と始めた直後の損\ncreated: {dt.date.today()}\nscript: tools/backtest_retest.py --stage stopfreq\n---\n")
+    w("# 実際の4枠の運用で、損切りは年に何回か。運用を始めた直後に損切りが重なる確率\n")
+    w("2026-10-14、ユーザーの指摘「運用を始めてまもないのに、最初の売買で損切りになり、ほかの銘柄も損切り間近。確率の計算がおかしいのでは」を受けて確かめた。"
+      "今のルール（実際の運用に近い形: 後知恵なしの監視銘柄で、AI・半導体・データセンター関連を先に買う。4銘柄・1銘柄＝その日の資金÷4、同じ業種2銘柄まで、50日線の傾きが小さい順、"
+      "案1〔S&P500が20週線で上昇の局面の日だけ2倍ETF〕、損切りは全部のルールで日中の逆指値15%）。損切りは、日中に元の株の買値の15%下に届いて売った売買。"
+      "2015年〜、片道0.1%込み。\n")
+    # 1. 年あたりの回数（2015年〜を通しで、乱数50通り）
+    tk, st, rs = [], [], {}
+    for k in range(50):
+        taken, _ = run(5000 + k, days[0], days[-1])
+        tk.append(len(taken))
+        st.append(sum(t["stop"] for t in taken))
+        for t in taken:
+            rs.setdefault(t["rule"], [0, 0])
+            rs[t["rule"]][0] += 1
+            rs[t["rule"]][1] += t["stop"]
+    w("## 1. 4枠で実際に買えた売買と損切りの回数（2015年〜を通しで、乱数50通りの中央値）\n")
+    w(f"- 買えた売買: 年 {med(tk) / yrs:.1f} 回、そのうち損切り: **年 {med(st) / yrs:.1f} 回**（買えた売買の {med(st) / med(tk) * 100:.0f}%）\n")
+    w("| ルール | 買えた売買のうちの割合 | そのルールの損切りの割合 |")
+    w("|---|---|---|")
+    tot = sum(v[0] for v in rs.values())
+    for r, (n, s_) in sorted(rs.items()):
+        w(f"| {RN[r]} | {n / tot * 100:.0f}% | {s_ / n * 100:.0f}% |")
+    # 2. 始めた直後（5取引日ごとに始める日をずらす）
+    starts = [d for k, d in enumerate(days) if k % 5 == 0 and k + 130 < len(days)]
+    first = {1: [], 2: [], 3: [], 4: []}
+    r1m, r3m, worst = [], [], []
+    for k, d in enumerate(starts):
+        hi = days[min(len(days) - 1, di[d] + 130)]
+        taken, curve = run(9000 + k, d, hi)
+        f4 = taken[:4]
+        if len(f4) < 4:
+            continue
+        ns = sum(t["stop"] for t in f4)
+        for n in first:
+            first[n].append(ns >= n)
+        ds = sorted(curve)
+        r1m.append(curve[ds[min(len(ds) - 1, 21)]] - 1)
+        r3m.append(curve[ds[min(len(ds) - 1, 63)]] - 1)
+        worst.append(min(curve[x] for x in ds[:64]) - 1)
+    n = len(first[1])
+    w(f"\n## 2. 運用を始めた直後（2015年〜、5取引日ごとに始める日をずらした {n} 通り。空の4枠から始める）\n")
+    w("| 最初に買った4回の売買のうち | 起きた割合 |")
+    w("|---|---|")
+    for k_ in (1, 2, 3, 4):
+        w(f"| 損切りが{k_}回以上 | {sum(first[k_]) / n * 100:.0f}% |")
+    w("")
+    w("| 始めてから | 資金がマイナスだった割合 | −10%以下だった割合 | 中央値 |")
+    w("|---|---|---|---|")
+    for lab, xs_ in (("1か月後（21取引日）", r1m), ("3か月後（63取引日）", r3m)):
+        w(f"| {lab} | {sum(x < 0 for x in xs_) / len(xs_) * 100:.0f}% | {sum(x <= -0.10 for x in xs_) / len(xs_) * 100:.0f}% | {pct(med(xs_))} |")
+    w(f"\n- 始めてから3か月の間に一番下がったところ（始めた日の資金に対して）: 中央値 {pct(med(worst))}、−10%以下まで下がった割合 {sum(x <= -0.10 for x in worst) / len(worst) * 100:.0f}%、−20%以下 {sum(x <= -0.20 for x in worst) / len(worst) * 100:.0f}%\n")
+    w("- 損切りの回数は、日中の逆指値で売った売買だけを数えた（ルールの手じまい〔50日線割れなど〕で損で終わった売買は入らない）。")
+    w("- この結果はルールの条件どおりに機械的に計算したもので、Claudeによる個別銘柄の売買判断ではない。")
+    open(OUTDIR + "実際の4枠での損切りの回数と始めた直後の損.md", "w", encoding="utf-8").write("\n".join(L) + "\n")
     print("書き出し", file=sys.stderr)
 
 
