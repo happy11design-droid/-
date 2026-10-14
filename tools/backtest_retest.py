@@ -1844,7 +1844,7 @@ def crashstops_stage(base, data, sim, days, ind, cache, lo="2026-06-01", hi="202
                     break
         p = sim(b, half=xc.c1)
         t = {"sym": b["sym"], "in": s["date"][b["i0"]], "out": max(p), "path": p, "rule": b["rule"], "stop": stop,
-             "prio": (0 if ind.get(b["sym"]) in AI else 1, s50(b)), "ret": b["xp"] / b["px"] - 1, "etf": ""}
+             "prio": (0 if ind.get(b["sym"]) in AI else 1, s50(b)), "ret": p[max(p)] - 1, "etf": ""}   # 株の損益（半分売り・かぶせ線・大陰線の売りと手数料を含む）
         if b["sym"] in etf and prev(t["in"]) in up:
             fee = drag[b["sym"]] / 252
             e, pr, pv = 1 - COST, 1 - COST, {}
@@ -2062,7 +2062,7 @@ def themedrop_stage(base, data, sim, days, ind, members, cache):
                         break
             p = sim(b, half=xc.c1)
             t = {"sym": b["sym"], "in": d_in, "out": max(p), "path": p, "rule": b["rule"], "stop": stop, "early": early,
-                 "prio": (0 if ind.get(b["sym"]) in AI else 1, s50(b)), "ret": b["xp"] / b["px"] - 1}
+                 "prio": (0 if ind.get(b["sym"]) in AI else 1, s50(b)), "ret": p[max(p)] - 1}   # 株の損益（売りの合図・手数料を含む）
             if b["sym"] in HAS and prev(d_in) in up:
                 fee = drag[b["sym"]] / 252
                 e, pr, pv = 1 - COST, 1 - COST, {}
