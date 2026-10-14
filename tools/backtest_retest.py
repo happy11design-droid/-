@@ -360,8 +360,8 @@ def main():
         rank10 = {}
         posm = {x: {d_: k for k, d_ in enumerate(data[x]["date"])} for x in W87}
         for d_ in days:
-            xs = sorted(((data[x]["rs"][posm[x][d_]] or 0, x) for x in W87 if d_ in posm[x]), reverse=True)
-            rank10[d_] = {x for _, x in xs[:10]}
+            rk = sorted(((data[x]["rs"][posm[x][d_]] or 0, x) for x in W87 if d_ in posm[x]), reverse=True)
+            rank10[d_] = {x for _, x in rk[:10]}
         ctx["ok_rot"] = lambda s_, i, sp: s_["sym"] in W87 and liq(s_, i)
         ctx["ok10"] = lambda s_, i, sp: s_["sym"] in W87 and liq(s_, i) and s_["sym"] in rank10.get(s_["date"][i], ())
     pos = {}
