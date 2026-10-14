@@ -178,5 +178,9 @@ for j in "${JOBS[@]}"; do wait "$j" || true; done
 } > "$D/report.md"
 # 週次レビュー用の記録（候補・保有銘柄と著者の結論）
 python3 "$ROOT/tools/theme_review.py" record "$D" > /dev/null
+# ルールの判定と著者の判定を分けた「判定のまとめ」を、レポートの見出しの直後に入れる（2026-10-14 ユーザーの指示）
+if python3 "$ROOT/tools/theme_summary.py" "$D" > "$D/summary.md"; then
+  { head -1 "$D/report.md"; echo; cat "$D/summary.md"; tail -n +2 "$D/report.md"; } > "$D/report.tmp" && mv "$D/report.tmp" "$D/report.md"
+fi
 echo "report: $D/report.md"
 echo "record: $D/record.json"
