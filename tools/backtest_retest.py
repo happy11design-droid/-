@@ -346,7 +346,7 @@ def main():
     r.add_argument("--etf", default=None, help="etf2x: 2倍ETFにする銘柄（カンマ区切り）。省略すると backtest_2x.HAS_2X")
     r.add_argument("--drag", default=None, help="etf2x: 2倍ETFの目減り（年率）。数値なら全部同じ、'measured' なら 新分析ツール/2倍ETFの対応表.json の実測（ないものは0.12）")
     r.add_argument("--tag", default="", help="etf2x: 結果のファイル名と見出しに付ける名前（例: ムームー証券）")
-    r.add_argument("--stage", default="all", choices=("sell", "combo", "half", "filter", "rule", "stats", "dd", "robust", "earn", "realized", "etf2x", "etfrule", "weinstein", "rsi", "pivot", "exits", "pullback", "recover", "prio", "slope", "slope2", "slope3", "swap", "premium", "hot", "hotyear", "ideas", "theme", "halfadd", "replay", "all"))
+    r.add_argument("--stage", default="all", choices=("sell", "combo", "half", "filter", "rule", "stats", "dd", "robust", "earn", "realized", "etf2x", "etfrule", "weinstein", "rsi", "pivot", "exits", "pullback", "recover", "prio", "slope", "slope2", "slope3", "swap", "premium", "hot", "hotyear", "ideas", "theme", "halfadd", "replay", "stopcheck", "all"))
     a = ap.parse_args()
     ctx = cb.setup(a.cache, with_parts=False)
     data, members, ind, days, G, end = (ctx[k] for k in ("data", "members", "ind", "days", "G", "end"))
@@ -720,6 +720,8 @@ def main():
         open(OUTDIR + "銘柄の下落率で見送る・優先する.md", "w", encoding="utf-8").write("\n".join(L) + "\n")
         print("書き出し", file=sys.stderr)
         return
+    if a.stage == "stopcheck":
+        return stopcheck_stage(base, data, sim, port, days)
     if a.stage == "replay":
         return replay_stage(base, data, build, ind, days)
     if a.stage == "halfadd":
@@ -1648,6 +1650,118 @@ def theme_stage(base, data, build, ind, days, cache):
     w("- この結果はルールの条件どおりに機械的に計算したもので、Claudeによる個別銘柄の売買判断ではない。")
     os.makedirs(OUTDIR, exist_ok=True)
     open(OUTDIR + "同じテーマ・セクターに固まったとき.md", "w", encoding="utf-8").write("\n".join(L) + "\n")
+    print("書き出し", file=sys.stderr)
+
+
+def stopcheck_stage(base, data, sim, port, days):
+    """損切りの判定の仕方（引け値か、日中の逆指値か）と幅（15%・10%）を比べる（2026-10-14 ユーザーの指示）。
+    これまでのバックテストは、急落の底・ミネルヴィニ・新高値V2の損切りを「引け値が買値の15%下以下 → 翌日の寄り付きで売る」で計算していた
+    （backtest_lib.gen_trades）。実際の運用は日中の逆指値（買値の15%下に届いたらその場で売る）。押し目は前から日中の逆指値"""
+    import json
+    sma_ = lambda c, j, n: sum(c[j - n + 1:j + 1]) / n
+    def s50(b):
+        c, j = data[b["sym"]]["c"], b["i0"] - 1
+        return sma_(c, j, 50) / sma_(c, j - 20, 50) - 1 if j >= 70 else 0.0
+    tab = json.load(open(os.path.join(os.path.dirname(OUTDIR.rstrip("/")), "2倍ETFの対応表.json"), encoding="utf-8"))
+    drag = {s: -x["drag"] for s, x in tab.items() if isinstance(x, dict) and "drag" in x}
+    HAS = {s for s, d in drag.items() if d < 0.15}
+    def to2x(trs):
+        out = []
+        for t in trs:
+            if t["sym"] not in HAS:
+                out.append(t)
+                continue
+            fee = drag[t["sym"]] / 252
+            e, prev, pv = 1 - COST, 1 - COST, {}
+            for d in sorted(t["path"]):
+                g_ = t["path"][d]
+                e = max(0.0, e * (1 + 2 * (g_ / prev - 1)) * (1 - fee))
+                prev = g_
+                pv[d] = e
+            out.append({**t, "path": pv})
+        return out
+
+    def restop(b, pct, intraday):
+        """買った日から元の売る日の前日までに、より早く損切りが出れば売る日と値段を差し替える（元の損切りより狭いか同じ幅だけ）"""
+        s = data[b["sym"]]
+        o, l, c = s["o"], s["l"], s["c"]
+        floor = b["px"] * (1 - pct)
+        for j in range(b["i0"], b["i1"]):
+            if intraday and l[j] <= floor:
+                return {**b, "i1": j, "xp": min(o[j] if j > b["i0"] else b["px"], floor)}
+            if not intraday and c[j] <= floor and j + 1 <= b["i1"]:
+                return {**b, "i1": j + 1, "xp": o[j + 1]}
+        return b
+
+    def make(spec):
+        out = []
+        for b in base:
+            pct, intra = spec.get(b["rule"], (0.15, b["rule"] == "B"))
+            b2 = b if (pct, intra) == (0.15, b["rule"] == "B") else restop(b, pct, intra)
+            p = sim(b2, half=xc.c1)
+            out.append({"sym": b2["sym"], "in": data[b2["sym"]]["date"][b2["i0"]], "out": max(p), "path": p,
+                        "prio": s50(b2), "rule": b2["rule"], "w": 1.0, "ret": b2["xp"] / b2["px"] - 1, "pct": pct})
+        return out
+
+    T15C, T15I, T10C, T10I = (0.15, False), (0.15, True), (0.10, False), (0.10, True)
+    forms = [("今までのバックテスト（押し目は日中の逆指値15%、ほかは引け値で15%）", {}),
+             ("実際の運用どおり（全部のルールで日中の逆指値15%）", {"C": T15I, "M": T15I, "V": T15I}),
+             ("順張りだけ引け値で10%（ほかは今までどおり）", {"M": T10C, "V": T10C}),
+             ("順張りだけ日中の逆指値10%（ほかは日中の逆指値15%）", {"C": T15I, "M": T10I, "V": T10I})]
+    is_hi = max(d for d in days if d <= cb.IS_END)
+    oos_lo = min(d for d in days if d >= cb.OOS_START)
+    med = lambda xs: sorted(xs)[len(xs) // 2]
+    yrs = (dt.date.fromisoformat(days[-1]) - dt.date.fromisoformat(days[0])).days / 365.25
+    L = []
+    w = L.append
+    w(f"---\ntype: backtest\ntitle: 損切りの判定の仕方と幅\ncreated: {dt.date.today()}\nscript: tools/backtest_retest.py --stage stopcheck\n---\n")
+    w("# 損切りを引け値で判定するか日中の逆指値にするかと、順張りの損切りを10%にする形\n")
+    w("2026-10-14、LITEが買って7取引日で損切り（日中の逆指値、930.48ドル）になり、ミネルヴィニのノートブックが「10%以内の損切りは絶対ルール」と答えたのを受けて、ユーザーの指示で確かめた。"
+      "**これまでのバックテストは、急落の底・ミネルヴィニ・新高値V2の損切りを「引け値が買値の15%下以下になったら翌日の寄り付きで売る」で計算していた**（`backtest_lib.gen_trades`）。"
+      "実際の運用は日中の逆指値（買値の15%下に届いたらその場で売る）で、押し目（ボリンジャーIII）だけが前から日中の逆指値で計算されていた。"
+      "日中の逆指値は、届いた日に買値の15%下（寄り付きで下に窓を開けたら寄り付きの値段）で売る。損切りの後は枠が空き、次の合図を買う。"
+      "土台は今のルール（4銘柄・1銘柄25%、同じ業種2銘柄まで、50日線の傾きが小さい順、2倍ETFがある銘柄は2倍ETF〔実測の目減り〕。損切り・手じまいは元の株の値段で判定）。"
+      "後知恵なしの監視銘柄、2015年〜、片道0.1%込み。乱数50通り×2組の中央値。\n")
+    w("## 1. 資金全体\n")
+    w("| 形 | 組 | 年率 | 含み損込みの最大下落率（中央値／最悪） | 確定した損益だけの最大下落率（中央値／最悪） | 2015〜2021年 | 2022年〜 |")
+    w("|---|---|---|---|---|---|---|")
+    res, per = {}, {}
+    for nm, spec in forms:
+        stock = make(spec)
+        per[nm] = stock
+        trs = to2x(stock)
+        for s0 in (5000, 7300):
+            cg, mm, rm, ii, oo = [], [], [], [], []
+            for k in range(50):
+                rc = []
+                g, m = port(trs, s0 + k, days[0], days[-1], rcurve=rc)
+                pk, r = 0.0, 0.0
+                for x in rc:
+                    pk = max(pk, x)
+                    r = max(r, 1 - x / pk)
+                cg.append(g); mm.append(m); rm.append(r)
+                ii.append(port(trs, s0 + k, days[0], is_hi)[0]); oo.append(port(trs, s0 + k, oos_lo, days[-1])[0])
+            res[(nm, s0)] = (med(ii), med(oo))
+            w(f"| {nm} | {'1組目' if s0 == 5000 else '2組目'} | {pct(med(cg))} | {pct(med(mm))}／{pct(max(mm))} | {pct(med(rm))}／{pct(max(rm))} | {pct(med(ii))} | {pct(med(oo))} |")
+            print(nm, s0, file=sys.stderr)
+    base_nm = forms[0][0]
+    w("\n両方の組で、2015〜2021年・2022年〜の両方とも今までのバックテストを上回った形: " +
+      ("、".join(nm for nm, _ in forms[1:] if all(res[(nm, s)][0] > res[(base_nm, s)][0] and res[(nm, s)][1] > res[(base_nm, s)][1] for s in (5000, 7300))) or "なし") + "\n")
+    RN = {"B": "押し目", "C": "急落の底", "M": "ミネルヴィニ", "V": "新高値V2"}
+    w("\n## 2. ルールごとの成績（全部の合図、株の値段で。枠に入らなかった合図も含む）\n")
+    w("「損切り」は、損切りの幅以上の損（1回の損益が −幅＋1ポイント以下）で終わった売買。\n")
+    w("| 形 | ルール | 合図の数 | 勝率 | 1回平均 | 損切りの数（年あたり） | 損切りの割合 |")
+    w("|---|---|---|---|---|---|---|")
+    for nm, _ in forms:
+        for r in "CMV":
+            xs = [t for t in per[nm] if t["rule"] == r]
+            if not xs:
+                continue
+            st = [t for t in xs if t["ret"] <= -t["pct"] + 0.01]
+            w(f"| {nm} | {RN[r]} | {len(xs)} | {sum(t['ret'] > 0 for t in xs) / len(xs) * 100:.0f}% | {pct(sum(t['ret'] for t in xs) / len(xs))} | {len(st)}（{len(st) / yrs:.1f}） | {len(st) / len(xs) * 100:.0f}% |")
+    w("\n- この結果はルールの条件どおりに機械的に計算したもので、Claudeによる個別銘柄の売買判断ではない。")
+    os.makedirs(OUTDIR, exist_ok=True)
+    open(OUTDIR + "損切りの判定の仕方と幅.md", "w", encoding="utf-8").write("\n".join(L) + "\n")
     print("書き出し", file=sys.stderr)
 
 
