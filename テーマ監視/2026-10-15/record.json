@@ -1,0 +1,159 @@
+{
+ "trade_date": "2026-10-14",
+ "run_date": "2026-10-15",
+ "theme_stage": "【ステージ2】（テーマ指数の30週線が線より上かつ上向きのため、第2章） [1, 2]",
+ "candidates": [
+  {
+   "sym": "COHR",
+   "kind": "逆張り: 急落の底（担当: コナーズ）",
+   "pattern": "A",
+   "close": 263.32,
+   "limit": null,
+   "stop_buy": null,
+   "limit_buy": null,
+   "verdict": "様子見",
+   "author": "コナーズ",
+   "hot": false,
+   "rsi14": 39.29669152640127,
+   "s50": 0.020311591281852115
+  },
+  {
+   "sym": "FLEX",
+   "kind": "逆張り: 急落の底（担当: コナーズ）",
+   "pattern": "A",
+   "close": 100.35,
+   "limit": null,
+   "stop_buy": null,
+   "limit_buy": null,
+   "verdict": "様子見",
+   "author": "コナーズ",
+   "hot": false,
+   "rsi14": 36.187970625291705,
+   "s50": -0.03274736377615184
+  },
+  {
+   "sym": "STX",
+   "kind": "逆張り: ボリンジャー メソッドIII",
+   "pattern": "A",
+   "close": 713.54,
+   "limit": null,
+   "stop_buy": null,
+   "limit_buy": null,
+   "verdict": "買い",
+   "author": "ボリンジャー",
+   "hot": false,
+   "rsi14": 33.63136578362777,
+   "s50": 0.004699293015766104
+  },
+  {
+   "sym": "WDC",
+   "kind": "逆張り: ボリンジャー メソッドIII",
+   "pattern": "A",
+   "close": 364.1,
+   "limit": null,
+   "stop_buy": null,
+   "limit_buy": null,
+   "verdict": "買い",
+   "author": "ボリンジャー",
+   "hot": false,
+   "rsi14": 32.135827767280645,
+   "s50": -0.08026298673294452
+  },
+  {
+   "sym": "ETN",
+   "kind": "逆張り: ボリンジャー メソッドIII",
+   "pattern": "A",
+   "close": 408.85,
+   "limit": null,
+   "stop_buy": null,
+   "limit_buy": null,
+   "verdict": "買い",
+   "author": "ボリンジャー",
+   "hot": false,
+   "rsi14": 41.395367694498844,
+   "s50": 0.02618257727591078
+  },
+  {
+   "sym": "AMAT",
+   "kind": "予約: ボリンジャー メソッドIII（%bが0.05未満に近い）",
+   "pattern": "B",
+   "close": 446.63,
+   "limit": null,
+   "stop_buy": null,
+   "limit_buy": 431.33,
+   "verdict": "買い（予約）",
+   "author": "ボリンジャー",
+   "hot": false,
+   "rsi14": 36.39732150433161,
+   "s50": -0.039805288716780685
+  },
+  {
+   "sym": "KLAC",
+   "kind": "予約: ボリンジャー メソッドIII（%bが0.05未満に近い）",
+   "pattern": "B",
+   "close": 178.81,
+   "limit": null,
+   "stop_buy": null,
+   "limit_buy": 173.98,
+   "verdict": "買い（予約）",
+   "author": "ボリンジャー",
+   "hot": false,
+   "rsi14": 39.32945313099165,
+   "s50": -0.035560311009872
+  },
+  {
+   "sym": "JBL",
+   "kind": "予約: ボリンジャー メソッドIII（%bが0.05未満に近い）",
+   "pattern": "B",
+   "close": 293.91,
+   "limit": null,
+   "stop_buy": null,
+   "limit_buy": 290.08,
+   "verdict": "買い（予約）",
+   "author": "ボリンジャー",
+   "hot": false,
+   "rsi14": 43.39328102641929,
+   "s50": -0.013251486135733681
+  },
+  {
+   "sym": "CARR",
+   "kind": "予約: ボリンジャー メソッドIII（%bが0.05未満に近い）",
+   "pattern": "B",
+   "close": 54.24,
+   "limit": null,
+   "stop_buy": null,
+   "limit_buy": 54.09,
+   "verdict": "買い（予約）",
+   "author": "ボリンジャー",
+   "hot": false,
+   "rsi14": 37.68877869609831,
+   "s50": -0.0725694600913156
+  }
+ ],
+ "holdings": [
+  {
+   "sym": "NVDA",
+   "rule": "ミネルヴィニ",
+   "buy_date": "2026-10-05",
+   "buy_price": 237.47,
+   "verdict": "保有継続",
+   "author": "ミネルヴィニ"
+  },
+  {
+   "sym": "HPE",
+   "rule": "新高値V2",
+   "buy_date": "2026-10-06",
+   "buy_price": 70.38,
+   "verdict": "保有継続",
+   "author": "ミネルヴィニ"
+  },
+  {
+   "sym": "AMD",
+   "rule": "新高値V2",
+   "buy_date": "2026-10-06",
+   "buy_price": 648.43,
+   "verdict": "保有継続",
+   "author": "ミネルヴィニ"
+  }
+ ]
+}
