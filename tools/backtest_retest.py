@@ -1724,6 +1724,9 @@ def actual_stage(base, data, sim, port, days, ind, watch87):
     med = lambda xs: sorted(xs)[len(xs) // 2]
     if watch87:
         forms = [("③ 監視銘柄を今の87銘柄に固定（後知恵あり）", [{**t, "prio": t["s50"]} for t in trs])]
+        w("\n## ③ 監視銘柄を今の87銘柄に固定（`--watch87`、後知恵あり）\n")
+        w("| 形 | 組 | 2015年〜 年率 | 含み損込みの最大下落率（中央値／最悪） | 確定した損益だけの最大下落率（中央値／最悪） | 2015〜2021年 | 2022年〜 | **直近3年 年率** | 直近3年 含み損込みの最大下落率 |")
+        w("|---|---|---|---|---|---|---|---|---|")
     else:
         forms = [("① 後知恵なしの監視銘柄・全業種（今までの基準）", [{**t, "prio": t["s50"]} for t in trs]),
                  ("② 後知恵なしの監視銘柄・AI・半導体・データセンター関連を先に買う（実際の運用に近い）", [{**t, "prio": (0 if t["ai"] else 1, t["s50"])} for t in trs]),
@@ -1762,9 +1765,8 @@ def actual_stage(base, data, sim, port, days, ind, watch87):
             w(f"| {nm} | {'1組目' if s0 == 5000 else '2組目'} | {pct(med(cg))} | {pct(med(mm))}／{pct(max(mm))} | {pct(med(rm))}／{pct(max(rm))} | {pct(med(ii))} | {pct(med(oo))} | **{pct(med(g3))}** | {pct(med(m3))} |")
             print(nm, s0, file=sys.stderr)
     w("")
-    w("| 形 | 合図の数（2015年〜、年あたり） | うち直近3年 | 勝率 | 1回平均（株） |" if not watch87 else "")
-    if not watch87:
-        w("|---|---|---|---|---|")
+    w("| 形 | 合図の数（2015年〜、年あたり） | うち直近3年 | 勝率 | 1回平均（株） |")
+    w("|---|---|---|---|---|")
     yrs = (dt.date.fromisoformat(days[-1]) - dt.date.fromisoformat(days[0])).days / 365.25
     for nm, tr_ in forms:
         st = [t for t in stock if not nm.startswith("②'") or t["ai"]]
