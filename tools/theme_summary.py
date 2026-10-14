@@ -71,6 +71,11 @@ def main():
            "- **ルールの判定**: 採用した売買ルール（スクリプト）が数値で決めたもの。損切りは買値の15%下の逆指値（日中に届けばその場で売れる）。",
            "- **著者の判定**: ノートブックの著者の回答。買いは注文を止める理由があるときだけ【様子見】、保有はルールより早く手じまう理由があるときだけ【売り】。根拠は下の「著者の回答（全文）」。",
            "- 2つが食い違うときに、どちらに従うかはユーザーが決める。", ""]
+    s2 = rec.get("s2") or {}
+    if s2:
+        out += [f"- **テーマ全体の急落（S2・記録だけ）: {s2.get('label', '記録なし')}**"
+                + (f"（SOXが直近60取引日の最高値から {s2['drop'] * 100:+.1f}%）" if s2.get("drop") is not None else "")
+                + "。S2の日の順張りの候補には「S2なら見送る形」と付ける（売買のルールは変えない。記録してから採用を決める。2026-10-14）", ""]
     hv = {h["sym"]: h for h in rec.get("holdings", [])}
     rows = table_rows(scan, "## 5. 保有銘柄")
     out += ["## 保有銘柄", ""]
@@ -112,6 +117,8 @@ def main():
                 rv = "買い（予約）" + (f" {px:g}" if isinstance(px, (int, float)) else "")
             else:
                 rv = c.get("pattern") or ""
+            if c.get("s2_skip"):
+                rv += "（S2なら見送る形・記録だけ）"
             av = f"【{c['verdict']}】（{c.get('author', '')}）" if c.get("verdict") else "回答なし"
             s50 = f"{c['s50'] * 100:+.1f}%" if isinstance(c.get("s50"), (int, float)) else r.get("50日線の傾き", "—")
             n = f"{k}" + ("" if k <= free else "（枠外）")

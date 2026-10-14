@@ -289,6 +289,18 @@ def etf_skip_note(sym):
     return ""
 
 
+def s2_state(sox, day):
+    """テーマ全体の急落 S2（2026-10-14 記録だけ採用）: SOX の終値が直近60取引日の最高値（終値）から10%以上下。
+    sox は fetch_daily の形（asof で切ったもの）。日付が day と合わなければ判定不能"""
+    if not sox or not sox["c"] or len(sox["c"]) < 60 or sox["date"][-1] != day:
+        return {"on": None, "label": "判定不能（SOXを取得できない）"}
+    c = sox["c"]
+    hi = max(c[-60:])
+    drop = c[-1] / hi - 1
+    on = drop <= -0.10
+    return {"on": on, "label": "あり（S2）" if on else "なし", "close": c[-1], "hi60": hi, "drop": drop}
+
+
 def shares_note(x, ex_):
     """BUY_USD 分の株数と購入金額の目安。値段は、予約注文ならその価格、寄り付きの成行なら今日の終値（寄り付きの値段で変わる）。
     2倍ETFで買う銘柄は、注文の価格（逆指値・指値・指値の上限）もETFの値段に直して書く（2026-10-04 ユーザーの指示）"""
@@ -370,7 +382,7 @@ def main():
         ndx_m = [r["symbol"].replace("/", ".") for r in json.loads(curl(NDX_URL))["data"]["data"]["rows"]]
     except Exception:
         ndx_m = []
-    syms = sorted(set(sp) | set(ndx_m) | set(wl) | {"SPY", "^GSPC", "^NDX"})
+    syms = sorted(set(sp) | set(ndx_m) | set(wl) | {"SPY", "^GSPC", "^NDX", "^SOX"})
     with ThreadPoolExecutor(8) as ex:
         got = dict(zip(syms, ex.map(fetch_daily, syms)))
     got = {s: cut(d, a.asof) for s, d in got.items() if d}
@@ -380,7 +392,9 @@ def main():
     ETF_REG_ASOF = a.asof
     _ETF_REG[a.asof or ""] = etf_regime(spy=spy, asof=a.asof)
     ndx = got.pop("^NDX", None)
+    sox = got.pop("^SOX", None)
     day = spy["date"][-1]
+    s2 = s2_state(sox, day)
     data = {s: got[s] for s in wl if s in got and got[s]["date"] and got[s]["date"][-1] == day and len(got[s]["c"]) > 260}
     missing = sorted(set(wl) - set(data))
 
@@ -441,6 +455,9 @@ def main():
     w(f"- **2倍ETFを使う局面（案1、2026-10-13 採用）: S&P500の20週線（100日線）で {er[0]}** → "
       + ("2倍ETFのある銘柄は2倍ETFで買う" if er[0] == "上昇" else "新しく買う銘柄は、2倍ETFのある銘柄も元の株で買う（保有中のETFはそのまま）")
       + (f"（SPY {er[1]:.2f}、100日線 {er[2]:.2f}、20日前の線 {er[3]:.2f}。上昇＝線より上かつ線が上向き）" if er[1] else ""))
+    w(f"- **テーマ全体の急落（S2、記録だけ。売買のルールは変えない）: {s2['label']}**"
+      + (f"（SOX {s2['close']:.2f}、直近60取引日の最高値 {s2['hi60']:.2f} から {pct(s2['drop'])}。S2＝最高値から−10%以上）" if s2.get("close") else "")
+      + "。S2のときに「順張りの新しい買いだけ止める」形を記録で比べる（2026-10-14 ユーザー決定。バックテストでは年率は上がったが2つの期間ではどちらも少し下回ったため、記録してから採用を決める。`バックテスト結果/テーマ全体の急落を検知して手じまう・買いを止める.md`）")
     w(f"- テーマ指数（監視銘柄の等金額平均）の30週線による局面: **{stage.get(day, '判定不可')}**（上昇＝線より上かつ上向き、下落＝線より下かつ下向き、それ以外＝横ばい。ワインスタインのステージの近似）")
     w(f"- テーマ指数と50日線: {'50日線より上' if ma50[-1] and c[-1] > ma50[-1] else '50日線より下'}（乖離 {pct(c[-1] / ma50[-1] - 1) if ma50[-1] else '取得不可'}）")
     w(f"- S&P500に対する相対的な強さ: {'50日平均より上（S&P500より強い）' if rma[-1] and ratio[-1] > rma[-1] else '50日平均より下（S&P500より弱い）'}")
@@ -847,7 +864,11 @@ def main():
     os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
     open(a.out, "w").write(text)
     # 候補ごとの過熱の記録（theme_review.py record が record.json に移す。レポート・レビューには出さない）
-    json.dump({x["sym"]: {"hot": x.get("hot"), "rsi14": x.get("rsi14"), "s50": x.get("s50")} for x in cands},
+    # S2（テーマ全体の急落）の記録: S2の日の順張りの候補は「S2で順張りの新しい買いを止める形なら見送る」（2026-10-14）
+    meta = {x["sym"]: {"hot": x.get("hot"), "rsi14": x.get("rsi14"), "s50": x.get("s50"),
+                       "s2_skip": bool(s2.get("on")) and x["kind"].startswith(("順張り", "予約: ミネルヴィニ", "予約: 新高値"))} for x in cands}
+    meta["_s2"] = s2
+    json.dump(meta,
               open(os.path.join(os.path.dirname(os.path.abspath(a.out)), "cands_meta.json"), "w", encoding="utf-8"), ensure_ascii=False)
     print(text)
 
