@@ -247,6 +247,48 @@ def etf2x_of(sym):
     return x["etf"], -x["drag"]
 
 
+ETF_REG_N = 100   # 2倍ETFを使う局面の判定に使う線（20週線≒100日線）。2026-10-13 ユーザー採用（案1、`バックテスト結果/流れ（市場の局面）を使う形.md`）
+ETF_REG_ASOF = None
+_ETF_REG = {}
+
+
+def etf_regime(spy=None, asof=None):
+    """2倍ETFを使うかを決める市場全体の局面（案1）。S&P500（SPY）の終値と100日線（20週線）、その線の20取引日前からの傾きで
+    上昇（線より上かつ上向き）／下落（線より下かつ下向き）／横ばい（それ以外）。(局面, 終値, 線, 20日前の線, 日付) を返す"""
+    key = asof or ""
+    if key in _ETF_REG:
+        return _ETF_REG[key]
+    d = spy or fetch_daily("SPY")
+    d = cut(d, asof) if d else None
+    if not d or len(d["c"]) < ETF_REG_N + 21:
+        _ETF_REG[key] = ("判定不能", None, None, None, None)
+        return _ETF_REG[key]
+    c = d["c"]
+    m = sum(c[-ETF_REG_N:]) / ETF_REG_N
+    m20 = sum(c[-ETF_REG_N - 20:-20]) / ETF_REG_N
+    up, rising = c[-1] > m, m > m20
+    _ETF_REG[key] = ("上昇" if up and rising else "下落" if (not up and not rising) else "横ばい", c[-1], m, m20, d["date"][-1])
+    return _ETF_REG[key]
+
+
+def etf2x_buy(sym):
+    """新しく買うときに2倍ETFで買うなら (ETFのティッカー, 目減り)。2倍ETFのある銘柄でも、S&P500が20週線で「上昇」の局面でなければ
+    元の株で買う（案1、2026-10-13 ユーザー採用）。保有中の銘柄の表示には etf2x_of を使う（買ったときの形のまま持つ）"""
+    ex = etf2x_of(sym)
+    if not ex or etf_regime(asof=ETF_REG_ASOF)[0] != "上昇":
+        return None
+    return ex
+
+
+def etf_skip_note(sym):
+    """2倍ETFのある銘柄だが、局面のために元の株で買うときの注記"""
+    ex = etf2x_of(sym)
+    r = etf_regime(asof=ETF_REG_ASOF)[0]
+    if ex and r != "上昇":
+        return f"。**元の株で買う**（2倍ETF {ex[0]} のある銘柄だが、S&P500が20週線で「{r}」の局面のため。案1）"
+    return ""
+
+
 def shares_note(x, ex_):
     """BUY_USD 分の株数と購入金額の目安。値段は、予約注文ならその価格、寄り付きの成行なら今日の終値（寄り付きの値段で変わる）。
     2倍ETFで買う銘柄は、注文の価格（逆指値・指値・指値の上限）もETFの値段に直して書く（2026-10-04 ユーザーの指示）"""
@@ -334,6 +376,9 @@ def main():
     got = {s: cut(d, a.asof) for s, d in got.items() if d}
     spy = got.pop("SPY")
     gspc = got.pop("^GSPC", None)
+    global ETF_REG_ASOF
+    ETF_REG_ASOF = a.asof
+    _ETF_REG[a.asof or ""] = etf_regime(spy=spy, asof=a.asof)
     ndx = got.pop("^NDX", None)
     day = spy["date"][-1]
     data = {s: got[s] for s in wl if s in got and got[s]["date"] and got[s]["date"][-1] == day and len(got[s]["c"]) > 260}
@@ -392,6 +437,10 @@ def main():
     mkt = market_regime(gspc).get(day, "判定不能") if gspc else "取得不可"
     mkt_n = market_regime(ndx).get(day, "判定不能") if ndx else "取得不可"
     w(f"- 市場全体の30週線による局面: S&P500指数 **{mkt}**／NASDAQ100指数 **{mkt_n}**（急落の底で買うルールは、過去の検証で下落相場で特に強く、横ばいの相場では負けていた）")
+    er = etf_regime(asof=a.asof)
+    w(f"- **2倍ETFを使う局面（案1、2026-10-13 採用）: S&P500の20週線（100日線）で {er[0]}** → "
+      + ("2倍ETFのある銘柄は2倍ETFで買う" if er[0] == "上昇" else "新しく買う銘柄は、2倍ETFのある銘柄も元の株で買う（保有中のETFはそのまま）")
+      + (f"（SPY {er[1]:.2f}、100日線 {er[2]:.2f}、20日前の線 {er[3]:.2f}。上昇＝線より上かつ線が上向き）" if er[1] else ""))
     w(f"- テーマ指数（監視銘柄の等金額平均）の30週線による局面: **{stage.get(day, '判定不可')}**（上昇＝線より上かつ上向き、下落＝線より下かつ下向き、それ以外＝横ばい。ワインスタインのステージの近似）")
     w(f"- テーマ指数と50日線: {'50日線より上' if ma50[-1] and c[-1] > ma50[-1] else '50日線より下'}（乖離 {pct(c[-1] / ma50[-1] - 1) if ma50[-1] else '取得不可'}）")
     w(f"- S&P500に対する相対的な強さ: {'50日平均より上（S&P500より強い）' if rma[-1] and ratio[-1] > rma[-1] else '50日平均より下（S&P500より弱い）'}")
@@ -751,13 +800,15 @@ def main():
         w("|---|---|---|---|---|---|---|---|---|---|---|---|---|")
         for x in show:
             rs_ = "取得不可" if x["rs"] is None else f"{x['rs']:.0f}"
-            ex_ = etf2x_of(x["sym"])
-            od_ = x["order"] + (f"。**2倍ETFで買う: {ex_[0]}**（目減り 年{ex_[1] * 100:.0f}%。株と同じ金額。合図・損切り・手じまいは元の株 {x['sym']} の値段で判定）" if ex_ else "") + shares_note(x, ex_)
+            ex_ = etf2x_buy(x["sym"])
+            od_ = x["order"] + (f"。**2倍ETFで買う: {ex_[0]}**（目減り 年{ex_[1] * 100:.0f}%。株と同じ金額。合図・損切り・手じまいは元の株 {x['sym']} の値段で判定）" if ex_ else etf_skip_note(x["sym"])) + shares_note(x, ex_)
             w(f"| {x['sym']} | {x['group']} | {x['pat']} | {x['kind']} | {perf(x)} | {x['close']:.2f} | {pct(x['chg'])} | {rs_} | {pct(x['s50'])} | {x['regime']} | {x['why']} | {eds[x['sym']]} | {od_} |")
         w("\n- 2倍ETF: 2倍ETFがある銘柄（ユーザーがムームー証券で買えることを確認した38銘柄のうち、目減りが年15%未満のもの）は、株の代わりに2倍ETFを買う（2026-10-04 ユーザー決定。"
           "`バックテスト結果/2倍ETFを使う決まり.md`。年率 約27%→約33%、確定した損益だけの最大下落率 約30%→約31%、含み損込みは約33%→約45%）。"
           "買う金額は株と同じ（資金の25%）。合図・損切り（元の株の買値の15%下＝ETFでは約30%下）・手じまいはすべて元の株の値段で判定する。指値・逆指値はETFの値段に直して置く。"
-          "どのETFかは `新分析ツール/2倍ETFの対応表.json`（売買代金が1日500万ドル以上で、直近1年の目減りが一番小さいもの）。")
+          "どのETFかは `新分析ツール/2倍ETFの対応表.json`（売買代金が1日500万ドル以上で、直近1年の目減りが一番小さいもの）。"
+          "**2倍ETFで買うのは、S&P500が20週線（100日線）で「上昇」の局面のときだけ。横ばい・下落の局面では元の株で買う**（案1、2026-10-13 ユーザー採用。"
+          "買う日に決め、買った後は局面が変わってもそのまま持つ。`バックテスト結果/流れ（市場の局面）を使う形.md`）。")
         if st_:
             m_ = st_.get("_meta", {})
             w(f"\n- ルールの過去の成績: 今の売りのルールで、後知恵なしの監視銘柄・2015年〜の全部の合図の1回ごとの成績（{m_.get('updated', '?')}計算、`{m_.get('source', '')}`）。"
