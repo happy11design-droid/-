@@ -274,6 +274,9 @@ def load_real(path):
                 t["shares"] = 2 * float(m.group(2)) * float(m.group(3)) / t["buy"]
             if len(c) >= 7 and re.match(r"^\d{4}-\d{2}-\d{2}$", c[5]) and c[6]:
                 t["sell_date"], t["sell"] = c[5], float(c[6])
+                e = re.search(r"ETFの売値 ([0-9.]+)", line)
+                if m and e and t["sell"] != t["buy"]:   # ETFの実際の売値があれば、損益が実際のETFの損益と同じになる株数に直す（2026-10-15）
+                    t["shares"] = float(m.group(2)) * (float(e.group(1)) - float(m.group(3))) / (t["sell"] - t["buy"])
         except ValueError:
             continue
         out.append(t)
