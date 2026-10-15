@@ -346,7 +346,7 @@ def main():
     r.add_argument("--etf", default=None, help="etf2x: 2倍ETFにする銘柄（カンマ区切り）。省略すると backtest_2x.HAS_2X")
     r.add_argument("--drag", default=None, help="etf2x: 2倍ETFの目減り（年率）。数値なら全部同じ、'measured' なら 新分析ツール/2倍ETFの対応表.json の実測（ないものは0.12）")
     r.add_argument("--tag", default="", help="etf2x: 結果のファイル名と見出しに付ける名前（例: ムームー証券）")
-    r.add_argument("--stage", default="all", choices=("sell", "combo", "half", "filter", "rule", "stats", "dd", "robust", "earn", "realized", "etf2x", "etfrule", "weinstein", "rsi", "pivot", "exits", "pullback", "recover", "prio", "slope", "slope2", "slope3", "swap", "premium", "hot", "hotyear", "ideas", "theme", "halfadd", "replay", "stopcheck", "actual", "stopfreq", "themedrop", "crashstops", "all"))
+    r.add_argument("--stage", default="all", choices=("sell", "combo", "half", "filter", "rule", "stats", "dd", "robust", "earn", "realized", "etf2x", "etfrule", "weinstein", "rsi", "pivot", "exits", "pullback", "recover", "prio", "slope", "slope2", "slope3", "swap", "premium", "hot", "hotyear", "ideas", "theme", "halfadd", "replay", "stopcheck", "actual", "stopfreq", "themedrop", "crashstops", "ddsize", "all"))
     r.add_argument("--watch87", action="store_true", help="actual: 監視銘柄を後知恵なしの一覧ではなく 新分析ツール/テーマ監視銘柄.md の銘柄に固定する（後知恵あり。S&P500の構成銘柄かどうかは問わない）")
     a = ap.parse_args()
     ctx = cb.setup(a.cache, with_parts=False)
@@ -734,7 +734,12 @@ def main():
         open(OUTDIR + "銘柄の下落率で見送る・優先する.md", "w", encoding="utf-8").write("\n".join(L) + "\n")
         print("書き出し", file=sys.stderr)
         return
+    if a.stage == "ddsize":
+        return ddsize_stage(base, data, sim, days, ind, a.cache)
     if a.stage == "crashstops":
+        if a.watch87:   # 実際の運用（2026-10-05〜）の再現（2026-10-15 ユーザーの指示）
+            return crashstops_stage(base, data, sim, days, ind, a.cache, lo="2026-09-21", hi=days[-1], out="今回の売買の再現（87銘柄）.md",
+                                    note="。**監視銘柄を今の87銘柄に固定（`--watch87`）**して、実際の運用（2026-10-05に開始）と同じ期間を再現した。毎朝のツールが空き枠に使うテーマの外の銘柄は入っていない")
         return crashstops_stage(base, data, sim, days, ind, a.cache)
     if a.stage == "themedrop":
         return themedrop_stage(base, data, sim, days, ind, members, a.cache)
@@ -1810,7 +1815,134 @@ def actual_stage(base, data, sim, port, days, ind, watch87, cache):
     print("書き出し", file=sys.stderr)
 
 
-def crashstops_stage(base, data, sim, days, ind, cache, lo="2026-06-01", hi="2026-09-30"):
+def ddsize_stage(base, data, sim, days, ind, cache):
+    """資金が最高値から大きく減ったら、戻るまで1銘柄の金額を小さくする形（2026-10-15 ユーザーの指示。運用を始めて2週間で資金が−20.5%）。
+    今のルール（実際の運用に近い形・案1・日中の逆指値15%）が土台。下落率は毎日の時価（含み損込み）の最高値から"""
+    import json
+    from backtest_caps import THEME
+    DC = {"Electrical Equipment & Parts", "Specialty Industrial Machinery", "Engineering & Construction", "Building Products & Equipment",
+          "Utilities—Independent Power Producers", "REIT—Specialty"}
+    AI = set(THEME) | DC
+    sma_ = lambda c, j, n: sum(c[j - n + 1:j + 1]) / n
+    def s50(b):
+        c, j = data[b["sym"]]["c"], b["i0"] - 1
+        return sma_(c, j, 50) / sma_(c, j - 20, 50) - 1 if j >= 70 else 0.0
+    tab = json.load(open(os.path.join(os.path.dirname(OUTDIR.rstrip("/")), "2倍ETFの対応表.json"), encoding="utf-8"))
+    drag = {s: -x["drag"] for s, x in tab.items() if isinstance(x, dict) and "drag" in x}
+    HAS = {s for s, d in drag.items() if d < 0.15}
+    up, prev = etf_up_days(cache)
+    trs = []
+    for b in base:
+        s = data[b["sym"]]
+        floor = b["px"] * (1 - STOP)
+        if b["rule"] != "B":
+            for j in range(b["i0"], b["i1"]):
+                if s["l"][j] <= floor:
+                    b = {**b, "i1": j, "xp": min(s["o"][j] if j > b["i0"] else b["px"], floor)}
+                    break
+        p = sim(b, half=xc.c1)
+        t = {"sym": b["sym"], "in": s["date"][b["i0"]], "out": max(p), "path": p, "prio": (0 if ind.get(b["sym"]) in AI else 1, s50(b))}
+        if b["sym"] in HAS and prev(t["in"]) in up:
+            fee = drag[b["sym"]] / 252
+            e, pr, pv = 1 - COST, 1 - COST, {}
+            for d in sorted(p):
+                e = max(0.0, e * (1 + 2 * (p[d] / pr - 1)) * (1 - fee))
+                pr = p[d]
+                pv[d] = e
+            t["path"] = pv
+        trs.append(t)
+    by_in = {}
+    for t in trs:
+        by_in.setdefault(t["in"], []).append(t)
+    di = {d: k for k, d in enumerate(days)}
+
+    def port(seed, lo, hi, cut=None, back=None, mult=0.5):
+        """cut: 最高値からの下落がこれ以上になったら1銘柄の金額を mult 倍にする。back: 下落がこれ未満に戻ったら元に戻す"""
+        rnd = random.Random(seed)
+        cash, held, peak, mdd, eq, small = 1.0, [], 1.0, 0.0, 1.0, False
+        dd = days[di[lo]:di[hi] + 1]
+        for d in dd:
+            still = []
+            for h in held:
+                v = h["t"]["path"].get(d)
+                if v is not None:
+                    h["v"] = v
+                if h["t"]["out"] == d:
+                    cash += h["size"] * h["v"]
+                else:
+                    still.append(h)
+            held = still
+            eq = cash + sum(h["size"] * h["v"] for h in held)
+            for t in sorted(by_in.get(d, []), key=lambda t: (t["prio"], rnd.random())):
+                if not (lo <= t["in"] and t["out"] <= hi):
+                    continue
+                if any(h["t"]["sym"] == t["sym"] for h in held):
+                    continue
+                if len(held) >= SLOTS:
+                    break
+                if sum(1 for h in held if ind.get(h["t"]["sym"]) == ind.get(t["sym"])) >= 2:
+                    continue
+                size = min(eq / SLOTS * (mult if small else 1.0), cash)
+                if size <= 0:
+                    break
+                cash -= size
+                v0 = t["path"].get(d, 1.0)
+                if t["out"] == d:
+                    cash += size * v0
+                    continue
+                held.append({"t": t, "size": size, "v": v0})
+            eq = cash + sum(h["size"] * h["v"] for h in held)
+            peak = max(peak, eq)
+            ddn = 1 - eq / peak
+            mdd = max(mdd, ddn)
+            if cut is not None:
+                if not small and ddn >= cut:
+                    small = True
+                elif small and ddn < back:
+                    small = False
+        yrs = (dt.date.fromisoformat(dd[-1]) - dt.date.fromisoformat(dd[0])).days / 365.25
+        return eq ** (1 / yrs) - 1, mdd
+
+    last3 = (dt.date.fromisoformat(days[-1]) - dt.timedelta(days=365 * 3)).isoformat()
+    l3 = min(d for d in days if d >= last3)
+    is_hi = max(d for d in days if d <= cb.IS_END)
+    oos_lo = min(d for d in days if d >= cb.OOS_START)
+    med = lambda xs: sorted(xs)[len(xs) // 2]
+    forms = [("今のルール（いつも資金÷4）", None, None, 1.0),
+             ("最高値から−20%で半分に、−10%まで戻ったら元に", 0.20, 0.10, 0.5),
+             ("最高値から−20%で半分に、最高値に戻ったら元に", 0.20, 0.0001, 0.5),
+             ("最高値から−15%で半分に、−5%まで戻ったら元に", 0.15, 0.05, 0.5),
+             ("最高値から−10%で半分に、−5%まで戻ったら元に", 0.10, 0.05, 0.5),
+             ("最高値から−20%で4分の3に、−10%まで戻ったら元に", 0.20, 0.10, 0.75)]
+    L = []
+    w = L.append
+    w(f"---\ntype: backtest\ntitle: 資金が減ったら1銘柄の金額を小さくする\ncreated: {dt.date.today()}\nscript: tools/backtest_retest.py --stage ddsize\n---\n")
+    w("# 資金が最高値から大きく減ったら、戻るまで1銘柄の金額を小さくする形\n")
+    w("2026-10-15、運用を始めて8取引日で4銘柄すべてが損で終わり、資金が−20.5%になったのを受けて、ユーザーの指示で確かめた。"
+      "今のルール（実際の運用に近い形: 後知恵なしの監視銘柄でAI・半導体・データセンター関連を先に買う、4銘柄、同じ業種2銘柄まで、50日線の傾きが小さい順、案1、損切りは全部のルールで日中の逆指値15%）"
+      "で、1銘柄の金額（ふだんは資金÷4）だけを変える。下落率は毎日の時価（含み損込み）の最高値から。小さくしている間も4銘柄まで買う（使わない分は現金）。2015年〜、片道0.1%込み。乱数50通り×2組の中央値。\n")
+    w("| 形 | 組 | 年率 | 含み損込みの最大下落率（中央値／最悪） | 2015〜2021年 | 2022年〜 | 直近3年 |")
+    w("|---|---|---|---|---|---|---|")
+    res = {}
+    for nm, cut, back, mult in forms:
+        for s0 in (5000, 7300):
+            cg, mm, ii, oo, g3 = [], [], [], [], []
+            for k in range(50):
+                g, m = port(s0 + k, days[0], days[-1], cut, back, mult)
+                cg.append(g); mm.append(m)
+                ii.append(port(s0 + k, days[0], is_hi, cut, back, mult)[0]); oo.append(port(s0 + k, oos_lo, days[-1], cut, back, mult)[0])
+                g3.append(port(s0 + k, l3, days[-1], cut, back, mult)[0])
+            res[(nm, s0)] = (med(ii), med(oo))
+            w(f"| {nm} | {'1組目' if s0 == 5000 else '2組目'} | {pct(med(cg))} | {pct(med(mm))}／{pct(max(mm))} | {pct(med(ii))} | {pct(med(oo))} | {pct(med(g3))} |")
+            print(nm, s0, file=sys.stderr)
+    good = [nm for nm, *_ in forms[1:] if all(res[(nm, s)][0] > res[(forms[0][0], s)][0] and res[(nm, s)][1] > res[(forms[0][0], s)][1] for s in (5000, 7300))]
+    w("\n両方の組で、2015〜2021年・2022年〜の両方とも今のルールを上回った形: " + ("、".join(good) or "なし") + "\n")
+    w("- この結果はルールの条件どおりに機械的に計算したもので、Claudeによる個別銘柄の売買判断ではない。")
+    open(OUTDIR + "資金が減ったら1銘柄の金額を小さくする.md", "w", encoding="utf-8").write("\n".join(L) + "\n")
+    print("書き出し", file=sys.stderr)
+
+
+def crashstops_stage(base, data, sim, days, ind, cache, lo="2026-06-01", hi="2026-09-30", out="急落の期間の損切りの回数と続けての損切り.md", note=""):
     """今のルールで、テーマ全体の急落の期間（S2）と平常時の損切りの回数、損切りの後に買った売買がまた損切りになる割合、
     2026年6〜9月の売買の一覧（2026-10-14 ユーザーの指示「今のルールに置き換えて」）。
     今のルール: 実際の運用に近い形（後知恵なしの監視銘柄でAI・半導体・データセンター関連を先に買う）、4銘柄・1銘柄＝その日の資金÷4、
@@ -1954,10 +2086,10 @@ def crashstops_stage(base, data, sim, days, ind, cache, lo="2026-06-01", hi="202
         w(f"- 買った売買のうちの割合（全体）: {pct(med(m['base']))}")
         w(f"- その後20取引日以内に買った売買のうち、また同じ終わり方をした割合: **{pct(med(m['again']))}**")
         w(f"- 10取引日以内に2回続いたこと: 2015年〜で {med(m['cl'])} 回（年 {med(m['cl']) / yrs:.1f} 回）、そのうちS2の期間 {med(m['cls2'])} 回\n")
-    w(f"## 3. 2026年6〜9月の売買（乱数50通りのうち2015年〜の年率が中央値の1通り、{seed}）\n")
+    w(f"## 3. {lo}〜{hi}の売買（乱数50通りのうち2015年〜の年率が中央値の1通り、{seed}）{note}\n")
     win = [d for d in days if lo <= d <= hi]
     e0 = curve[win[0]][0]
-    pk = max((d for d in win if d <= "2026-07-31"), key=lambda d: curve[d][0])
+    pk = max((d for d in win if d <= "2026-07-31") if hi <= "2026-09-30" else win, key=lambda d: curve[d][0])
     tr = min((d for d in win if d >= pk), key=lambda d: curve[d][0])
     w(f"- 資金（{win[0]}＝100）: 一番高い日 {pk}（{curve[pk][0] / e0 * 100:.1f}）→ 一番低い日 {tr}（{curve[tr][0] / e0 * 100:.1f}、{(1 - curve[tr][0] / curve[pk][0]) * 100:.1f}%の下落）→ {win[-1]}（{curve[win[-1]][0] / e0 * 100:.1f}）\n")
     w("| 日付 | 売買 | 銘柄 | ルール | 2倍ETF | 買った日 | 売った日 | 株の損益 | 1枠の損益 | 売りの理由 | S2の日か |")
@@ -1972,10 +2104,12 @@ def crashstops_stage(base, data, sim, days, ind, cache, lo="2026-06-01", hi="202
             nsell += 1
             ns += t["ret"] < 0
             why = "**損切り（日中の逆指値15%）**" if t["stop"] else ("**損で手じまい**" if t["ret"] < 0 else "ルールの売り（利益）")
+            if d == days[-1] and not t["stop"]:
+                why = "（データの最終日。まだ持っている扱い）"
         w(f"| {d} | {kind} | {t['sym']} | {RN[t['rule']]} | {t['etf']} | {t['in']} | {t['out']} | {pct(t['ret'])} | {pct(r1)} | {why} | {'S2' if d in S2 else ''} |")
     w(f"\n期間中に売った {nsell} 件のうち、損で終わった（損切り）{ns} 件、そのうち日中の逆指値15% {sum(1 for k_, d_, t_, *_ in log if k_ == '売り' and lo <= d_ <= hi and t_['stop'])} 件。\n")
     w("- この結果はルールの条件どおりに機械的に計算したもので、Claudeによる個別銘柄の売買判断ではない。")
-    open(OUTDIR + "急落の期間の損切りの回数と続けての損切り.md", "w", encoding="utf-8").write("\n".join(L) + "\n")
+    open(OUTDIR + out, "w", encoding="utf-8").write("\n".join(L) + "\n")
     print("書き出し", seed, file=sys.stderr)
 
 
