@@ -1877,9 +1877,10 @@ def opt_stage(base, data, sim, days, ind, cache, part):
                     if s["l"][j] <= floor:
                         b = {**b, "i1": j, "xp": min(s["o"][j] if j > b["i0"] else b["px"], floor)}
                         break
-            if rel8:   # P: 保有が買値から−8%以下かつSOXが20日の最高値から−5%以上下の日の翌朝に手じまう（shock_stage と同じ）
+            if rel8:   # P: 保有が買値から−8%以下かつSOXが20日の最高値から−5%以上下の日の翌朝に手じまう（shock_stage と同じ）。rel8=(株, SOX) で値を変えられる
+                lv, sv = rel8 if isinstance(rel8, tuple) else (0.08, 0.05)
                 for j in range(b["i0"], b["i1"] - 1):
-                    if s["c"][j] <= b["px"] * 0.92 and sdd20.get(s["date"][j], 0.0) <= -0.05:
+                    if s["c"][j] <= b["px"] * (1 - lv) and sdd20.get(s["date"][j], 0.0) <= -sv:
                         b = {**b, "i1": j + 1, "xp": s["o"][j + 1]}
                         break
             p = sim(b, half=xc.c1)
@@ -1969,7 +1970,10 @@ def opt_stage(base, data, sim, days, ind, cache, part):
           "2倍ETFを使わない": {"etf": "none"}, "2倍ETFをいつでも使う": {"etf": "all"},
           "損切り10%（日中の逆指値）": {"stop": 0.10}, "損切り12%（日中の逆指値）": {"stop": 0.12},
           "ミネルヴィニを外す": {"rules": ("B", "C", "V")}, "急落の底を外す": {"rules": ("B", "M", "V")},
-          "P（保有が−8%かつSOXが20日の最高値から−5%で手じまう）": {"rel8": True}}
+          "P（保有が−8%かつSOXが20日の最高値から−5%で手じまう）": {"rel8": True},
+          "P（保有が−6%かつSOXが−5%）": {"rel8": (0.06, 0.05)}, "P（保有が−10%かつSOXが−5%）": {"rel8": (0.10, 0.05)},
+          "P（保有が−8%かつSOXが−3%）": {"rel8": (0.08, 0.03)}, "P（保有が−8%かつSOXが−7%）": {"rel8": (0.08, 0.07)},
+          "P（保有が−8%、SOXの条件なし）": {"rel8": (0.08, -1.0)}}
     combos = [x for x in os.environ.get("OPT_COMBO", "").split(";") if x]
     forms = list(V1.items()) if part == 1 else [("今のルール（傾きの小さい順）", {})] + [
         (c, {k: v for nm in c.split("＋") for k, v in V1[nm].items()}) for c in combos]
