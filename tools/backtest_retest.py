@@ -859,7 +859,10 @@ def main():
         print(f"書き出し: {out}", file=sys.stderr)
 
 
-def swap_port(trs, seed, lo, hi, ind, days, prem=None, th=0.0, stats=None, curve=None, pick="gain"):
+_POS = {}
+
+
+def swap_port(trs, seed, lo, hi, ind, days, prem=None, th=0.0, stats=None, curve=None, pick="gain", data=None):
     """port と同じ資金の計算に、乗り換えを足したもの。枠が埋まっている日に prem(t) の合図が出たら、含み益が th より大きい保有のうち
     含み益が一番大きいものを、その日の寄り付き（前日の終値で近似、片道の手数料込み）で売って、その合図を買う"""
     dd = [d for d in days if lo <= d <= hi]
@@ -898,7 +901,13 @@ def swap_port(trs, seed, lo, hi, ind, days, prem=None, th=0.0, stats=None, curve
                     if not gain:
                         continue
                     h = min(gain, key=lambda h: h["vp"] / h["v0"])
-                cash += h["size"] * h["vp"] * (1 - COST)
+                px_ = h["vp"]
+                if data is not None:   # 実際の寄り付きの値段で売る（2026-10-16 の点検で追加。前日の終値で代用すると有利に出るおそれ）
+                    s_ = data[h["t"]["sym"]]
+                    k_ = _POS.setdefault(id(s_["date"]), {x: i for i, x in enumerate(s_["date"])}).get(d)
+                    if k_ and s_["c"][k_ - 1]:
+                        px_ = h["vp"] * s_["o"][k_] / s_["c"][k_ - 1]
+                cash += h["size"] * px_ * (1 - COST)
                 held.remove(h)
                 if stats is not None:
                     stats.append(h["vp"] / h["v0"] - 1)
@@ -1452,6 +1461,26 @@ def swap_stage(cur_tr, base, data, build, ind, days, is_hi, oos_lo):
     for nm in ("急落の底（全部）", "急落の底・RS≧80", "急落の底・50日線の傾きが小さい20%", "押し目・RS≧90", "押し目・RS≧80"):
         for th in (0.0, 0.10):
             row(nm, f"含み益 {'+' + str(int(th * 100)) + '%超' if th else 'プラス'}", run(groups[nm], th))
+    w("\n## 3. 売る保有を、実際の寄り付きの値段で売る形（2026-10-16 の点検で追加）\n")
+    w("2. は売る保有の値段を前日の終値で代用していた。実際の注文は翌朝の寄り付きなので、その日の寄り付きの値段で売る形で計算し直した。\n")
+    w("| 乗り換える合図 | 利確する保有の条件 | 1組目 年率 | 最大下落率 | 設計 | 確認 | 2組目 年率 | 最大下落率 | 設計 | 確認 | 乗り換えの回数（年あたり）・売った保有の含み益の平均 |")
+    w("|---|---|---|---|---|---|---|---|---|---|---|")
+    def run_o(prem, th):
+        out = []
+        for s0 in (5000, 7300):
+            a_, m_, i_, o_ = [], [], [], []
+            st = []
+            for k in range(50):
+                g, m = swap_port(trs, s0 + k, days[0], days[-1], ind, days, prem, th, st if s0 == 5000 else None, data=data)
+                a_.append(g); m_.append(m)
+                i_.append(swap_port(trs, s0 + k, days[0], is_hi, ind, days, prem, th, data=data)[0])
+                o_.append(swap_port(trs, s0 + k, oos_lo, days[-1], ind, days, prem, th, data=data)[0])
+            out.append((med(a_), med(m_), med(i_), med(o_), st))
+        return out
+    row("（乗り換えなし＝今のルール）", "—", base_r)
+    for nm in ("急落の底（全部）", "急落の底・RS≧80", "急落の底・50日線の傾きが小さい20%", "押し目・RS≧90", "押し目・RS≧80"):
+        for th in (0.0, 0.10):
+            row(nm, f"含み益 {'+' + str(int(th * 100)) + '%超' if th else 'プラス'}（寄り付きで売る）", run_o(groups[nm], th))
     w("\n- 「設計」は2015〜2021年、「確認」は2022年〜。採用の目安は、今のルールより両方の期間で上回ること（2組とも）。")
     w("- この結果はルールの条件どおりに機械的に計算したもので、Claudeによる個別銘柄の売買判断ではない。")
     os.makedirs(OUTDIR, exist_ok=True)
