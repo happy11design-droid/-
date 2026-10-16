@@ -1856,10 +1856,18 @@ def opt_stage(base, data, sim, days, ind, cache, part):
         k = di.get(d)
         return not (k and (b["sym"], b["rule"], days[k - 1]) in sig)
 
+    from backtest_lib import load_prices
+    g_ = load_prices(cache, "^SOX")
+    sm = dict(zip(g_["date"], g_["c"]))
+    sox, last = [], None
+    for d in days:
+        last = sm.get(d, last)
+        sox.append(last)
+    sdd20 = {d: (sox[i] / max(x for x in sox[max(0, i - 19):i + 1] if x) - 1) if sox[i] else 0.0 for i, d in enumerate(days)}
     cache_tr = {}
-    def stock_trades(stop):
-        if stop in cache_tr:
-            return cache_tr[stop]
+    def stock_trades(stop, rel8=False):
+        if (stop, rel8) in cache_tr:
+            return cache_tr[(stop, rel8)]
         out = []
         for b in base:
             s = data[b["sym"]]
@@ -1869,10 +1877,15 @@ def opt_stage(base, data, sim, days, ind, cache, part):
                     if s["l"][j] <= floor:
                         b = {**b, "i1": j, "xp": min(s["o"][j] if j > b["i0"] else b["px"], floor)}
                         break
+            if rel8:   # P: 保有が買値から−8%以下かつSOXが20日の最高値から−5%以上下の日の翌朝に手じまう（shock_stage と同じ）
+                for j in range(b["i0"], b["i1"] - 1):
+                    if s["c"][j] <= b["px"] * 0.92 and sdd20.get(s["date"][j], 0.0) <= -0.05:
+                        b = {**b, "i1": j + 1, "xp": s["o"][j + 1]}
+                        break
             p = sim(b, half=xc.c1)
             out.append({"sym": b["sym"], "in": s["date"][b["i0"]], "out": max(p), "path": p, "rule": b["rule"], "ret": p[max(p)] - 1,
                         "s50": s50(b), "rs": s["rs"][b["i0"] - 1] or 0, "ai": ind.get(b["sym"]) in AI, "first": streak_first(b)})
-        cache_tr[stop] = out
+        cache_tr[(stop, rel8)] = out
         return out
 
     def lev(trs, mode):
@@ -1940,7 +1953,7 @@ def opt_stage(base, data, sim, days, ind, cache, part):
           "rev_rs": lambda t: (0 if t["ai"] else 1, 0 if t["rule"] in ("B", "C") else 1, -t["rs"]),
           "slope_big": lambda t: (0 if t["ai"] else 1, -t["s50"])}
     # 形: 名前 → 決まり（変えない項目は今のルール）
-    BASE = {"rules": ("B", "C", "M", "V"), "prio": "slope", "streak": None, "slots": 4, "cap": 2, "etf": "reg", "stop": STOP}
+    BASE = {"rules": ("B", "C", "M", "V"), "prio": "slope", "streak": None, "slots": 4, "cap": 2, "etf": "reg", "stop": STOP, "rel8": False}
     V1 = {"今のルール（傾きの小さい順）": {},
           "買う順番: RSの高い順": {"prio": "rs"},
           "買う順番: RSの高い順（AI半導体を先にしない）": {"prio": "rs_noai"},
@@ -1955,14 +1968,15 @@ def opt_stage(base, data, sim, days, ind, cache, part):
           "同じ業種1銘柄まで": {"cap": 1}, "同じ業種の上限なし": {"cap": 0},
           "2倍ETFを使わない": {"etf": "none"}, "2倍ETFをいつでも使う": {"etf": "all"},
           "損切り10%（日中の逆指値）": {"stop": 0.10}, "損切り12%（日中の逆指値）": {"stop": 0.12},
-          "ミネルヴィニを外す": {"rules": ("B", "C", "V")}, "急落の底を外す": {"rules": ("B", "M", "V")}}
+          "ミネルヴィニを外す": {"rules": ("B", "C", "V")}, "急落の底を外す": {"rules": ("B", "M", "V")},
+          "P（保有が−8%かつSOXが20日の最高値から−5%で手じまう）": {"rel8": True}}
     combos = [x for x in os.environ.get("OPT_COMBO", "").split(";") if x]
     forms = list(V1.items()) if part == 1 else [("今のルール（傾きの小さい順）", {})] + [
         (c, {k: v for nm in c.split("＋") for k, v in V1[nm].items()}) for c in combos]
 
     def make(spec):
         sp = {**BASE, **spec}
-        trs = [t for t in stock_trades(sp["stop"]) if t["rule"] in sp["rules"]]
+        trs = [t for t in stock_trades(sp["stop"], sp["rel8"]) if t["rule"] in sp["rules"]]
         if sp["streak"]:
             keep = {"all": ("B", "C", "M", "V"), "rev": ("B", "C"), "trend": ("M", "V")}[sp["streak"]]
             trs = [t for t in trs if t["first"] or t["rule"] not in keep]
