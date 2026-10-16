@@ -30,6 +30,7 @@ import backtest_minervini2 as bm2
 import backtest_oneil as bo
 import backtest_swing as bs
 import backtest_trend as bt
+import backtest_lib as _bl
 from backtest_lib import COSTS, DEFAULT_CACHE, gen_trades, load_prices, pct
 from backtest_regime import X_BELOW50
 
@@ -86,6 +87,8 @@ def main():
                 break
             pv[d] = sh * c[j]
             if j + 1 >= n:
+                if _bl.KEEP_OPEN:   # 直した数え方（BT_FIXED=1）: 最終日に持っている分は最終日の終値で数える
+                    break
                 return None
             if j - i0 >= bs.MAX_HOLD or (s["pctb"][j] is not None and s["pctb"][j] >= 1.0):
                 pend = True

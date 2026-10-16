@@ -29,6 +29,7 @@ import backtest_exit_signals as xs
 import backtest_minervini2 as bm2
 import backtest_rebuy as rb
 import backtest_swing as bs
+import backtest_lib as _bl
 from backtest_lib import COSTS, DEFAULT_CACHE, pct
 
 COST = COSTS[2]
@@ -70,7 +71,7 @@ def main():
             if j > i0 and s["bb_up"][j - 1] is not None and h[j] >= s["bb_up"][j - 1]:
                 return j, max(o[j], s["bb_up"][j - 1])
             if j + 1 >= n:
-                return None
+                return (j, c[j]) if _bl.KEEP_OPEN else None   # 直した数え方（BT_FIXED=1）: 最終日に持っている分は最終日の終値で数える
             if j - i0 >= bs.MAX_HOLD or (s["pctb"][j] is not None and s["pctb"][j] >= 1.0):
                 pend = True
             j += 1

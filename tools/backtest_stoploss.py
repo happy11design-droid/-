@@ -21,6 +21,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import backtest_combo2 as cb
 import backtest_minervini2 as bm2
 import backtest_swing as bs
+import backtest_lib as _bl
 from backtest_lib import COSTS, DEFAULT_CACHE, pct
 
 COST = COSTS[2]
@@ -86,6 +87,9 @@ def main():
                 break
             pv[d] = sh * c[j]
             if j + 1 >= n:
+                if _bl.KEEP_OPEN:   # 直した数え方（BT_FIXED=1）: 最終日に持っている分は最終日の終値で数える
+                    why = "保有中（最終日の終値）"
+                    break
                 return None
             if j - i0 >= bs.MAX_HOLD or (s["pctb"][j] is not None and s["pctb"][j] >= 1.0):
                 pend, why = True, "打ち切り" if j - i0 >= bs.MAX_HOLD else "条件"
