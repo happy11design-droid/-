@@ -2142,7 +2142,7 @@ def shock_stage(base, data, sim, days, ind, members, cache, watch87=False):
                     break
             p = sim(b, half=xc.c1)
             t = {"sym": b["sym"], "in": d_in, "out": max(p), "path": p, "rule": b["rule"], "ret": p[max(p)] - 1,
-                 "prio": (0 if ind.get(b["sym"]) in AI else 1, s50(b))}
+                 "prio": (0 if ind.get(b["sym"]) in AI else 1, -(s["rs"][b["i0"] - 1] or 0) if os.environ.get("PRIO") == "rs" else s50(b))}
             if b["sym"] in HAS and prev(d_in) in up:
                 fee = drag[b["sym"]] / 252
                 e, pr, pv = 1 - COST, 1 - COST, {}
@@ -2225,7 +2225,8 @@ def shock_stage(base, data, sim, days, ind, members, cache, watch87=False):
     w("2026-10-16、ユーザーの指示「ショックなどの通常と違う下落をいち早く察知し、ルールの損切りに達する前に早く損切りして被害を少なくするルールを作って。"
       "こんな状態で買い判定はおかしい。もっと様子を見て底を確認すべき」。"
       "土台は今のルール（" + ("監視銘柄を今の87銘柄に固定" if watch87 else "後知恵なしの監視銘柄で、AI・半導体・データセンター関連の業種を先に買う")
-      + "。4銘柄・1銘柄＝その日の資金÷4、同じ業種2銘柄まで、50日線の傾きが小さい順、案1、損切りは全部のルールで日中の逆指値15%）。"
+      + "。4銘柄・1銘柄＝その日の資金÷4、同じ業種2銘柄まで、" + ("**同じ日の候補はRSの高い順**" if os.environ.get("PRIO") == "rs" else "50日線の傾きが小さい順") + "、案1、損切りは全部のルールで日中の逆指値15%）。"
+      + ("**売買の数え方は直した形（--keep-open --overlap）**。" if bl.KEEP_OPEN and bl.OVERLAP else "売買の数え方は以前の形。")
       "判定はその日の引けで行い、翌取引日の寄り付きで手じまう・その日の買いを止める。2015年〜（株価は2026-10-15まで）、片道0.1%込み。乱数50通り×2組の中央値。\n")
     w("ショックの判定（2015年〜でその状態だった日の割合と、2026年10月に出た日）:\n")
     for k, v in D.items():
