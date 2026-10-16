@@ -26,6 +26,7 @@ import sys
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import backtest_lib as bl_
 from backtest_lib import DEFAULT_CACHE, load_prices
 
 TAX = 0.20315
@@ -66,7 +67,7 @@ def cmd_newtrades(a):
             if j > i0 and s["bb_up"][j - 1] is not None and h[j] >= s["bb_up"][j - 1]:
                 return j, max(o[j], s["bb_up"][j - 1])
             if j + 1 >= n:
-                return None
+                return (j, c[j]) if bl_.KEEP_OPEN else None   # 直した数え方（BT_FIXED=1）: 最終日に持っている分は最終日の終値で数える
             if j - i0 >= bs.MAX_HOLD or (s["pctb"][j] is not None and s["pctb"][j] >= 1.0):
                 pend = True
             j += 1
