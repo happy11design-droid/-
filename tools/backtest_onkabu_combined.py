@@ -31,7 +31,7 @@ from backtest_lib import DEFAULT_CACHE, load_prices
 TAX = 0.20315
 SELL_AT_2X = 1 / (2 - TAX)
 COST = 0.001
-NEW_PKL = os.path.join(DEFAULT_CACHE, "newtool_trades.pkl")
+NEW_PKL = os.path.join(DEFAULT_CACHE, "newtool_trades_fixed.pkl" if os.environ.get("BT_FIXED") == "1" else "newtool_trades.pkl")   # 直した数え方の売買の一覧は別のファイル
 
 
 # ---------- 新分析ツールの売買の一覧（backtest_retest.py から写した） ----------

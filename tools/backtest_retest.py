@@ -353,7 +353,7 @@ def main():
     r.add_argument("--recdir", default=None, help="parity: 毎朝の record.json を置いたディレクトリ")
     r.add_argument("--watch87", action="store_true", help="actual: 監視銘柄を後知恵なしの一覧ではなく 新分析ツール/テーマ監視銘柄.md の銘柄に固定する（後知恵あり。S&P500の構成銘柄かどうかは問わない）")
     a = ap.parse_args()
-    bl.KEEP_OPEN, bl.OVERLAP = a.keep_open, a.overlap
+    bl.KEEP_OPEN, bl.OVERLAP = a.keep_open or bl.KEEP_OPEN, a.overlap or bl.OVERLAP   # BT_FIXED=1 のときは指定がなくても直した数え方
     ctx = cb.setup(a.cache, with_parts=False)
     data, members, ind, days, G, end = (ctx[k] for k in ("data", "members", "ind", "days", "G", "end"))
     if a.watch87:   # 今のテーマ監視銘柄（87銘柄）だけにルールを当てる（2026-10-14 ユーザーの指示。後知恵あり）

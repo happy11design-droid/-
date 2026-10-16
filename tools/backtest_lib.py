@@ -183,8 +183,9 @@ def is_member(spans, day):
 
 
 
-KEEP_OPEN = False   # True: データの最終日までに手じまいが来ていない売買も、最終日の終値で数える（2026-10-16 の点検で追加。False が以前の数え方）
-OVERLAP = False     # True: 同じ銘柄の売買を持っている間の合図も数える（ポートフォリオ側で同じ銘柄の二重の保有は防ぐ。False が以前の数え方）
+# 環境変数 BT_FIXED=1 で、どのスクリプトも直した数え方（KEEP_OPEN・OVERLAP とも True）で動く（2026-10-16、全バックテストの計算し直し用）
+KEEP_OPEN = os.environ.get("BT_FIXED") == "1"   # True: データの最終日までに手じまいが来ていない売買も、最終日の終値で数える（2026-10-16 の点検で追加。False が以前の数え方）
+OVERLAP = os.environ.get("BT_FIXED") == "1"     # True: 同じ銘柄の売買を持っている間の合図も数える（ポートフォリオ側で同じ銘柄の二重の保有は防ぐ。False が以前の数え方）
 
 
 def gen_trades(data, members, entry, exit_fn, start, end, *, ok, fill="open", allow=None, max_hold=30,
