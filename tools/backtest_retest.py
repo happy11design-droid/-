@@ -1930,10 +1930,17 @@ def opt_stage(base, data, sim, days, ind, cache, part):
                 e = max(0.0, e * (1 + 2 * (t["path"][d] / pr - 1)) * (1 - fee))
                 pr = t["path"][d]
                 pv[d] = e
-            out.append({**t, "path": pv})
+            out.append({**t, "path": pv, "L": 2})
         return out
 
-    def port(trs, seed, lo, hi, slots=4, cap=2):
+    pos_ = {}
+    def open_gap(sym, d):
+        """その日の寄り付き÷前日の終値（乗り換えで売る保有の値段に使う）"""
+        s_ = data[sym]
+        k_ = pos_.setdefault(sym, {x: i for i, x in enumerate(s_["date"])}).get(d)
+        return s_["o"][k_] / s_["c"][k_ - 1] if k_ and s_["c"][k_ - 1] else 1.0
+
+    def port(trs, seed, lo, hi, slots=4, cap=2, swap=None):
         by_in = {}
         for t in trs:
             if lo <= t["in"] and t["out"] <= hi:
@@ -1944,6 +1951,7 @@ def opt_stage(base, data, sim, days, ind, cache, part):
         for d in dd:
             still = []
             for h in held:
+                h["vp"] = h["v"]
                 v = h["t"]["path"].get(d)
                 if v is not None:
                     h["v"] = v
@@ -1957,7 +1965,17 @@ def opt_stage(base, data, sim, days, ind, cache, part):
                 if any(h["t"]["sym"] == t["sym"] for h in held):
                     continue
                 if len(held) >= slots:
-                    break
+                    # 乗り換え（2026-10-16）: swap=(ルール, 含み益の下限, RSの下限)。枠が埋まっていて、その合図なら、前日の終値で含み益が下限を超える保有のうち
+                    # 一番大きいものを、その日の寄り付きで売って買う（2倍ETFの保有は寄り付きの値動きも2倍）
+                    if not (swap and t["rule"] in swap[0] and t["rs"] >= swap[2]):
+                        continue
+                    gain = [h for h in held if h["vp"] - 1 > swap[1]]
+                    if not gain:
+                        continue
+                    h = max(gain, key=lambda h: h["vp"])
+                    g_ = open_gap(h["t"]["sym"], d)
+                    cash += h["size"] * h["vp"] * max(0.0, 1 + h["t"].get("L", 1) * (g_ - 1)) * (1 - COST)
+                    held.remove(h)
                 if cap and sum(1 for h in held if ind.get(h["t"]["sym"]) == ind.get(t["sym"])) >= cap:
                     continue
                 size = min(eq / slots, cash)
@@ -1983,7 +2001,7 @@ def opt_stage(base, data, sim, days, ind, cache, part):
           "rev_rs": lambda t: (0 if t["ai"] else 1, 0 if t["rule"] in ("B", "C") else 1, -t["rs"]),
           "slope_big": lambda t: (0 if t["ai"] else 1, -t["s50"])}
     # 形: 名前 → 決まり（変えない項目は今のルール）
-    BASE = {"rules": ("B", "C", "M", "V"), "prio": "slope", "streak": None, "slots": 4, "cap": 2, "etf": "reg", "stop": STOP, "rel8": False}
+    BASE = {"rules": ("B", "C", "M", "V"), "prio": "slope", "streak": None, "slots": 4, "cap": 2, "etf": "reg", "stop": STOP, "rel8": False, "swap": None}
     V1 = {"今のルール（傾きの小さい順）": {},
           "買う順番: RSの高い順": {"prio": "rs"},
           "買う順番: RSの高い順（AI半導体を先にしない）": {"prio": "rs_noai"},
@@ -2002,7 +2020,11 @@ def opt_stage(base, data, sim, days, ind, cache, part):
           "P（保有が−8%かつSOXが20日の最高値から−5%で手じまう）": {"rel8": True},
           "P（保有が−6%かつSOXが−5%）": {"rel8": (0.06, 0.05)}, "P（保有が−10%かつSOXが−5%）": {"rel8": (0.10, 0.05)},
           "P（保有が−8%かつSOXが−3%）": {"rel8": (0.08, 0.03)}, "P（保有が−8%かつSOXが−7%）": {"rel8": (0.08, 0.07)},
-          "P（保有が−8%、SOXの条件なし）": {"rel8": (0.08, -1.0)}}
+          "P（保有が−8%、SOXの条件なし）": {"rel8": (0.08, -1.0)},
+          "乗り換え（急落の底の合図で、含み益のある保有を寄り付きで売る）": {"swap": (("C",), 0.0, 0)},
+          "乗り換え（急落の底の合図で、含み益+10%超の保有を寄り付きで売る）": {"swap": (("C",), 0.10, 0)},
+          "乗り換え（RS≧80の急落の底の合図で、含み益のある保有を寄り付きで売る）": {"swap": (("C",), 0.0, 80)},
+          "乗り換え（押し目・急落の底の合図で、含み益のある保有を寄り付きで売る）": {"swap": (("B", "C"), 0.0, 0)}}
     combos = [x for x in os.environ.get("OPT_COMBO", "").split(";") if x]
     forms = list(V1.items()) if part == 1 else [("今のルール（傾きの小さい順）", {})] + [
         (c, {k: v for nm in c.split("＋") for k, v in V1[nm].items()}) for c in combos]
@@ -2038,11 +2060,11 @@ def opt_stage(base, data, sim, days, ind, cache, part):
         for s0 in (5000, 7300):
             cg, mm, ii, oo, g3 = [], [], [], [], []
             for q in range(30):
-                g, m = port(trs, s0 + q, days[0], days[-1], sp["slots"], sp["cap"])
+                g, m = port(trs, s0 + q, days[0], days[-1], sp["slots"], sp["cap"], sp["swap"])
                 cg.append(g); mm.append(m)
-                ii.append(port(trs, s0 + q, days[0], is_hi, sp["slots"], sp["cap"])[0])
-                oo.append(port(trs, s0 + q, oos_lo, days[-1], sp["slots"], sp["cap"])[0])
-                g3.append(port(trs, s0 + q, l3, days[-1], sp["slots"], sp["cap"])[0])
+                ii.append(port(trs, s0 + q, days[0], is_hi, sp["slots"], sp["cap"], sp["swap"])[0])
+                oo.append(port(trs, s0 + q, oos_lo, days[-1], sp["slots"], sp["cap"], sp["swap"])[0])
+                g3.append(port(trs, s0 + q, l3, days[-1], sp["slots"], sp["cap"], sp["swap"])[0])
             res[(nm, s0)] = (med(cg), med(mm), med(ii), med(oo))
             b0 = res.get(("今のルール（傾きの小さい順）", s0))
             ok = b0 and nm != "今のルール（傾きの小さい順）" and med(ii) > b0[2] and med(oo) > b0[3]
@@ -2058,7 +2080,7 @@ def opt_stage(base, data, sim, days, ind, cache, part):
             row = []
             for y in years:
                 ds = [d for d in days if d[:4] == y]
-                xs = [port(trs, 5000 + q, ds[0], ds[-1], sp["slots"], sp["cap"]) for q in range(30)]
+                xs = [port(trs, 5000 + q, ds[0], ds[-1], sp["slots"], sp["cap"], sp["swap"]) for q in range(30)]
                 yrs_ = (dt.date.fromisoformat(ds[-1]) - dt.date.fromisoformat(ds[0])).days / 365.25
                 row.append(pct(med([(1 + g) ** yrs_ - 1 for g, _ in xs])))
             w(f"| {nm} | " + " | ".join(row) + " |")
