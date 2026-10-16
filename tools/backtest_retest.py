@@ -2015,6 +2015,21 @@ def opt_stage(base, data, sim, days, ind, cache, part):
             ok = b0 and nm != "今のルール（傾きの小さい順）" and med(ii) > b0[2] and med(oo) > b0[3]
             w(f"| {nm} | {'1組目' if s0 == 5000 else '2組目'} | {pct(med(cg))} | {pct(med(mm))} | {pct(med(ii))} | {pct(med(oo))} | {pct(med(g3))} | {'両方の期間で上' if ok else ''} |")
             print(nm, s0, file=sys.stderr)
+    if os.environ.get("OPT_YEARLY"):   # 年ごと（その年の初めに空の枠から始めた1年の増減。乱数30通りの中央値）
+        years = sorted({d[:4] for d in days})
+        w("\n## 年ごとの成績（その年の初めに空の枠から始めた1年の増減、乱数30通りの中央値）\n")
+        w("| 形 | " + " | ".join(years) + " |")
+        w("|---|" + "---|" * len(years))
+        for nm, spec in forms:
+            trs, sp = make(spec)
+            row = []
+            for y in years:
+                ds = [d for d in days if d[:4] == y]
+                xs = [port(trs, 5000 + q, ds[0], ds[-1], sp["slots"], sp["cap"]) for q in range(30)]
+                yrs_ = (dt.date.fromisoformat(ds[-1]) - dt.date.fromisoformat(ds[0])).days / 365.25
+                row.append(pct(med([(1 + g) ** yrs_ - 1 for g, _ in xs])))
+            w(f"| {nm} | " + " | ".join(row) + " |")
+            print("年ごと", nm, file=sys.stderr)
     good = [nm for nm, _ in forms[1:] if all(res[(nm, s)][2] > res[("今のルール（傾きの小さい順）", s)][2] and res[(nm, s)][3] > res[("今のルール（傾きの小さい順）", s)][3] for s in (5000, 7300))]
     w("\n2組とも、2015〜2021年・2022年〜の両方で今のルールを上回った形: " + ("、".join(good) or "なし") + "\n")
     w("- この結果はルールの条件どおりに機械的に計算したもので、Claudeによる個別銘柄の売買判断ではない。")
