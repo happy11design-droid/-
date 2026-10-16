@@ -347,7 +347,7 @@ def main():
     r.add_argument("--etf", default=None, help="etf2x: 2倍ETFにする銘柄（カンマ区切り）。省略すると backtest_2x.HAS_2X")
     r.add_argument("--drag", default=None, help="etf2x: 2倍ETFの目減り（年率）。数値なら全部同じ、'measured' なら 新分析ツール/2倍ETFの対応表.json の実測（ないものは0.12）")
     r.add_argument("--tag", default="", help="etf2x: 結果のファイル名と見出しに付ける名前（例: ムームー証券）")
-    r.add_argument("--stage", default="all", choices=("sell", "combo", "half", "filter", "rule", "stats", "dd", "robust", "earn", "realized", "etf2x", "etfrule", "weinstein", "rsi", "pivot", "exits", "pullback", "recover", "prio", "slope", "slope2", "slope3", "swap", "premium", "hot", "hotyear", "ideas", "theme", "halfadd", "replay", "stopcheck", "actual", "stopfreq", "themedrop", "crashstops", "ddsize", "shock", "parity", "all"))
+    r.add_argument("--stage", default="all", choices=("sell", "combo", "half", "filter", "rule", "stats", "dd", "robust", "earn", "realized", "etf2x", "etfrule", "weinstein", "rsi", "pivot", "exits", "pullback", "recover", "prio", "slope", "slope2", "slope3", "swap", "premium", "hot", "hotyear", "ideas", "theme", "halfadd", "replay", "stopcheck", "actual", "stopfreq", "themedrop", "crashstops", "ddsize", "shock", "parity", "audit", "all"))
     r.add_argument("--keep-open", action="store_true", help="データの最終日までに売りが来ていない売買も最終日の終値で数える（2026-10-16 の点検。以前は数えなかった）")
     r.add_argument("--overlap", action="store_true", help="同じ銘柄の売買を持っている間の合図も数える（2026-10-16 の点検。以前は数えなかった）")
     r.add_argument("--recdir", default=None, help="parity: 毎朝の record.json を置いたディレクトリ")
@@ -739,6 +739,8 @@ def main():
         open(OUTDIR + "銘柄の下落率で見送る・優先する.md", "w", encoding="utf-8").write("\n".join(L) + "\n")
         print("書き出し", file=sys.stderr)
         return
+    if a.stage == "audit":
+        return audit_stage(base, data, sim, days, ind, a.cache, "fixed" if (a.keep_open and a.overlap) else "old")
     if a.stage == "parity":
         fns = {"V": (ctx["v2o"], ctx["ok10"]), "C": (ctx["CR"](10), ctx["ok_rot"]), "M": (bm2.E_base(2.0), ctx["ok_rot"]), "B": (bs.O_method3, ctx["ok_rot"])}
         return parity_stage(base, data, days, a.recdir, fns, members)
@@ -1825,6 +1827,136 @@ def actual_stage(base, data, sim, port, days, ind, watch87, cache):
     print("書き出し", file=sys.stderr)
 
 
+def audit_stage(base, data, sim, days, ind, cache, flags):
+    """点検（2026-10-16）: 今まで採用した主な決まり（ルールの組み合わせ・買う順番・2倍ETFの使い方）が、直した数え方でも成り立つか。
+    flags: 売買の数え方（'old' = 以前、'fixed' = --keep-open --overlap）。結果は OUT_SUFFIX 付きの別ファイル"""
+    import json
+    from backtest_caps import THEME
+    DC = {"Electrical Equipment & Parts", "Specialty Industrial Machinery", "Engineering & Construction", "Building Products & Equipment",
+          "Utilities—Independent Power Producers", "REIT—Specialty"}
+    AI = set(THEME) | DC
+    sma_ = lambda c, j, n: sum(c[j - n + 1:j + 1]) / n
+    def s50(b):
+        c, j = data[b["sym"]]["c"], b["i0"] - 1
+        return sma_(c, j, 50) / sma_(c, j - 20, 50) - 1 if j >= 70 else 0.0
+    tab = json.load(open(os.path.join(os.path.dirname(OUTDIR.rstrip("/")), "2倍ETFの対応表.json"), encoding="utf-8"))
+    drag = {s: -x["drag"] for s, x in tab.items() if isinstance(x, dict) and "drag" in x}
+    HAS = {s for s, d in drag.items() if d < 0.15}
+    up, prev = etf_up_days(cache)
+    di = {d: k for k, d in enumerate(days)}
+    stock = []
+    for b in base:
+        s = data[b["sym"]]
+        floor = b["px"] * (1 - STOP)
+        if b["rule"] != "B":
+            for j in range(b["i0"], b["i1"]):
+                if s["l"][j] <= floor:
+                    b = {**b, "i1": j, "xp": min(s["o"][j] if j > b["i0"] else b["px"], floor)}
+                    break
+        p = sim(b, half=xc.c1)
+        stock.append({"sym": b["sym"], "in": s["date"][b["i0"]], "out": max(p), "path": p, "rule": b["rule"], "ret": p[max(p)] - 1,
+                      "s50": s50(b), "rs": s["rs"][b["i0"] - 1] or 0, "ai": ind.get(b["sym"]) in AI})
+    def lev(trs, mode):
+        out = []
+        for t in trs:
+            if t["sym"] not in HAS or mode == "none" or (mode == "reg" and prev(t["in"]) not in up):
+                out.append(t)
+                continue
+            fee = drag[t["sym"]] / 252
+            e, pr, pv = 1 - COST, 1 - COST, {}
+            for d in sorted(t["path"]):
+                e = max(0.0, e * (1 + 2 * (t["path"][d] / pr - 1)) * (1 - fee))
+                pr = t["path"][d]
+                pv[d] = e
+            out.append({**t, "path": pv})
+        return out
+
+    def port(trs, seed, lo, hi):
+        by_in = {}
+        for t in trs:
+            if lo <= t["in"] and t["out"] <= hi:
+                by_in.setdefault(t["in"], []).append(t)
+        rnd = random.Random(seed)
+        cash, held, peak, mdd, eq = 1.0, [], 1.0, 0.0, 1.0
+        dd = days[di[lo]:di[hi] + 1]
+        for d in dd:
+            still = []
+            for h in held:
+                v = h["t"]["path"].get(d)
+                if v is not None:
+                    h["v"] = v
+                if h["t"]["out"] == d:
+                    cash += h["size"] * h["v"]
+                else:
+                    still.append(h)
+            held = still
+            eq = cash + sum(h["size"] * h["v"] for h in held)
+            for t in sorted(by_in.get(d, []), key=lambda t: (t["prio"], rnd.random())):
+                if any(h["t"]["sym"] == t["sym"] for h in held):
+                    continue
+                if len(held) >= SLOTS:
+                    break
+                if sum(1 for h in held if ind.get(h["t"]["sym"]) == ind.get(t["sym"])) >= 2:
+                    continue
+                size = min(eq / SLOTS, cash)
+                if size <= 0:
+                    break
+                cash -= size
+                v0 = t["path"].get(d, 1.0)
+                if t["out"] == d:
+                    cash += size * v0
+                    continue
+                held.append({"t": t, "size": size, "v": v0})
+            eq = cash + sum(h["size"] * h["v"] for h in held)
+            peak = max(peak, eq)
+            mdd = max(mdd, 1 - eq / peak)
+        yrs = (dt.date.fromisoformat(dd[-1]) - dt.date.fromisoformat(dd[0])).days / 365.25
+        return eq ** (1 / yrs) - 1, mdd
+
+    is_hi = max(d for d in days if d <= cb.IS_END)
+    oos_lo = min(d for d in days if d >= cb.OOS_START)
+    med = lambda xs: sorted(xs)[len(xs) // 2]
+    yrs = (dt.date.fromisoformat(days[-1]) - dt.date.fromisoformat(days[0])).days / 365.25
+    P = {"slope": lambda t: (0 if t["ai"] else 1, t["s50"]), "random": lambda t: (0 if t["ai"] else 1, 0), "rs": lambda t: (0 if t["ai"] else 1, -t["rs"]),
+         "slope_all": lambda t: t["s50"]}
+    def mk(rules=("B", "C", "M", "V"), prio="slope", etf="reg"):
+        return lev([{**t, "prio": P[prio](t)} for t in stock if t["rule"] in rules], etf)
+    forms = [("今のルール（4つのルール・AI半導体を先に・傾きの小さい順・案1）", mk()),
+             ("押し目を外す", mk(("C", "M", "V"))), ("急落の底を外す", mk(("B", "M", "V"))),
+             ("ミネルヴィニを外す", mk(("B", "C", "V"))), ("新高値V2を外す", mk(("B", "C", "M"))),
+             ("押し目だけ", mk(("B",))), ("急落の底だけ", mk(("C",))), ("順張りだけ（ミネルヴィニ・新高値V2）", mk(("M", "V"))),
+             ("買う順番: ランダム（AI半導体は先）", mk(prio="random")), ("買う順番: RSの高い順（AI半導体は先）", mk(prio="rs")),
+             ("2倍ETFを使わない（株だけ）", mk(etf="none")), ("2倍ETFをいつでも使う（案1の前）", mk(etf="all"))]
+    L = []
+    w = L.append
+    lab = "以前の数え方" if flags == "old" else "直した数え方（--keep-open --overlap）"
+    w(f"---\ntype: backtest\ntitle: 点検 採用した決まりの確かめ直し（{lab}）\ncreated: {dt.date.today()}\nscript: tools/backtest_retest.py --stage audit{'' if flags == 'old' else ' --keep-open --overlap'}\n---\n")
+    w(f"# 点検: 今まで採用した決まりが、{lab}でも成り立つか\n")
+    w("2026-10-16、ユーザーの指示「今まで行った全てのバックテストで不備がないか確認して」。後知恵なしの監視銘柄、損切りは全部のルールで日中の逆指値15%、4銘柄・1銘柄＝その日の資金÷4、同じ業種2銘柄まで、2015年〜（株価は2026-10-15まで）、片道0.1%込み。乱数30通り×2組の中央値。\n")
+    w("## 1. ルールごとの合図の成績（株の値段、枠に入らなかった合図も含む）\n")
+    w("| ルール | 合図の数（年） | 勝率 | 1回平均 | 1回の中央値 |")
+    w("|---|---|---|---|---|")
+    for r, nm in (("B", "押し目"), ("C", "急落の底"), ("M", "ミネルヴィニ"), ("V", "新高値V2")):
+        xs = [t["ret"] for t in stock if t["rule"] == r]
+        if xs:
+            w(f"| {nm} | {len(xs)}（{len(xs) / yrs:.0f}） | {sum(x > 0 for x in xs) / len(xs) * 100:.0f}% | {pct(sum(xs) / len(xs))} | {pct(med(xs))} |")
+    w("\n## 2. 資金全体\n")
+    w("| 形 | 組 | 年率 | 含み損込みの最大下落率 | 2015〜2021年 | 2022年〜 |")
+    w("|---|---|---|---|---|---|")
+    for nm, trs in forms:
+        for s0 in (5000, 7300):
+            cg, mm, ii, oo = [], [], [], []
+            for q in range(30):
+                g, m = port(trs, s0 + q, days[0], days[-1])
+                cg.append(g); mm.append(m)
+                ii.append(port(trs, s0 + q, days[0], is_hi)[0]); oo.append(port(trs, s0 + q, oos_lo, days[-1])[0])
+            w(f"| {nm} | {'1組目' if s0 == 5000 else '2組目'} | {pct(med(cg))} | {pct(med(mm))} | {pct(med(ii))} | {pct(med(oo))} |")
+            print(nm, s0, file=sys.stderr)
+    w("\n- この結果はルールの条件どおりに機械的に計算したもので、Claudeによる個別銘柄の売買判断ではない。")
+    open(OUTDIR + "点検_採用した決まりの確かめ直し" + os.environ.get("OUT_SUFFIX", "") + ".md", "w", encoding="utf-8").write("\n".join(L) + "\n")
+    print("書き出し", file=sys.stderr)
+
+
 def parity_stage(base, data, days, recdir, fns, members):
     """バックテストの合図と、毎朝の実際のスキャン（record.json）の候補（パターンA）が一致するかの点検（2026-10-16 ユーザーの指示「全部のバックテストに不備がないか」）。
     --watch87 で、監視銘柄を今の87銘柄に固定して使う。バックテストは合図の日の翌取引日の寄り付きで買うので、合図の日＝買った日の前の取引日"""
@@ -1931,7 +2063,8 @@ def shock_stage(base, data, sim, days, ind, members, cache, watch87=False):
     N = len(days)
     def chg(x, i, k):
         return x[i] / x[i - k] - 1 if i >= k and x[i] and x[i - k] else 0.0
-    D = {"A": set(), "B": set(), "C": set(), "V": set()}
+    D = {"A": set(), "B": set(), "C": set(), "V": set(), "D": set()}
+    sdd20 = {}   # SOXの直近20取引日の最高値（終値）からの下落率
     for i in range(25, N):
         d = days[i]
         if chg(aidx, i, 3) <= -0.06:
@@ -1942,7 +2075,11 @@ def shock_stage(base, data, sim, days, ind, members, cache, watch87=False):
             D["C"].add(d)   # AI関連の銘柄の半分以上がその日に−3%以上（一斉の急落の日）
         if vix[i] and (vix[i] >= 25 or chg(vix, i, 5) >= 0.40):
             D["V"].add(d)   # VIXが25以上、または5日で+40%以上
-    DN = {"A": "AI関連の等金額平均が3日で−6%以上", "B": "SOXが3日で−7%以上", "C": "AI関連の半分以上が同じ日に−3%以上", "V": "VIXが25以上か5日で+40%以上"}
+        sdd20[d] = sox[i] / max(x for x in sox[i - 19:i + 1] if x) - 1 if sox[i] else 0.0
+        if sdd20[d] <= -0.07:
+            D["D"].add(d)   # SOXが直近20取引日の最高値から−7%以上（じわじわ下げる形もとらえる）
+    DN = {"A": "AI関連の等金額平均が3日で−6%以上", "B": "SOXが3日で−7%以上", "C": "AI関連の半分以上が同じ日に−3%以上", "V": "VIXが25以上か5日で+40%以上",
+          "D": "SOXが直近20取引日の最高値から−7%以上（じわじわ下げる形も入る）"}
 
     def blocked(shock, how):
         """ショックの日から、底の確認ができた日まで（その日を含まない）新しい買いを止める日の集合"""
@@ -1980,7 +2117,12 @@ def shock_stage(base, data, sim, days, ind, members, cache, watch87=False):
                     if s["l"][j] <= floor:
                         b = {**b, "i1": j, "xp": min(s["o"][j] if j > b["i0"] else b["px"], floor)}
                         break
-            if shock is not None and exit_mode:
+            if exit_mode == "rel8":   # 保有ごとの判定: 買値から−8%以下かつSOXが20日の最高値から−5%以上下の日の翌朝に手じまう（テーマと一緒に下げている保有だけ）
+                for j in range(b["i0"], b["i1"] - 1):
+                    if s["c"][j] <= b["px"] * 0.92 and sdd20.get(s["date"][j], 0.0) <= -0.05:
+                        b = {**b, "i1": j + 1, "xp": s["o"][j + 1]}
+                        break
+            elif shock is not None and exit_mode:
                 for j in range(b["i0"], b["i1"] - 1):
                     if s["date"][j] not in shock:
                         continue
@@ -2064,7 +2206,9 @@ def shock_stage(base, data, sim, days, ind, members, cache, watch87=False):
     yrs = (dt.date.fromisoformat(days[-1]) - dt.date.fromisoformat(days[0])).days / 365.25
     med = lambda xs: sorted(xs)[len(xs) // 2]
     forms = [("今のルール", None, None, None, None)]
-    for k in ("A", "B", "C", "V"):
+    forms += [("P: 保有が買値から−8%かつSOXが20日の最高値から−5%の日に、その保有を翌朝に手じまう", "D", "rel8", None, None),
+              ("P＋D: Pの手じまい＋SOXが10日線を上回るまで新しい買いを止める（Dの日から）", "D", "rel8", "sox10", None)]
+    for k in ("A", "B", "C", "V", "D"):
         forms += [(f"{k}: 損の出ている保有を翌朝に手じまう", k, "loser", None, None),
                   (f"{k}: 全部の保有を翌朝に手じまう", k, "all", None, None),
                   (f"{k}: 損切りを買値の7%下に引き上げる", k, "tight", None, None),
@@ -2094,7 +2238,7 @@ def shock_stage(base, data, sim, days, ind, members, cache, watch87=False):
     w("|---|---|---|---|---|---|---|---|---|---|")
     res = {}
     for nm, k, em, bh, _ in forms:
-        trs = build(D[k] if k else None, em, blocked(D[k], bh) if (k and bh) else None)
+        trs = build(D[k] if (k and em != "rel8") else None, em, blocked(D[k], bh) if (k and bh) else None)
         for s0 in (5000, 7300):
             cg, mm, ii, oo, g3, go, nl, wr = [], [], [], [], [], [], [], []
             for q in range(50):
