@@ -4202,7 +4202,7 @@ def etf2x_stage(build, port, ev, CUR, SEEDSETS, days, is_hi, oos_lo, only_set=No
     import json
     meas = {}
     if drag == "measured":
-        meas = {u: -x["drag"] for u, x in json.load(open(os.path.join(os.path.dirname(OUTDIR.rstrip("/")), "2倍ETFの対応表.json"), encoding="utf-8")).items()}
+        meas = {u: -x["drag"] for u, x in json.load(open(os.path.join(os.path.dirname(OUTDIR.rstrip("/")), "2倍ETFの対応表.json"), encoding="utf-8")).items() if isinstance(x, dict) and "drag" in x}   # _meta などを除く
     dflt = 0.01 if drag is None else 0.12 if drag == "measured" else float(drag)
     fee_of = lambda sym: meas.get(sym, dflt) / 252
 
@@ -4312,7 +4312,7 @@ def etf_rule_stage(build, port, ev, SEEDSETS, days, HAS):
     """2倍ETFを使う例外の決まり（ルールごと・目減りの大きいETFを除く）を比べる（2026-10-04）。目減りは実測（2倍ETFの対応表.json）"""
     import json
     tab = json.load(open(os.path.join(os.path.dirname(OUTDIR.rstrip("/")), "2倍ETFの対応表.json"), encoding="utf-8"))
-    drag = {u: -x["drag"] for u, x in tab.items()}
+    drag = {u: -x["drag"] for u, x in tab.items() if isinstance(x, dict) and "drag" in x}   # _meta などを除く
 
     def to2x(trs, ok):
         out = []
