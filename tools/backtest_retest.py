@@ -347,7 +347,7 @@ def main():
     r.add_argument("--etf", default=None, help="etf2x: 2倍ETFにする銘柄（カンマ区切り）。省略すると backtest_2x.HAS_2X")
     r.add_argument("--drag", default=None, help="etf2x: 2倍ETFの目減り（年率）。数値なら全部同じ、'measured' なら 新分析ツール/2倍ETFの対応表.json の実測（ないものは0.12）")
     r.add_argument("--tag", default="", help="etf2x: 結果のファイル名と見出しに付ける名前（例: ムームー証券）")
-    r.add_argument("--stage", default="all", choices=("sell", "combo", "half", "filter", "rule", "stats", "dd", "robust", "earn", "realized", "etf2x", "etfrule", "weinstein", "rsi", "pivot", "exits", "pullback", "recover", "prio", "slope", "slope2", "slope3", "swap", "premium", "hot", "hotyear", "ideas", "theme", "halfadd", "replay", "stopcheck", "actual", "stopfreq", "themedrop", "crashstops", "ddsize", "shock", "parity", "audit", "all"))
+    r.add_argument("--stage", default="all", choices=("sell", "combo", "half", "filter", "rule", "stats", "dd", "robust", "earn", "realized", "etf2x", "etfrule", "weinstein", "rsi", "pivot", "exits", "pullback", "recover", "prio", "slope", "slope2", "slope3", "swap", "premium", "hot", "hotyear", "ideas", "theme", "halfadd", "replay", "stopcheck", "actual", "stopfreq", "themedrop", "crashstops", "ddsize", "shock", "parity", "audit", "opt1", "opt2", "all"))
     r.add_argument("--keep-open", action="store_true", help="データの最終日までに売りが来ていない売買も最終日の終値で数える（2026-10-16 の点検。以前は数えなかった）")
     r.add_argument("--overlap", action="store_true", help="同じ銘柄の売買を持っている間の合図も数える（2026-10-16 の点検。以前は数えなかった）")
     r.add_argument("--recdir", default=None, help="parity: 毎朝の record.json を置いたディレクトリ")
@@ -739,6 +739,10 @@ def main():
         open(OUTDIR + "銘柄の下落率で見送る・優先する.md", "w", encoding="utf-8").write("\n".join(L) + "\n")
         print("書き出し", file=sys.stderr)
         return
+    if a.stage in ("opt1", "opt2"):
+        if not (a.keep_open and a.overlap):
+            sys.exit("opt は --keep-open --overlap で動かす")
+        return opt_stage(base, data, sim, days, ind, a.cache, int(a.stage[-1]))
     if a.stage == "audit":
         return audit_stage(base, data, sim, days, ind, a.cache, "fixed" if (a.keep_open and a.overlap) else "old")
     if a.stage == "parity":
@@ -1824,6 +1828,183 @@ def actual_stage(base, data, sim, port, days, ind, watch87, cache):
         open(path, "a", encoding="utf-8").write("\n".join(L) + "\n")
     else:
         open(path, "w", encoding="utf-8").write("\n".join(L) + "\n")
+    print("書き出し", file=sys.stderr)
+
+
+def opt_stage(base, data, sim, days, ind, cache, part):
+    """直した数え方（--keep-open --overlap）で、年率を上げる形を探す（2026-10-16 ユーザーの指示「年率が下がるならきちんと上がるルールを作って」）。
+    part: 1 = 決まりを1つずつ変える、2 = 良かった形の組み合わせ（環境変数 OPT_COMBO に形の名前をカンマ区切り）。
+    判定: 乱数30通り×2組の中央値で、2015〜2021年・2022年〜の両方とも、2組とも今のルールを上回ったら「上回った」"""
+    import json
+    from backtest_caps import THEME
+    DC = {"Electrical Equipment & Parts", "Specialty Industrial Machinery", "Engineering & Construction", "Building Products & Equipment",
+          "Utilities—Independent Power Producers", "REIT—Specialty"}
+    AI = set(THEME) | DC
+    sma_ = lambda c, j, n: sum(c[j - n + 1:j + 1]) / n
+    def s50(b):
+        c, j = data[b["sym"]]["c"], b["i0"] - 1
+        return sma_(c, j, 50) / sma_(c, j - 20, 50) - 1 if j >= 70 else 0.0
+    tab = json.load(open(os.path.join(os.path.dirname(OUTDIR.rstrip("/")), "2倍ETFの対応表.json"), encoding="utf-8"))
+    drag = {s: -x["drag"] for s, x in tab.items() if isinstance(x, dict) and "drag" in x}
+    HAS = {s for s, d in drag.items() if d < 0.15}
+    up, prev = etf_up_days(cache)
+    di = {d: k for k, d in enumerate(days)}
+    # 同じ銘柄・同じルールの合図が、前の取引日にも出ていたか（続けての合図）
+    sig = {(b["sym"], b["rule"], data[b["sym"]]["date"][b["i0"]]) for b in base}
+    def streak_first(b):
+        d = data[b["sym"]]["date"][b["i0"]]
+        k = di.get(d)
+        return not (k and (b["sym"], b["rule"], days[k - 1]) in sig)
+
+    cache_tr = {}
+    def stock_trades(stop):
+        if stop in cache_tr:
+            return cache_tr[stop]
+        out = []
+        for b in base:
+            s = data[b["sym"]]
+            floor = b["px"] * (1 - stop)
+            if b["rule"] != "B" or stop < STOP:
+                for j in range(b["i0"], b["i1"]):
+                    if s["l"][j] <= floor:
+                        b = {**b, "i1": j, "xp": min(s["o"][j] if j > b["i0"] else b["px"], floor)}
+                        break
+            p = sim(b, half=xc.c1)
+            out.append({"sym": b["sym"], "in": s["date"][b["i0"]], "out": max(p), "path": p, "rule": b["rule"], "ret": p[max(p)] - 1,
+                        "s50": s50(b), "rs": s["rs"][b["i0"] - 1] or 0, "ai": ind.get(b["sym"]) in AI, "first": streak_first(b)})
+        cache_tr[stop] = out
+        return out
+
+    def lev(trs, mode):
+        out = []
+        for t in trs:
+            if t["sym"] not in HAS or mode == "none" or (mode == "reg" and prev(t["in"]) not in up):
+                out.append(t)
+                continue
+            fee = drag[t["sym"]] / 252
+            e, pr, pv = 1 - COST, 1 - COST, {}
+            for d in sorted(t["path"]):
+                e = max(0.0, e * (1 + 2 * (t["path"][d] / pr - 1)) * (1 - fee))
+                pr = t["path"][d]
+                pv[d] = e
+            out.append({**t, "path": pv})
+        return out
+
+    def port(trs, seed, lo, hi, slots=4, cap=2):
+        by_in = {}
+        for t in trs:
+            if lo <= t["in"] and t["out"] <= hi:
+                by_in.setdefault(t["in"], []).append(t)
+        rnd = random.Random(seed)
+        cash, held, peak, mdd, eq = 1.0, [], 1.0, 0.0, 1.0
+        dd = days[di[lo]:di[hi] + 1]
+        for d in dd:
+            still = []
+            for h in held:
+                v = h["t"]["path"].get(d)
+                if v is not None:
+                    h["v"] = v
+                if h["t"]["out"] == d:
+                    cash += h["size"] * h["v"]
+                else:
+                    still.append(h)
+            held = still
+            eq = cash + sum(h["size"] * h["v"] for h in held)
+            for t in sorted(by_in.get(d, []), key=lambda t: (t["prio"], rnd.random())):
+                if any(h["t"]["sym"] == t["sym"] for h in held):
+                    continue
+                if len(held) >= slots:
+                    break
+                if cap and sum(1 for h in held if ind.get(h["t"]["sym"]) == ind.get(t["sym"])) >= cap:
+                    continue
+                size = min(eq / slots, cash)
+                if size <= 0:
+                    break
+                cash -= size
+                v0 = t["path"].get(d, 1.0)
+                if t["out"] == d:
+                    cash += size * v0
+                    continue
+                held.append({"t": t, "size": size, "v": v0})
+            eq = cash + sum(h["size"] * h["v"] for h in held)
+            peak = max(peak, eq)
+            mdd = max(mdd, 1 - eq / peak)
+        yrs = (dt.date.fromisoformat(dd[-1]) - dt.date.fromisoformat(dd[0])).days / 365.25
+        return eq ** (1 / yrs) - 1, mdd
+
+    PR = {"slope": lambda t: (0 if t["ai"] else 1, t["s50"]),
+          "rs": lambda t: (0 if t["ai"] else 1, -t["rs"]),
+          "rs_noai": lambda t: -t["rs"],
+          "first_rs": lambda t: (0 if t["ai"] else 1, 0 if t["first"] else 1, -t["rs"]),
+          "trend_rs": lambda t: (0 if t["ai"] else 1, 0 if t["rule"] in ("M", "V") else 1, -t["rs"]),
+          "rev_rs": lambda t: (0 if t["ai"] else 1, 0 if t["rule"] in ("B", "C") else 1, -t["rs"]),
+          "slope_big": lambda t: (0 if t["ai"] else 1, -t["s50"])}
+    # 形: 名前 → 決まり（変えない項目は今のルール）
+    BASE = {"rules": ("B", "C", "M", "V"), "prio": "slope", "streak": None, "slots": 4, "cap": 2, "etf": "reg", "stop": STOP}
+    V1 = {"今のルール（傾きの小さい順）": {},
+          "買う順番: RSの高い順": {"prio": "rs"},
+          "買う順番: RSの高い順（AI半導体を先にしない）": {"prio": "rs_noai"},
+          "買う順番: 続けての合図より初日の合図を先に、その中はRSの高い順": {"prio": "first_rs"},
+          "買う順番: 順張りを先に、その中はRSの高い順": {"prio": "trend_rs"},
+          "買う順番: 逆張りを先に、その中はRSの高い順": {"prio": "rev_rs"},
+          "買う順番: 傾きの大きい順": {"prio": "slope_big"},
+          "続けての合図は買わない（全部のルール、初日だけ）": {"streak": "all"},
+          "続けての合図は買わない（押し目・急落の底だけ初日だけ）": {"streak": "rev"},
+          "続けての合図は買わない（順張りだけ初日だけ）": {"streak": "trend"},
+          "銘柄数3": {"slots": 3}, "銘柄数5": {"slots": 5}, "銘柄数6": {"slots": 6},
+          "同じ業種1銘柄まで": {"cap": 1}, "同じ業種の上限なし": {"cap": 0},
+          "2倍ETFを使わない": {"etf": "none"}, "2倍ETFをいつでも使う": {"etf": "all"},
+          "損切り10%（日中の逆指値）": {"stop": 0.10}, "損切り12%（日中の逆指値）": {"stop": 0.12},
+          "ミネルヴィニを外す": {"rules": ("B", "C", "V")}, "急落の底を外す": {"rules": ("B", "M", "V")}}
+    combos = [x for x in os.environ.get("OPT_COMBO", "").split(";") if x]
+    forms = list(V1.items()) if part == 1 else [("今のルール（傾きの小さい順）", {})] + [
+        (c, {k: v for nm in c.split("＋") for k, v in V1[nm].items()}) for c in combos]
+
+    def make(spec):
+        sp = {**BASE, **spec}
+        trs = [t for t in stock_trades(sp["stop"]) if t["rule"] in sp["rules"]]
+        if sp["streak"]:
+            keep = {"all": ("B", "C", "M", "V"), "rev": ("B", "C"), "trend": ("M", "V")}[sp["streak"]]
+            trs = [t for t in trs if t["first"] or t["rule"] not in keep]
+        trs = [{**t, "prio": PR[sp["prio"]](t)} for t in trs]
+        return lev(trs, sp["etf"]), sp
+
+    last3 = (dt.date.fromisoformat(days[-1]) - dt.timedelta(days=365 * 3)).isoformat()
+    l3 = min(d for d in days if d >= last3)
+    is_hi = max(d for d in days if d <= cb.IS_END)
+    oos_lo = min(d for d in days if d >= cb.OOS_START)
+    med = lambda xs: sorted(xs)[len(xs) // 2]
+    L = []
+    w = L.append
+    w(f"---\ntype: backtest\ntitle: 直した数え方で年率を上げる形を探す（{part}）\ncreated: {dt.date.today()}\nscript: tools/backtest_retest.py --stage opt{part} --keep-open --overlap\n---\n")
+    w(f"# 直した数え方で、年率を上げる形を探す（{'決まりを1つずつ変える' if part == 1 else '良かった形の組み合わせ'}）\n")
+    w("2026-10-16、ユーザーの指示「時間は掛かっても良いので正確に調査して。年率が下がるならきちんと上がるルールを作って」。"
+      "**売買の数え方は直した形**（同じ銘柄に続けて出る合図も数える・最終日に持っている売買も最終日の終値で数える）。"
+      "今のルール: 後知恵なしの監視銘柄でAI・半導体・データセンター関連の業種を先に買う、4つのルール、4銘柄・1銘柄＝その日の資金÷4、同じ業種2銘柄まで、"
+      "同じ日の候補は50日線の傾きが小さい順、案1、損切りは全部のルールで日中の逆指値15%。2015年〜（株価は2026-10-15まで）、片道0.1%込み。乱数30通り×2組の中央値。"
+      "「続けての合図」＝同じ銘柄・同じルールの合図が前の取引日にも出ていた合図（毎朝のスキャンでは前日の record.json と比べれば分かる）。\n")
+    w("| 形 | 組 | 年率 | 含み損込みの最大下落率 | 2015〜2021年 | 2022年〜 | 直近3年 | 判定 |")
+    w("|---|---|---|---|---|---|---|---|")
+    res = {}
+    for nm, spec in forms:
+        trs, sp = make(spec)
+        for s0 in (5000, 7300):
+            cg, mm, ii, oo, g3 = [], [], [], [], []
+            for q in range(30):
+                g, m = port(trs, s0 + q, days[0], days[-1], sp["slots"], sp["cap"])
+                cg.append(g); mm.append(m)
+                ii.append(port(trs, s0 + q, days[0], is_hi, sp["slots"], sp["cap"])[0])
+                oo.append(port(trs, s0 + q, oos_lo, days[-1], sp["slots"], sp["cap"])[0])
+                g3.append(port(trs, s0 + q, l3, days[-1], sp["slots"], sp["cap"])[0])
+            res[(nm, s0)] = (med(cg), med(mm), med(ii), med(oo))
+            b0 = res.get(("今のルール（傾きの小さい順）", s0))
+            ok = b0 and nm != "今のルール（傾きの小さい順）" and med(ii) > b0[2] and med(oo) > b0[3]
+            w(f"| {nm} | {'1組目' if s0 == 5000 else '2組目'} | {pct(med(cg))} | {pct(med(mm))} | {pct(med(ii))} | {pct(med(oo))} | {pct(med(g3))} | {'両方の期間で上' if ok else ''} |")
+            print(nm, s0, file=sys.stderr)
+    good = [nm for nm, _ in forms[1:] if all(res[(nm, s)][2] > res[("今のルール（傾きの小さい順）", s)][2] and res[(nm, s)][3] > res[("今のルール（傾きの小さい順）", s)][3] for s in (5000, 7300))]
+    w("\n2組とも、2015〜2021年・2022年〜の両方で今のルールを上回った形: " + ("、".join(good) or "なし") + "\n")
+    w("- この結果はルールの条件どおりに機械的に計算したもので、Claudeによる個別銘柄の売買判断ではない。")
+    open(OUTDIR + f"直した数え方で年率を上げる形を探す_{part}" + os.environ.get("OUT_SUFFIX", "") + ".md", "w", encoding="utf-8").write("\n".join(L) + "\n")
     print("書き出し", file=sys.stderr)
 
 
