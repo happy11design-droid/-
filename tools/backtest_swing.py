@@ -16,6 +16,7 @@
   - 同じ日に仕掛けの逆指値と損切りの両方に届いた場合は、損切りも約定したとみなす（不利な側に倒す）。
 損切りは本のルールがあればそれを使い、どの戦略も仕掛け値の15%下（ユーザー決定）を上限とする。建玉はリスク2%・損切り15%から逆算（資金の13.3%、7銘柄まで）。
 """
+import backtest_lib as bl_
 import argparse
 import datetime as dt
 import operator
@@ -257,10 +258,14 @@ def simulate(data, members, order, exit_fn, start, end, allow=None, trail=None, 
                     j = min(e + max_hold, n - 1)
                     out_px = c[j]
             if out_px is None:
-                break  # データ終端で手じまいが未確定
+                if not bl_.KEEP_OPEN:
+                    break  # データ終端で手じまいが未確定（以前の数え方）
+                j, out_px, why = n - 1, c[n - 1], "保有中（最終日の終値）"   # 2026-10-16 の点検で追加
             trades.append({"sym": sym, "in": dates[e], "out": dates[j], "px": px, "ret": out_px / px - 1,
                            "days": j - e, "rank": od["rank"], "why": why})
-            i = j + 1
+            if why.startswith("保有中") and not bl_.OVERLAP:
+                break
+            i = (i + 1) if bl_.OVERLAP else (j + 1)
     trades.sort(key=lambda t: (t["out"], t["sym"]))
     return trades
 

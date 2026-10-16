@@ -183,8 +183,12 @@ def is_member(spans, day):
 
 
 
+KEEP_OPEN = False   # True: データの最終日までに手じまいが来ていない売買も、最終日の終値で数える（2026-10-16 の点検で追加。False が以前の数え方）
+OVERLAP = False     # True: 同じ銘柄の売買を持っている間の合図も数える（ポートフォリオ側で同じ銘柄の二重の保有は防ぐ。False が以前の数え方）
+
+
 def gen_trades(data, members, entry, exit_fn, start, end, *, ok, fill="open", allow=None, max_hold=30,
-               stop_pct=None, time_stop=None, target=None, breakeven_at=None):
+               stop_pct=None, time_stop=None, target=None, breakeven_at=None, keep_open=None, overlap=None):
     """シグナルから売買を再現する。
     entry(i, s) -> シグナルなら並べ替え用の値（小さいほど優先）、なければNone
     exit_fn(j, s, k, px) -> k日目（仕掛けからの経過取引日）の引けで手じまい条件が出たか
@@ -232,10 +236,19 @@ def gen_trades(data, members, entry, exit_fn, start, end, *, ok, fill="open", al
                 if breakeven_at is not None and c >= px * (1 + breakeven_at):
                     floor = max(floor or 0, px)
             if reason == "データ終端":
-                break  # 手じまいが未確定のトレードは数えない
+                if not (KEEP_OPEN if keep_open is None else keep_open):
+                    break  # 手じまいが未確定のトレードは数えない（以前の数え方）
+                if i + lag > n - 1:
+                    break
+                trades.append({"sym": sym, "in": s["date"][i + lag], "out": s["date"][n - 1], "px": px,
+                               "ret": s["c"][n - 1] / px - 1, "days": n - 1 - i, "rank": rank, "why": "保有中（最終日の終値）"})
+                if not (OVERLAP if overlap is None else overlap):
+                    break
+                i += 1
+                continue
             trades.append({"sym": sym, "in": s["date"][i + lag], "out": s["date"][j + lag], "px": px,
                            "ret": price(s, j + lag) / px - 1, "days": j - i, "rank": rank, "why": reason})
-            i = j + lag + 1  # 同じ銘柄は手じまい後に次のシグナルを探す
+            i = (i + 1) if (OVERLAP if overlap is None else overlap) else (j + lag + 1)  # 以前の数え方: 同じ銘柄は手じまい後に次のシグナルを探す
     trades.sort(key=lambda t: (t["out"], t["sym"]))
     return trades
 
