@@ -1905,9 +1905,62 @@ def opt_stage(base, data, sim, days, ind, cache, part):
         sox.append(last)
     sdd20 = {d: (sox[i] / max(x for x in sox[max(0, i - 19):i + 1] if x) - 1) if sox[i] else 0.0 for i, d in enumerate(days)}
     sdd60 = {d: (sox[i] / max(x for x in sox[max(0, i - 59):i + 1] if x) - 1) if sox[i] else 0.0 for i, d in enumerate(days)}
+
+    # 信用の材料（2026-10-17 ユーザーの指示「テストして」）: 社債ETFの値動きで信用の悪化を判定する。FREDのハイイールド債の利回り差は2023-10より前がないので、
+    # 同じくらいの年限の国債ETFとの比（金利の動きを打ち消す）を使う。HYG/IEI＝ハイイールド債、LQD/IEF＝投資適格債、BKLN＝ローン（どれも配当調整済み）
+    def _ser(sym):
+        g = load_prices(cache, sym)
+        m = dict(zip(g["date"], g["c"])) if g else {}
+        out, last = [], None
+        for d in days:
+            last = m.get(d, last)
+            out.append(last)
+        return out
+    _h, _iei, _lq, _ief, _bk = (_ser(x) for x in ("HYG", "IEI", "LQD", "IEF", "BKLN"))
+    hy = [a / b if a and b else None for a, b in zip(_h, _iei)]
+    ig = [a / b if a and b else None for a, b in zip(_lq, _ief)]
+    def _dd(x, i, n):
+        w_ = [v for v in x[max(0, i - n + 1):i + 1] if v]
+        return x[i] / max(w_) - 1 if x[i] and w_ else 0.0
+    def _ch(x, i, n):
+        return x[i] / x[i - n] - 1 if i >= n and x[i] and x[i - n] else 0.0
+    KD = {k: set() for k in ("K1", "K2", "K3", "K4", "K5")}
+    for i, d in enumerate(days):
+        if i < 60:
+            continue
+        if _ch(hy, i, 5) <= -0.015:
+            KD["K1"].add(d)
+        if _dd(hy, i, 20) <= -0.02:
+            KD["K2"].add(d)
+        if _dd(ig, i, 60) <= -0.02:
+            KD["K3"].add(d)
+        if sdd20[d] <= -0.07 and _dd(hy, i, 20) <= -0.01:
+            KD["K4"].add(d)
+        if _dd(_bk, i, 20) <= -0.015:
+            KD["K5"].add(d)
+    KN = {"K1": "ハイイールド債の急な下げ（HYG/IEI が5取引日で−1.5%以上）",
+          "K2": "ハイイールド債のじわじわ下げ（HYG/IEI が直近20取引日の最高値から−2%以上）",
+          "K3": "投資適格債も下げる（LQD/IEF が直近60取引日の最高値から−2%以上）",
+          "K4": "株と社債が一緒に下げる（SOXが直近20取引日の最高値から−7%以上、かつ HYG/IEI が直近20取引日の最高値から−1%以上）",
+          "K5": "ローンの下げ（BKLN が直近20取引日の最高値から−1.5%以上）"}
+    def k_until(k):
+        """判定の日から、HYG/IEI の終値が10日線を上回る日（判定の日でない）まで（その日を含まない）の日の集合"""
+        out, on = set(), False
+        for i, d in enumerate(days):
+            if d in KD[k]:
+                on = True
+            if on:
+                w_ = [v for v in hy[max(0, i - 9):i + 1] if v]
+                if d not in KD[k] and hy[i] and len(w_) == 10 and hy[i] > sum(w_) / 10:
+                    on = False
+                else:
+                    out.add(d)
+        return out
+    KU = {k: k_until(k) for k in KD}
+
     cache_tr = {}
-    def stock_trades(stop, rel8=False, xsell=None, close_stop=False, hotwait=False, c10=False):
-        key_ = (stop, rel8, xsell, close_stop, hotwait, c10)
+    def stock_trades(stop, rel8=False, xsell=None, close_stop=False, hotwait=False, c10=False, kx=None):
+        key_ = (stop, rel8, xsell, close_stop, hotwait, c10, kx)
         if key_ in cache_tr:
             return cache_tr[key_]
         out = []
@@ -1945,6 +1998,15 @@ def opt_stage(base, data, sim, days, ind, cache, part):
                     if s["c"][j] <= b["px"] * (1 - lv) and sdd20.get(s["date"][j], 0.0) <= -sv:
                         b = {**b, "i1": j + 1, "xp": s["o"][j + 1]}
                         break
+            if kx:   # 信用の悪化の日（引けで判定）に、翌朝の寄り付きで手じまう。kx=(判定, "loser" 損の出ている保有 / "rel8" 買値から−8%以下の保有 / "all" 全部)
+                kk, km = kx
+                for j in range(b["i0"], b["i1"] - 1):
+                    if s["date"][j] not in KD[kk]:
+                        continue
+                    if (km == "loser" and s["c"][j] >= b["px"]) or (km == "rel8" and s["c"][j] > b["px"] * 0.92):
+                        continue
+                    b = {**b, "i1": j + 1, "xp": s["o"][j + 1]}
+                    break
             # xsell: 順張りの保有に足す売りの合図（2026-10-16、直した数え方の計算し直しで上回ったもの）。翌日の寄り付きで全部売る
             import backtest_exit_signals as _xsig   # opt_stage の中では xs を年ごとの表の変数にも使うので、別の名前で
             if xsell == "macd":
@@ -1957,7 +2019,7 @@ def opt_stage(base, data, sim, days, ind, cache, part):
             sd = days[di[s["date"][b["i0"]]] - 1] if di.get(s["date"][b["i0"]]) else s["date"][b["i0"]]
             out.append({"sym": b["sym"], "in": s["date"][b["i0"]], "out": max(p), "path": p, "rule": b["rule"], "ret": p[max(p)] - 1,
                         "s50": s50(b), "rs": s["rs"][b["i0"] - 1] or 0, "ai": ind.get(b["sym"]) in AI, "first": streak_first(b),
-                        "s2": sdd60.get(sd, 0.0) <= -0.10})
+                        "s2": sdd60.get(sd, 0.0) <= -0.10, "sd": sd})
         cache_tr[key_] = out
         return out
 
@@ -2044,7 +2106,7 @@ def opt_stage(base, data, sim, days, ind, cache, part):
           "rev_rs": lambda t: (0 if t["ai"] else 1, 0 if t["rule"] in ("B", "C") else 1, -t["rs"]),
           "slope_big": lambda t: (0 if t["ai"] else 1, -t["s50"])}
     # 形: 名前 → 決まり（変えない項目は今のルール）
-    BASE = {"rules": ("B", "C", "M", "V"), "prio": "slope", "streak": None, "slots": 4, "cap": 2, "etf": "reg", "stop": STOP, "rel8": False, "swap": None, "xsell": None, "s2": False, "close_stop": False, "hotwait": False, "c10": False}
+    BASE = {"rules": ("B", "C", "M", "V"), "prio": "slope", "streak": None, "slots": 4, "cap": 2, "etf": "reg", "stop": STOP, "rel8": False, "swap": None, "xsell": None, "s2": False, "close_stop": False, "hotwait": False, "c10": False, "kx": None, "kb": None}
     V1 = {"今のルール（傾きの小さい順）": {},
           "買う順番: RSの高い順": {"prio": "rs"},
           "買う順番: RSの高い順（AI半導体を先にしない）": {"prio": "rs_noai"},
@@ -2074,13 +2136,24 @@ def opt_stage(base, data, sim, days, ind, cache, part):
           "出来高2倍の大陰線で順張りも売る": {"xsell": "bear"},
           "急落の底の手じまいを10日線にする": {"c10": True},
           "過熱した順張りの合図は2日待って買う": {"hotwait": True}}
+    for k_ in KD:   # 信用の材料（2026-10-17）
+        V1[f"信用{k_}: 損の出ている保有を翌朝に売る"] = {"kx": (k_, "loser")}
+        V1[f"信用{k_}: 買値から−8%以下の保有を翌朝に売る"] = {"kx": (k_, "rel8")}
+        V1[f"信用{k_}: 全部の保有を翌朝に売る"] = {"kx": (k_, "all")}
+        V1[f"信用{k_}: その日は順張りの新しい買いを止める"] = {"kb": (k_, "trend")}
+        V1[f"信用{k_}: その日は全部の新しい買いを止める"] = {"kb": (k_, "all")}
+        V1[f"信用{k_}: ハイイールド債が10日線を上回るまで全部の新しい買いを止める"] = {"kb": (k_, "until")}
     combos = [x for x in os.environ.get("OPT_COMBO", "").split(";") if x]
     forms = list(V1.items()) if part == 1 else [("今のルール（傾きの小さい順）", {})] + [
         (c, {k: v for nm in c.split("＋") for k, v in V1[nm].items()}) for c in combos]
 
     def make(spec):
         sp = {**BASE, **spec}
-        trs = [t for t in stock_trades(sp["stop"], sp["rel8"], sp["xsell"], sp["close_stop"], sp["hotwait"], sp["c10"]) if t["rule"] in sp["rules"]]
+        trs = [t for t in stock_trades(sp["stop"], sp["rel8"], sp["xsell"], sp["close_stop"], sp["hotwait"], sp["c10"], sp["kx"]) if t["rule"] in sp["rules"]]
+        if sp["kb"]:   # 信用の悪化の日（合図の日の引けで判定）は新しい買いを止める
+            kk, km = sp["kb"]
+            stopd = KU[kk] if km == "until" else KD[kk]
+            trs = [t for t in trs if not (t["sd"] in stopd and (km != "trend" or t["rule"] in ("M", "V")))]
         if sp["s2"]:   # S2（SOXが直近60取引日の最高値から−10%以上下）の合図の日は、順張り（M・V）を買わない
             trs = [t for t in trs if not (t["s2"] and t["rule"] in ("M", "V"))]
         if sp["streak"]:
@@ -2103,23 +2176,40 @@ def opt_stage(base, data, sim, days, ind, cache, part):
       "今のルール: 後知恵なしの監視銘柄でAI・半導体・データセンター関連の業種を先に買う、4つのルール、4銘柄・1銘柄＝その日の資金÷4、同じ業種2銘柄まで、"
       "同じ日の候補は50日線の傾きが小さい順、案1、損切りは全部のルールで日中の逆指値15%。2015年〜（株価は2026-10-15まで）、片道0.1%込み。乱数30通り×2組の中央値。"
       "「続けての合図」＝同じ銘柄・同じルールの合図が前の取引日にも出ていた合図（毎朝のスキャンでは前日の record.json と比べれば分かる）。\n")
-    w("| 形 | 組 | 年率 | 含み損込みの最大下落率 | 2015〜2021年 | 2022年〜 | 直近3年 | 判定 |")
-    w("|---|---|---|---|---|---|---|---|")
+    REF = os.environ.get("OPT_REF", "今のルール（傾きの小さい順）")   # 「判定」で比べる相手の形（2026-10-17 から今のルールは RSの高い順）
+    SEP = os.environ.get("OPT_SEP") == "1"   # 2026-09-01 に空の枠から始めた 10/15 までの増減の列
+    sep_lo = min(d for d in days if d >= "2026-09-01")
+    if any("kx" in sp_ and sp_["kx"] or "kb" in sp_ and sp_["kb"] for _, sp_ in forms):
+        w("信用の悪化の判定（その日の引けで判定し、翌取引日の寄り付きで手じまう・その日の合図では買わない）。FREDのハイイールド債の利回り差は2023-10より前がないため、"
+          "社債ETFと同じくらいの年限の国債ETFの比（金利の動きを打ち消す。配当調整済み）を使った。2015年〜でその状態だった日の割合と、2026-09-28以降に出た日:\n")
+        for k_, v_ in KD.items():
+            n_ = sum(1 for d in days if d >= "2015-01-01")
+            octd = sorted(d for d in v_ if d >= "2026-09-28")
+            w(f"- {k_}: {KN[k_]}（{sum(1 for d in v_ if d >= '2015-01-01') / n_ * 100:.1f}%の日）。2026-09-28以降: {'、'.join(octd) or 'なし'}")
+        w("\n対応: 損の出ている保有＝判定の日の終値が買値より下の保有を翌朝に売る／買値から−8%以下の保有を翌朝に売る（Pの SOX の条件を信用の判定に替えた形）／全部の保有を翌朝に売る／"
+          "その日（合図の日）が判定の日なら順張り（ミネルヴィニ・新高値V2）だけ、または全部の新しい買いを止める／判定の日から、HYG/IEI の終値が10日線を上回るまで全部の新しい買いを止める。\n")
+    w(f"「判定」は、乱数の組ごとに 2015〜2021年・2022年〜 の両方で「{REF}」を上回ったか。\n")
+    w("| 形 | 組 | 年率 | 含み損込みの最大下落率 | 2015〜2021年 | 2022年〜 | 直近3年 |" + (" 2026年9月〜（10/15まで） |" if SEP else "") + " 判定 |")
+    w("|---|---|---|---|---|---|---|" + ("---|" if SEP else "") + "---|")
     res = {}
     for nm, spec in forms:
         trs, sp = make(spec)
         for s0 in (5000, 7300):
-            cg, mm, ii, oo, g3 = [], [], [], [], []
+            cg, mm, ii, oo, g3, gs = [], [], [], [], [], []
+            sy = (dt.date.fromisoformat(days[-1]) - dt.date.fromisoformat(sep_lo)).days / 365.25
             for q in range(30):
                 g, m = port(trs, s0 + q, days[0], days[-1], sp["slots"], sp["cap"], sp["swap"])
                 cg.append(g); mm.append(m)
                 ii.append(port(trs, s0 + q, days[0], is_hi, sp["slots"], sp["cap"], sp["swap"])[0])
                 oo.append(port(trs, s0 + q, oos_lo, days[-1], sp["slots"], sp["cap"], sp["swap"])[0])
                 g3.append(port(trs, s0 + q, l3, days[-1], sp["slots"], sp["cap"], sp["swap"])[0])
+                if SEP:
+                    gs.append((1 + port(trs, s0 + q, sep_lo, days[-1], sp["slots"], sp["cap"], sp["swap"])[0]) ** sy - 1)
             res[(nm, s0)] = (med(cg), med(mm), med(ii), med(oo))
-            b0 = res.get(("今のルール（傾きの小さい順）", s0))
-            ok = b0 and nm != "今のルール（傾きの小さい順）" and med(ii) > b0[2] and med(oo) > b0[3]
-            w(f"| {nm} | {'1組目' if s0 == 5000 else '2組目'} | {pct(med(cg))} | {pct(med(mm))} | {pct(med(ii))} | {pct(med(oo))} | {pct(med(g3))} | {'両方の期間で上' if ok else ''} |")
+            b0 = res.get((REF, s0))
+            ok = b0 and nm != REF and med(ii) > b0[2] and med(oo) > b0[3]
+            w(f"| {nm} | {'1組目' if s0 == 5000 else '2組目'} | {pct(med(cg))} | {pct(med(mm))} | {pct(med(ii))} | {pct(med(oo))} | {pct(med(g3))} |"
+              + (f" {pct(med(gs))} |" if SEP else "") + f" {'両方の期間で上' if ok else ''} |")
             print(nm, s0, file=sys.stderr)
     if os.environ.get("OPT_YEARLY"):   # 年ごと（その年の初めに空の枠から始めた1年の増減。乱数30通りの中央値）
         years = sorted({d[:4] for d in days})
@@ -2136,8 +2226,8 @@ def opt_stage(base, data, sim, days, ind, cache, part):
                 row.append(pct(med([(1 + g) ** yrs_ - 1 for g, _ in xs])))
             w(f"| {nm} | " + " | ".join(row) + " |")
             print("年ごと", nm, file=sys.stderr)
-    good = [nm for nm, _ in forms[1:] if all(res[(nm, s)][2] > res[("今のルール（傾きの小さい順）", s)][2] and res[(nm, s)][3] > res[("今のルール（傾きの小さい順）", s)][3] for s in (5000, 7300))]
-    w("\n2組とも、2015〜2021年・2022年〜の両方で今のルールを上回った形: " + ("、".join(good) or "なし") + "\n")
+    good = [nm for nm, _ in forms if nm not in (REF, "今のルール（傾きの小さい順）") and all(res[(nm, s)][2] > res[(REF, s)][2] and res[(nm, s)][3] > res[(REF, s)][3] for s in (5000, 7300))]
+    w(f"\n2組とも、2015〜2021年・2022年〜の両方で「{REF}」を上回った形: " + ("、".join(good) or "なし") + "\n")
     w("- この結果はルールの条件どおりに機械的に計算したもので、Claudeによる個別銘柄の売買判断ではない。")
     open(OUTDIR + f"直した数え方で年率を上げる形を探す_{part}" + os.environ.get("OUT_SUFFIX", "") + ".md", "w", encoding="utf-8").write("\n".join(L) + "\n")
     print("書き出し", file=sys.stderr)
