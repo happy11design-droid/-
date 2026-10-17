@@ -1904,14 +1904,19 @@ def opt_stage(base, data, sim, days, ind, cache, part):
     sdd20 = {d: (sox[i] / max(x for x in sox[max(0, i - 19):i + 1] if x) - 1) if sox[i] else 0.0 for i, d in enumerate(days)}
     sdd60 = {d: (sox[i] / max(x for x in sox[max(0, i - 59):i + 1] if x) - 1) if sox[i] else 0.0 for i, d in enumerate(days)}
     cache_tr = {}
-    def stock_trades(stop, rel8=False, xsell=None):
-        if (stop, rel8, xsell) in cache_tr:
-            return cache_tr[(stop, rel8, xsell)]
+    def stock_trades(stop, rel8=False, xsell=None, close_stop=False):
+        if (stop, rel8, xsell, close_stop) in cache_tr:
+            return cache_tr[(stop, rel8, xsell, close_stop)]
         out = []
         for b in base:
             s = data[b["sym"]]
             floor = b["px"] * (1 - stop)
-            if b["rule"] != "B" or stop < STOP:
+            if close_stop and b["rule"] != "B":   # 押し目以外は引け値で損切り価格以下なら翌日の寄り付きで売る（2026-10-16 の計算し直しで上回った形）
+                for j in range(b["i0"], b["i1"]):
+                    if s["c"][j] <= floor and j + 1 < len(s["o"]):
+                        b = {**b, "i1": j + 1, "xp": s["o"][j + 1]}
+                        break
+            elif b["rule"] != "B" or stop < STOP:
                 for j in range(b["i0"], b["i1"]):
                     if s["l"][j] <= floor:
                         b = {**b, "i1": j, "xp": min(s["o"][j] if j > b["i0"] else b["px"], floor)}
@@ -1928,7 +1933,7 @@ def opt_stage(base, data, sim, days, ind, cache, part):
             out.append({"sym": b["sym"], "in": s["date"][b["i0"]], "out": max(p), "path": p, "rule": b["rule"], "ret": p[max(p)] - 1,
                         "s50": s50(b), "rs": s["rs"][b["i0"] - 1] or 0, "ai": ind.get(b["sym"]) in AI, "first": streak_first(b),
                         "s2": sdd60.get(sd, 0.0) <= -0.10})
-        cache_tr[(stop, rel8, xsell)] = out
+        cache_tr[(stop, rel8, xsell, close_stop)] = out
         return out
 
     def lev(trs, mode):
@@ -2014,7 +2019,7 @@ def opt_stage(base, data, sim, days, ind, cache, part):
           "rev_rs": lambda t: (0 if t["ai"] else 1, 0 if t["rule"] in ("B", "C") else 1, -t["rs"]),
           "slope_big": lambda t: (0 if t["ai"] else 1, -t["s50"])}
     # 形: 名前 → 決まり（変えない項目は今のルール）
-    BASE = {"rules": ("B", "C", "M", "V"), "prio": "slope", "streak": None, "slots": 4, "cap": 2, "etf": "reg", "stop": STOP, "rel8": False, "swap": None, "xsell": None, "s2": False}
+    BASE = {"rules": ("B", "C", "M", "V"), "prio": "slope", "streak": None, "slots": 4, "cap": 2, "etf": "reg", "stop": STOP, "rel8": False, "swap": None, "xsell": None, "s2": False, "close_stop": False}
     V1 = {"今のルール（傾きの小さい順）": {},
           "買う順番: RSの高い順": {"prio": "rs"},
           "買う順番: RSの高い順（AI半導体を先にしない）": {"prio": "rs_noai"},
@@ -2039,14 +2044,15 @@ def opt_stage(base, data, sim, days, ind, cache, part):
           "乗り換え（RS≧80の急落の底の合図で、含み益のある保有を寄り付きで売る）": {"swap": (("C",), 0.0, 80)},
           "乗り換え（押し目・急落の底の合図で、含み益のある保有を寄り付きで売る）": {"swap": (("B", "C"), 0.0, 0)},
           "順張りの保有をMACDの弱気ダイバージェンスで売る": {"xsell": "macd"},
-          "テーマ全体の急落（S2）の日は順張りの新しい買いを止める": {"s2": True}}
+          "テーマ全体の急落（S2）の日は順張りの新しい買いを止める": {"s2": True},
+          "損切りを引け値で判定（押し目以外、翌日の寄り付きで売る）": {"close_stop": True}}
     combos = [x for x in os.environ.get("OPT_COMBO", "").split(";") if x]
     forms = list(V1.items()) if part == 1 else [("今のルール（傾きの小さい順）", {})] + [
         (c, {k: v for nm in c.split("＋") for k, v in V1[nm].items()}) for c in combos]
 
     def make(spec):
         sp = {**BASE, **spec}
-        trs = [t for t in stock_trades(sp["stop"], sp["rel8"], sp["xsell"]) if t["rule"] in sp["rules"]]
+        trs = [t for t in stock_trades(sp["stop"], sp["rel8"], sp["xsell"], sp["close_stop"]) if t["rule"] in sp["rules"]]
         if sp["s2"]:   # S2（SOXが直近60取引日の最高値から−10%以上下）の合図の日は、順張り（M・V）を買わない
             trs = [t for t in trs if not (t["s2"] and t["rule"] in ("M", "V"))]
         if sp["streak"]:
