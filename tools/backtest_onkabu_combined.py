@@ -775,6 +775,7 @@ def cmd_run(a):
             d0 = load_prices(DEFAULT_CACHE, sym)
             cash_prices[sym] = dict(zip(d0["date"], d0["c"]))
     stats_rows = []
+    yearly, spread = {}, {}   # 年ごと・乱数の幅（2026-10-17）
     for label, kw in (VS[-a.last:] if a.last else VS):
         cells = []
         for name, lo, hi, ex in CONDS:
@@ -795,7 +796,17 @@ def cmd_run(a):
                 res.append((c, m, n_onk, metrics(rcurve, days)[1]))
                 if seed == 0 and name == "2015年〜 NVDAを除く" and kw.get("use_new", True) and kw.get("use_dbl", True):
                     stats_rows.append((label, dict(STATS)))
+                if seed == 0 and name == "2015年〜 NVDAを除く":   # 年ごと（2026-10-17）: その年の終わりの資産÷前の年の終わりの資産−1
+                    ye = {}
+                    for d_, v_ in zip(days, curve):
+                        ye[d_[:4]] = v_
+                    ys, prev_ = sorted(ye), curve[0]
+                    yearly[label] = []
+                    for y_ in ys:
+                        yearly[label].append((y_, ye[y_] / prev_ - 1))
+                        prev_ = ye[y_]
             cells.append(tuple(st.median(r[k] for r in res) for k in range(4)))
+            spread.setdefault(label, []).append((min(r[0] for r in res), max(r[0] for r in res)))
         rows.append((label, cells))
         print(label, [f"{c:.1%}/{m:.0%}/{rm:.0%}" for c, m, _, rm in cells], flush=True)
     out = []
@@ -825,6 +836,22 @@ def cmd_run(a):
                 w(f"| （参考）{lab}を持ち続ける | " + " | ".join(f"{bench[(c[0], sym)][0]:.1%}（{bench[(c[0], sym)][1]:.0%}）" for c in CONDS) + " |")
     for label, cells in rows:
         w(f"| {label} | " + " | ".join(f"{c:.1%}（{m:.0%}・確定{rm:.0%}）" for c, m, _, rm in cells) + " |")
+    if spread:
+        w(f"\n## 乱数の幅（年率の最小〜最大、{a.seeds}通り）\n")
+        w("| 組み合わせ | " + " | ".join(c[0] for c in CONDS) + " |")
+        w("|---|" + "---|" * len(CONDS))
+        for label, _ in rows:
+            w(f"| {label} | " + " | ".join(f"{lo_:.1%}〜{hi_:.1%}" for lo_, hi_ in spread[label]) + " |")
+    if yearly:
+        ys = sorted({y for v in yearly.values() for y, _ in v})
+        w("\n## 年ごとの成績（2015年〜 NVDAを除く、乱数1通り。その年の終わりの資産÷前の年の終わり−1、税引き後）\n")
+        w("| 組み合わせ | " + " | ".join(ys) + " |")
+        w("|---|" + "---|" * len(ys))
+        for label, _ in rows:
+            dd_ = dict(yearly.get(label, []))
+            w(f"| {label} | " + " | ".join(f"{dd_[y]:.1%}" if y in dd_ else "—" for y in ys) + " |")
+    if os.environ.get("NEW_PRIO") == "rs":
+        w("\n- **新分析ツールの買う順番は、今の形（AI・半導体を先に、その中はRSの高い順。2026-10-17 ユーザー決定）**（環境変数 NEW_PRIO=rs）。上の前提の「50日線の傾きが小さい順」「乱数」の記述より、こちらが正。")
     if stats_rows:
         w("\n## 倍増ツールの合図の扱い（2015年〜 NVDAを除く・乱数1通り）\n")
         w("| 組み合わせ | 倍増ツールの合図（枠が空いていた回数） | 現金がなく見送り（待たせる形は、待ちに入った回数） | 半分未満しか買えず | 待って買えた | 同じ銘柄を両方で持った |")
