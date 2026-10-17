@@ -144,12 +144,24 @@ def cmd_newtrades(a):
     out = []
     for t in base:
         p = sim(t)
-        out.append({"sym": t["sym"], "in": data[t["sym"]]["date"][t["i0"]], "out": max(p), "path": p, "prio": t["prio"], "rule": t["rule"]})
+        rs_ = data[t["sym"]].get("rs")
+        out.append({"sym": t["sym"], "in": data[t["sym"]]["date"][t["i0"]], "out": max(p), "path": p, "prio": t["prio"], "rule": t["rule"],
+                    "rs": (rs_[t["i0"] - 1] or 0) if rs_ else 0})   # RS（買う前の日）。NEW_PRIO=rs で買う順番に使う（2026-10-17）
     pickle.dump({"trades": out, "ind": ind, "days": days}, open(NEW_PKL, "wb"))
     print(f"新分析ツールの売買 {len(out)}件を保存（{NEW_PKL}）")
 
 
-def upgrade_trades(trades, cache=DEFAULT_CACHE):
+_AI = {}
+
+
+def _ai_set():
+    """新分析ツールの毎朝のスキャンで先に買う業種（AI・半導体・データセンター関連）。backtest_retest.opt_stage と同じ"""
+    from backtest_caps import THEME
+    return set(THEME) | {"Electrical Equipment & Parts", "Specialty Industrial Machinery", "Engineering & Construction", "Building Products & Equipment",
+                         "Utilities—Independent Power Producers", "REIT—Specialty"}
+
+
+def upgrade_trades(trades, cache=DEFAULT_CACHE, ind=None):
     """新分析ツールの今の形にする（2026-10-09〜）: 同じ日の候補は50日線の傾き（20日前からの上昇率、買う前の日）が小さい順、
     2倍ETFの対応表で目減り年15%未満の銘柄は2倍ETF（実測の目減り）。backtest_retest.slope3_stage と同じ作り方"""
     root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
@@ -166,6 +178,9 @@ def upgrade_trades(trades, cache=DEFAULT_CACHE):
         c, pos = px[s]
         j = pos[t["in"]] - 1
         prio = (sum(c[j - 49:j + 1]) / 50) / (sum(c[j - 69:j - 19]) / 50) - 1 if j >= 70 else 0.0
+        if os.environ.get("NEW_PRIO") == "rs":   # 2026-10-17 ユーザー決定の今の形: AI・半導体を先に、その中はRSの高い順
+            ai_ = _AI.setdefault("s", _ai_set())
+            prio = (0 if (ind or {}).get(s) in ai_ else 1, -(t.get("rs") or 0))
         path = t["path"]
         if s in has:
             fee = drag[s] / 252
@@ -716,7 +731,7 @@ def cmd_run(a):
     new_trades, ind = nt["trades"], nt["ind"]
     has2x = set()
     if a.form == "current":
-        new_trades, has2x = upgrade_trades(new_trades)
+        new_trades, has2x = upgrade_trades(new_trades, ind=ind)
     # 倍増ツールの株価に新分析ツールの銘柄も要る（同じ銘柄の移し替えで使うのは倍増側だけなので不要）
     sig = {"mom": ("r126", 1.0), "hi": "nh", "rev": 0.1, "extra": None}
     q = load_prices(DEFAULT_CACHE, "QQQ")
