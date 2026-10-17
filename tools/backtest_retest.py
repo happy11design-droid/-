@@ -1434,6 +1434,15 @@ def swap_stage(cur_tr, base, data, build, ind, days, is_hi, oos_lo):
         hold = sorted(len([d for d in t["path"] if d <= t["out"]]) for t in ts)
         w(f"| {nm} | {len(ts)}（年{len(ts) / yrs:.0f}回） | {pct(sum(1 for x in r if x > 0) / len(r), 0)} | {pct(sum(r) / len(r), 2)} | {pct(sum(mae) / len(mae), 1)} | {pct(min(r), 0)} | {hold[len(hold) // 2]}日 |")
     trs = [{**t, "prio": s50(B(t))} for t in cur_tr]
+    if os.environ.get("SWAP_DUMP"):   # 別の計算で確かめるための書き出し（2026-10-16）
+        import pickle
+        syms = {t["sym"] for t in trs}
+        pickle.dump({"trs": trs, "days": days, "ind": ind, "is_hi": is_hi, "oos_lo": oos_lo, "c20": c20,
+                     "px": {s_: {"date": data[s_]["date"], "o": data[s_]["o"], "c": data[s_]["c"], "rs": data[s_]["rs"]} for s_ in syms},
+                     "s50": {(t["in"], t["sym"], t["rule"]): s50(B(t)) for t in trs}},
+                    open(os.environ["SWAP_DUMP"], "wb"))
+        print("書き出し", os.environ["SWAP_DUMP"], file=sys.stderr)
+        return
     w("\n## 2. 乗り換えを資金全体で試す（今のルールと比べる）\n")
     w("枠（4つ）が埋まっている日に、下の合図が出たら、含み益（前日の終値で、買値から）が条件を超える保有のうち一番大きいものを、その日の寄り付きで売り、その合図を買う。"
       "乗り換えの合図が出なければ今のルールと同じ。乱数50通り×2組の中央値。\n")
