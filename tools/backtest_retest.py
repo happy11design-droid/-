@@ -1938,11 +1938,22 @@ def opt_stage(base, data, sim, days, ind, cache, part):
             KD["K4"].add(d)
         if _dd(_bk, i, 20) <= -0.015:
             KD["K5"].add(d)
+    # K4 の数値をずらした形の確かめ（2026-10-17）: K4_s{SOXの下げ%}_h{HYG/IEIの下げ‰}。s0 は SOX の条件なし、h0 は社債の条件なし
+    K4G = {}
+    for sv_ in (0.0, 0.05, 0.07, 0.10):
+        for hv_ in (0.0, 0.005, 0.01, 0.015):
+            if (sv_ == 0.0 and hv_ == 0.0) or (sv_ == 0.0 and hv_ != 0.01) or (hv_ == 0.0 and sv_ != 0.07):
+                continue
+            K4G[f"K4_s{round(sv_ * 100)}_h{round(hv_ * 1000)}"] = (sv_, hv_)
+    for k_, (sv_, hv_) in K4G.items():
+        KD[k_] = {d for i, d in enumerate(days) if i >= 60 and (sv_ == 0.0 or sdd20[d] <= -sv_) and (hv_ == 0.0 or _dd(hy, i, 20) <= -hv_)}
     KN = {"K1": "ハイイールド債の急な下げ（HYG/IEI が5取引日で−1.5%以上）",
           "K2": "ハイイールド債のじわじわ下げ（HYG/IEI が直近20取引日の最高値から−2%以上）",
           "K3": "投資適格債も下げる（LQD/IEF が直近60取引日の最高値から−2%以上）",
           "K4": "株と社債が一緒に下げる（SOXが直近20取引日の最高値から−7%以上、かつ HYG/IEI が直近20取引日の最高値から−1%以上）",
           "K5": "ローンの下げ（BKLN が直近20取引日の最高値から−1.5%以上）"}
+    for k_, (sv_, hv_) in K4G.items():
+        KN[k_] = "K4の数値違い: " + "、かつ".join(([f"SOXが直近20取引日の最高値から−{sv_ * 100:g}%以上"] if sv_ else []) + ([f"HYG/IEI が直近20取引日の最高値から−{hv_ * 100:g}%以上"] if hv_ else []))
     def k_until(k):
         """判定の日から、HYG/IEI の終値が10日線を上回る日（判定の日でない）まで（その日を含まない）の日の集合"""
         out, on = set(), False
@@ -2136,7 +2147,9 @@ def opt_stage(base, data, sim, days, ind, cache, part):
           "出来高2倍の大陰線で順張りも売る": {"xsell": "bear"},
           "急落の底の手じまいを10日線にする": {"c10": True},
           "過熱した順張りの合図は2日待って買う": {"hotwait": True}}
-    for k_ in KD:   # 信用の材料（2026-10-17）
+    for k_ in K4G:   # K4 の数値違いは、損の出ている保有を売る形だけ
+        V1[f"信用{k_}: 損の出ている保有を翌朝に売る"] = {"kx": (k_, "loser")}
+    for k_ in ("K1", "K2", "K3", "K4", "K5"):   # 信用の材料（2026-10-17）
         V1[f"信用{k_}: 損の出ている保有を翌朝に売る"] = {"kx": (k_, "loser")}
         V1[f"信用{k_}: 買値から−8%以下の保有を翌朝に売る"] = {"kx": (k_, "rel8")}
         V1[f"信用{k_}: 全部の保有を翌朝に売る"] = {"kx": (k_, "all")}
@@ -2182,7 +2195,10 @@ def opt_stage(base, data, sim, days, ind, cache, part):
     if any("kx" in sp_ and sp_["kx"] or "kb" in sp_ and sp_["kb"] for _, sp_ in forms):
         w("信用の悪化の判定（その日の引けで判定し、翌取引日の寄り付きで手じまう・その日の合図では買わない）。FREDのハイイールド債の利回り差は2023-10より前がないため、"
           "社債ETFと同じくらいの年限の国債ETFの比（金利の動きを打ち消す。配当調整済み）を使った。2015年〜でその状態だった日の割合と、2026-09-28以降に出た日:\n")
+        used_ = {sp_[x][0] for _, sp_ in forms for x in ("kx", "kb") if sp_.get(x)}
         for k_, v_ in KD.items():
+            if k_ not in used_:
+                continue
             n_ = sum(1 for d in days if d >= "2015-01-01")
             octd = sorted(d for d in v_ if d >= "2026-09-28")
             w(f"- {k_}: {KN[k_]}（{sum(1 for d in v_ if d >= '2015-01-01') / n_ * 100:.1f}%の日）。2026-09-28以降: {'、'.join(octd) or 'なし'}")
