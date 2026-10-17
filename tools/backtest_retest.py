@@ -891,13 +891,15 @@ def swap_port(trs, seed, lo, hi, ind, days, prem=None, th=0.0, stats=None, curve
             if len(held) >= SLOTS:
                 if not (prem and prem(t)):
                     continue
+                # その日の寄り付きで買ったばかりの保有は売らない（2026-10-17 の点検で直した誤り: 同じ日の終値で含み益があるとみなして売り、
+                # 同じお金でまた寄り付きに買うと、同じお金を1日に2回使うことになり、成績が大きく出すぎていた）
                 if pick == "gain":   # 含み益が th より大きい保有のうち、一番大きいもの
-                    gain = [h for h in held if h["vp"] / h["v0"] - 1 > th]
+                    gain = [h for h in held if h["in"] != d and h["vp"] / h["v0"] - 1 > th]
                     if not gain:
                         continue
                     h = max(gain, key=lambda h: h["vp"] / h["v0"])
                 else:                # 含み損の保有のうち、一番損の大きいもの（弱っている保有を売る）
-                    gain = [h for h in held if h["vp"] / h["v0"] - 1 < -th]
+                    gain = [h for h in held if h["in"] != d and h["vp"] / h["v0"] - 1 < -th]
                     if not gain:
                         continue
                     h = min(gain, key=lambda h: h["vp"] / h["v0"])
@@ -921,7 +923,7 @@ def swap_port(trs, seed, lo, hi, ind, days, prem=None, th=0.0, stats=None, curve
             if t["out"] == d:
                 cash += size * v0
                 continue
-            held.append({"t": t, "size": size, "v": v0, "vp": v0, "v0": 1.0})
+            held.append({"t": t, "size": size, "v": v0, "vp": v0, "v0": 1.0, "in": d})
         eq = cash + sum(h["size"] * h["v"] for h in held)
         peak = max(peak, eq)
         mdd = max(mdd, 1 - eq / peak)
