@@ -1969,7 +1969,7 @@ def opt_stage(base, data, sim, days, ind, cache, part):
                     # 一番大きいものを、その日の寄り付きで売って買う（2倍ETFの保有は寄り付きの値動きも2倍）
                     if not (swap and t["rule"] in swap[0] and t["rs"] >= swap[2]):
                         continue
-                    gain = [h for h in held if h["vp"] - 1 > swap[1]]
+                    gain = [h for h in held if h.get("vp") is not None and h["vp"] - 1 > swap[1]]   # その日に買ったばかりの保有は売らない
                     if not gain:
                         continue
                     h = max(gain, key=lambda h: h["vp"])
