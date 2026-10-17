@@ -414,6 +414,9 @@ def main():
         return [rec(t["sym"], idx(t["sym"], t["in"]), idx(t["sym"], t["out"]), t["px"], t["px"] * (1 + t["ret"]), rule, prio) for t in lst]
 
     base += from_gen(G(ctx["CR"](10), ctx["above5"], ctx["ok_rot"], STOP, 60), "C")
+    if os.environ.get("OPT_C15") == "1":   # 急落の底を RSI(2)≦15 にした場合に増える売買（2026-10-17、数値の調整の確かめ直し）。opt の形 c15 のときだけ使う
+        have_ = {(t["sym"], t["i0"]) for t in base if t["rule"] == "C"}
+        base += [{**t, "x": "c15"} for t in from_gen(G(ctx["CR"](15), ctx["above5"], ctx["ok_rot"], STOP, 60), "C") if (t["sym"], t["i0"]) not in have_]
     base += from_gen(G(bm2.E_base(2.0), ctx["below50"], ctx["ok_rot"], STOP), "M")
     base += from_gen(G(ctx["v2o"], ctx["below50"], ctx["ok10"], STOP), "V")
     need = {t["sym"] for t in base} if a.stage not in ("rule", "all") else set(data)
@@ -2010,8 +2013,8 @@ def opt_stage(base, data, sim, days, ind, cache, part):
         return 9.9 if r is None else r
 
     cache_tr = {}
-    def stock_trades(stop, rel8=False, xsell=None, close_stop=False, hotwait=False, c10=False, kx=None):
-        key_ = (stop, rel8, xsell, close_stop, hotwait, c10, kx)
+    def stock_trades(stop, rel8=False, xsell=None, close_stop=False, hotwait=False, c10=False, kx=None, tstop=None, pstop=None, m30=False):
+        key_ = (stop, rel8, xsell, close_stop, hotwait, c10, kx, tstop, pstop, m30)
         if key_ in cache_tr:
             return cache_tr[key_]
         out = []
@@ -2032,6 +2035,17 @@ def opt_stage(base, data, sim, days, ind, cache, part):
                     if j >= 9 and s["c"][j] > sum(s["c"][j - 9:j + 1]) / 10:
                         b = {**b, "i1": j + 1, "xp": s["o"][j + 1]}
                         break
+            if m30 and b["rule"] == "M":   # ミネルヴィニの手じまいを「終値が30日線より下」にする（今は50日線。backtest_tune.py）。gen_trades と同じく買った日の引けから、終値の損切り・500日で見る
+                c_, n_ = s["c"], len(s["c"])
+                for j in range(b["i0"], n_):
+                    if j + 1 >= n_:
+                        b = {**b, "i1": j, "xp": c_[j]}   # データの最終日: 最終日の終値で数える
+                        break
+                    if c_[j] <= b["px"] * (1 - STOP) or (j >= 29 and c_[j] < sum(c_[j - 29:j + 1]) / 30) or j - b["i0"] >= 500:
+                        b = {**b, "i1": j + 1, "xp": s["o"][j + 1]}
+                        break
+            if tstop and b["rule"] in tstop[1] and b["i0"] + tstop[0] < b["i1"]:   # 買った日を1日目として tstop[0] 日目の引けで判定し、翌日の寄り付きで売る（backtest_early_exit.py）
+                b = {**b, "i1": b["i0"] + tstop[0], "xp": s["o"][b["i0"] + tstop[0]]}
             floor = b["px"] * (1 - stop)
             if close_stop and b["rule"] != "B":   # 押し目以外は引け値で損切り価格以下なら翌日の寄り付きで売る（2026-10-16 の計算し直しで上回った形）
                 for j in range(b["i0"], b["i1"]):
@@ -2058,19 +2072,27 @@ def opt_stage(base, data, sim, days, ind, cache, part):
                         continue
                     b = {**b, "i1": j + 1, "xp": s["o"][j + 1]}
                     break
-            # xsell: 順張りの保有に足す売りの合図（2026-10-16、直した数え方の計算し直しで上回ったもの）。翌日の寄り付きで全部売る
+            if pstop and b["rule"] in pstop[1]:   # 終値が買値の pstop[0] 下以下なら翌日の寄り付きで売る（backtest_early_exit.py。買った日の引けから）
+                for j in range(b["i0"], b["i1"] - 1):
+                    if s["c"][j] <= b["px"] * (1 - pstop[0]):
+                        b = {**b, "i1": j + 1, "xp": s["o"][j + 1]}
+                        break
+            # xsell: 保有に足す売りの合図。翌日の寄り付きで全部売る。"macd"・"bear"（順張りだけ）か、(合図の名前の組, ルールの組)
             import backtest_exit_signals as _xsig   # opt_stage の中では xs を年ごとの表の変数にも使うので、別の名前で
-            if xsell == "macd":
-                p = sim(b, half=xc.c1, extra=(_xsig.macd_div,), extra_rules=("M", "V"))
-            elif xsell == "bear":   # 出来高2倍の大陰線（押し目・急落の底は今も売る）を順張りにも当てる
-                import backtest_rebuy as _rb
-                p = sim(b, half=xc.c1, extra=(_rb.big_bear,), extra_rules=("M", "V"))
+            import backtest_rebuy as _rb
+            XF = {"macd": _xsig.macd_div, "rsi": _xsig.rsi_div, "island": _xsig.island_top, "crows": _xsig.three_crows, "gap2": _xsig.gap_two_black,
+                  "evening": _xsig.evening_star, "bear": _rb.big_bear, "macddc": _rb.macd_dc, "mfi": mfi_div, "obv": obv_div, "chikou": chikou_down,
+                  "c3": xc.c3, "c2": xc.c2}
+            if xsell:
+                nms_, rr_ = (xsell, ("M", "V")) if isinstance(xsell, str) else xsell
+                nms_ = (nms_,) if isinstance(nms_, str) else nms_
+                p = sim(b, half=xc.c1, extra=tuple(XF[n_] for n_ in nms_), extra_rules=rr_)
             else:
                 p = sim(b, half=xc.c1)
             sd = days[di[s["date"][b["i0"]]] - 1] if di.get(s["date"][b["i0"]]) else s["date"][b["i0"]]
             out.append({"sym": b["sym"], "in": s["date"][b["i0"]], "out": max(p), "path": p, "rule": b["rule"], "ret": p[max(p)] - 1,
                         "s50": s50(b), "rs": s["rs"][b["i0"] - 1] or 0, "ai": ind.get(b["sym"]) in AI, "first": streak_first(b),
-                        "s2": sdd60.get(sd, 0.0) <= -0.10, "sd": sd})
+                        "s2": sdd60.get(sd, 0.0) <= -0.10, "sd": sd, "x": b.get("x")})
         cache_tr[key_] = out
         return out
 
@@ -2157,7 +2179,7 @@ def opt_stage(base, data, sim, days, ind, cache, part):
           "rev_rs": lambda t: (0 if t["ai"] else 1, 0 if t["rule"] in ("B", "C") else 1, -t["rs"]),
           "slope_big": lambda t: (0 if t["ai"] else 1, -t["s50"])}
     # 形: 名前 → 決まり（変えない項目は今のルール）
-    BASE = {"rules": ("B", "C", "M", "V"), "prio": "slope", "streak": None, "slots": 4, "cap": 2, "etf": "reg", "stop": STOP, "rel8": False, "swap": None, "xsell": None, "s2": False, "close_stop": False, "hotwait": False, "c10": False, "kx": None, "kb": None, "bsect": False, "indtop": None}
+    BASE = {"rules": ("B", "C", "M", "V"), "prio": "slope", "streak": None, "slots": 4, "cap": 2, "etf": "reg", "stop": STOP, "rel8": False, "swap": None, "xsell": None, "s2": False, "close_stop": False, "hotwait": False, "c10": False, "kx": None, "kb": None, "bsect": False, "indtop": None, "tstop": None, "pstop": None, "m30": False, "c15": False}
     V1 = {"今のルール（傾きの小さい順）": {},
           "買う順番: RSの高い順": {"prio": "rs"},
           "買う順番: RSの高い順（AI半導体を先にしない）": {"prio": "rs_noai"},
@@ -2198,6 +2220,22 @@ def opt_stage(base, data, sim, days, ind, cache, part):
     V1["押し目: 崩れ始めの日・素材・通信の押し目を買わない"] = {"kb": ("S_reg1_crash", "B"), "bsect": True}
     V1["強い業種（3カ月の強さが上位20%）の銘柄だけ買う（全部のルール）"] = {"indtop": (0.2, ("B", "C", "M", "V"))}
     V1["強い業種（3カ月の強さが上位20%）の銘柄だけ買う（押し目・ミネルヴィニ）"] = {"indtop": (0.2, ("B", "M"))}
+    # 見送った候補の確かめ直し（2026-10-17）: 売りの合図（やり直し_売りの合図の組み合わせ・売りの合図の組み合わせ・チャートの形と指標で売る・2倍ETFで売って買い直す・早めに売るルール・数値の調整）
+    TR_, RV_, AL_ = ("M", "V"), ("B", "C"), ("B", "C", "M", "V")
+    for lab_, nms_, rr_ in (("順張りをRSIの弱気ダイバージェンスで売る", ("rsi",), TR_), ("全部のルールをRSIの弱気ダイバージェンスで売る", ("rsi",), AL_),
+                            ("順張りをOBVの弱気ダイバージェンスで売る", ("obv",), TR_), ("順張りをMFIかMACDの弱気ダイバージェンスで売る", ("mfi", "macd"), TR_),
+                            ("順張りをOBVの弱気ダイバージェンスか遅行スパンで売る", ("obv", "chikou"), TR_), ("順張りをOBVかRSIの弱気ダイバージェンスで売る", ("obv", "rsi"), TR_),
+                            ("順張りをMACDの弱気ダイバージェンスか遅行スパンで売る", ("macd", "chikou"), TR_), ("順張りをMACDの弱気ダイバージェンスかアイランドで売る", ("macd", "island"), TR_),
+                            ("順張りをMACDの弱気ダイバージェンスか宵の明星で売る", ("macd", "evening"), TR_),
+                            ("順張りをMACDの弱気ダイバージェンスの後の10日線割れで売る", ("c3",), TR_), ("全部のルールをMACDの弱気ダイバージェンスの後の10日線割れで売る", ("c3",), AL_),
+                            ("全部のルールをダブルトップ＋出来高で売る", ("c2",), AL_), ("順張りを三羽烏で売る", ("crows",), TR_), ("全部のルールを三羽烏で売る", ("crows",), AL_),
+                            ("順張りを下放れ二本黒で売る", ("gap2",), TR_), ("逆張りをMACDのデッドクロスで売る", ("macddc",), RV_)):
+        V1["売り: " + lab_] = {"xsell": (nms_, rr_)}
+    V1["売り: 逆張りは買ってから20日で売る"] = {"tstop": (20, RV_)}
+    V1["売り: 順張りは終値が買値の10%下で売る"] = {"pstop": (0.10, TR_)}
+    V1["売り: 逆張りは終値が買値の7%下で売る"] = {"pstop": (0.07, RV_)}
+    V1["ミネルヴィニの手じまいを30日線にする"] = {"m30": True}
+    V1["急落の底をRSI(2)≦15にする（OPT_C15=1 で動かす）"] = {"c15": True}
     for k_ in K4G:   # K4 の数値違いは、損の出ている保有を売る形だけ
         V1[f"信用{k_}: 損の出ている保有を翌朝に売る"] = {"kx": (k_, "loser")}
     for k_ in ("K1", "K2", "K3", "K4", "K5"):   # 信用の材料（2026-10-17）
@@ -2213,7 +2251,8 @@ def opt_stage(base, data, sim, days, ind, cache, part):
 
     def make(spec):
         sp = {**BASE, **spec}
-        trs = [t for t in stock_trades(sp["stop"], sp["rel8"], sp["xsell"], sp["close_stop"], sp["hotwait"], sp["c10"], sp["kx"]) if t["rule"] in sp["rules"]]
+        trs = [t for t in stock_trades(sp["stop"], sp["rel8"], sp["xsell"], sp["close_stop"], sp["hotwait"], sp["c10"], sp["kx"], sp["tstop"], sp["pstop"], sp["m30"])
+               if t["rule"] in sp["rules"] and (not t["x"] or (t["x"] == "c15" and sp["c15"]))]
         if sp["kb"]:   # 信用の悪化の日（合図の日の引けで判定）は新しい買いを止める
             kk, km = sp["kb"]
             stopd = KU[kk] if km == "until" else KD[kk]
