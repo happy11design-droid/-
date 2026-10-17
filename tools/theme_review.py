@@ -94,7 +94,7 @@ def cmd_record(a):
         meta = json.load(open(mp, encoding="utf-8"))
         for c in cands:
             m_ = meta.get(c["sym"]) or {}
-            c["hot"], c["rsi14"], c["s50"] = m_.get("hot"), m_.get("rsi14"), m_.get("s50")
+            c["hot"], c["rsi14"], c["s50"], c["rs"] = m_.get("hot"), m_.get("rsi14"), m_.get("s50"), m_.get("rs")
             c["s2_skip"] = m_.get("s2_skip")
     holds = []
     cand_syms = {c["sym"] for c in cands}

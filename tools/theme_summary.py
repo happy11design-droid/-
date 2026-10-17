@@ -98,14 +98,21 @@ def main():
         held = {h["sym"] for h in rec.get("holdings", [])}
         exits = sum(1 for r in rows if hold_rule(r)[0] == "**売り**")
         free = max(0, SLOTS - len(held) + exits)
-        def key(c):   # 毎朝のツールの買う順番: 監視銘柄の候補→テーマの外、成行（A）→予約（B）、50日線の傾きが小さい順（2026-10-09 ユーザー採用）
+        def rs_of(c):
+            if isinstance(c.get("rs"), (int, float)):
+                return c["rs"]
+            try:
+                return float(rows6.get(c["sym"], {}).get("RS", ""))
+            except ValueError:
+                return None
+        def key(c):   # 毎朝のツールの買う順番: 監視銘柄の候補→テーマの外、成行（A）→予約（B）、RSの高い順（2026-10-17 ユーザー決定。10-09〜10-16 は50日線の傾きが小さい順）
             r = rows6.get(c["sym"], {})
-            return (r.get("グループ") == "テーマの外", c.get("pattern") != "A", c.get("s50") if c.get("s50") is not None else 9)
+            return (r.get("グループ") == "テーマの外", c.get("pattern") != "A", -(rs_of(c) or 0))
         cands = sorted([c for c in cands if c["sym"] not in held], key=key)
-        out += [f"- **並び順は「買う順番」**（ツールが空き枠に入れる順。監視銘柄の候補→テーマの外、成行のA→予約のB、50日線の傾きが小さい順）。**勝率の高い順ではない**。"
+        out += [f"- **並び順は「買う順番」**（ツールが空き枠に入れる順。監視銘柄の候補→テーマの外、成行のA→予約のB、RSの高い順）。**勝率の高い順ではない**。"
                 f"勝率・1回平均は、そのルールの過去の成績（後知恵なしの監視銘柄・2015年〜の全部の合図）。",
                 f"- 空き枠: {free}（同時保有{SLOTS}銘柄まで。保有{len(held)}、うちルールの売り{exits}）。上から空き枠の数までが今日の注文。著者が【様子見】の候補を見送るかはユーザーが決める。", "",
-                "| 買う順番 | 銘柄 | ルール | 過去の勝率 | 過去の1回平均 | 50日線の傾き | ルールの判定 | 著者の判定 |", "|---|---|---|---|---|---|---|---|"]
+                "| 買う順番 | 銘柄 | ルール | 過去の勝率 | 過去の1回平均 | RS | ルールの判定 | 著者の判定 |", "|---|---|---|---|---|---|---|---|"]
         for k, c in enumerate(cands, 1):
             r = rows6.get(c["sym"], {})
             m = re.search(r"勝率(\d+)%・1回平均([+\-]?[\d.]+%)", r.get("ルールの過去の成績", ""))
@@ -120,7 +127,8 @@ def main():
             if c.get("s2_skip"):
                 rv += "（S2なら見送る形・記録だけ）"
             av = f"【{c['verdict']}】（{c.get('author', '')}）" if c.get("verdict") else "回答なし"
-            s50 = f"{c['s50'] * 100:+.1f}%" if isinstance(c.get("s50"), (int, float)) else r.get("50日線の傾き", "—")
+            rs_ = rs_of(c)
+            s50 = f"{rs_:.0f}" if rs_ is not None else "—"
             n = f"{k}" + ("" if k <= free else "（枠外）")
             out.append(f"| {n} | {c['sym']} | {c.get('kind', '')} | {wr} | {avg} | {s50} | {rv} | {av} |")
     else:
