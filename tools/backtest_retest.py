@@ -1969,6 +1969,46 @@ def opt_stage(base, data, sim, days, ind, cache, part):
         return out
     KU = {k: k_until(k) for k in KD}
 
+    # 市場全体の状態（2026-10-17、見送った候補を今の形で確かめ直す）。S_名前＝その状態の日、T_名前＝その状態に変わった日（前の取引日は違った）。
+    # 元: backtest_market_signal.py（MACDの線が0より下・VIX≧20）、backtest_regime_filter.py（S&P500の150日線の局面）、backtest_b3_stopouts.py
+    import backtest_market_signal as _ms
+    import backtest_regime_filter as _rf
+    def _ffill(m):
+        out, last = {}, None
+        for d in days:
+            last = m.get(d, last)
+            out[d] = last
+        return out
+    def _add_state(name, st, desc):
+        KD["S_" + name] = {d for d in days if st.get(d)}
+        KD["T_" + name] = {d for i, d in enumerate(days) if i > 0 and st.get(d) and not st.get(days[i - 1])}
+        KN["S_" + name], KN["T_" + name] = desc, desc + "に変わった日"
+    for nm_, sym_, lab_ in (("spx_macd", "^GSPC", "S&P500"), ("ndx_macd", "^NDX", "NASDAQ100")):
+        _add_state(nm_, _ffill(_ms.macd_states(load_prices(cache, sym_), 12, 26, 9)[1]), f"{lab_}の日足のMACDの線（12日と26日の指数平均の差）が0より下")
+    _gv = load_prices(cache, "^VIX")
+    _add_state("vix20", _ffill({d: c_ >= 20 for d, c_ in zip(_gv["date"], _gv["c"])}), "VIXが20以上")
+    _gs = load_prices(cache, "^GSPC")
+    _reg5, _reg1 = _ffill(_rf.regimes(_gs, 5)), _ffill(_rf.regimes(_gs, 1))
+    _add_state("reg5_crash", {d: _reg5[d] == "崩れ始め" for d in days}, "S&P500の局面（150日線、5日続いたら切り替え）が崩れ始め")
+    _add_state("reg5_side", {d: _reg5[d] in ("崩れ始め", "回復途中") for d in days}, "S&P500の局面（150日線、5日続いたら切り替え）が横ばい（崩れ始め・回復途中）")
+    _add_state("reg1_crash", {d: _reg1[d] == "崩れ始め" for d in days}, "S&P500の局面（150日線、1日で切り替え）が崩れ始め")
+    _SECT = {}
+    def sector_of(sym):
+        if not _SECT:
+            _SECT.update({k: (v or {}).get("sector") for k, v in json.load(open(os.path.join(cache, "universe.json"))).items()})
+        return _SECT.get(sym)
+    _IR = {}
+    def ind_rank(sym, d):
+        """業種の3カ月（63取引日）の強さの順位の百分位（0＝最強）。backtest_industry.industry_ranks と同じ（S&P500の構成銘柄・業種ごとの中央値・3銘柄以上）"""
+        if not _IR:
+            import backtest_industry as _bi
+            from backtest_lib import load_members as _lm
+            for x in data:
+                data[x]["ind"] = ind.get(x)
+            _IR.update(_bi.industry_ranks(data, _lm(cache)))
+        r = _IR.get(d, {}).get(ind.get(sym))
+        return 9.9 if r is None else r
+
     cache_tr = {}
     def stock_trades(stop, rel8=False, xsell=None, close_stop=False, hotwait=False, c10=False, kx=None):
         key_ = (stop, rel8, xsell, close_stop, hotwait, c10, kx)
@@ -2117,7 +2157,7 @@ def opt_stage(base, data, sim, days, ind, cache, part):
           "rev_rs": lambda t: (0 if t["ai"] else 1, 0 if t["rule"] in ("B", "C") else 1, -t["rs"]),
           "slope_big": lambda t: (0 if t["ai"] else 1, -t["s50"])}
     # 形: 名前 → 決まり（変えない項目は今のルール）
-    BASE = {"rules": ("B", "C", "M", "V"), "prio": "slope", "streak": None, "slots": 4, "cap": 2, "etf": "reg", "stop": STOP, "rel8": False, "swap": None, "xsell": None, "s2": False, "close_stop": False, "hotwait": False, "c10": False, "kx": None, "kb": None}
+    BASE = {"rules": ("B", "C", "M", "V"), "prio": "slope", "streak": None, "slots": 4, "cap": 2, "etf": "reg", "stop": STOP, "rel8": False, "swap": None, "xsell": None, "s2": False, "close_stop": False, "hotwait": False, "c10": False, "kx": None, "kb": None, "bsect": False, "indtop": None}
     V1 = {"今のルール（傾きの小さい順）": {},
           "買う順番: RSの高い順": {"prio": "rs"},
           "買う順番: RSの高い順（AI半導体を先にしない）": {"prio": "rs_noai"},
@@ -2148,6 +2188,16 @@ def opt_stage(base, data, sim, days, ind, cache, part):
           "出来高2倍の大陰線で順張りも売る": {"xsell": "bear"},
           "急落の底の手じまいを10日線にする": {"c10": True},
           "過熱した順張りの合図は2日待って買う": {"hotwait": True}}
+    # 見送った候補の確かめ直し（2026-10-17）: 市場全体の判定・横ばいの相場・押し目の見送り・強い業種
+    for nm_, lab_ in (("spx_macd", "S&P500のMACDが0より下"), ("ndx_macd", "NASDAQ100のMACDが0より下"), ("vix20", "VIXが20以上")):
+        V1[f"市場全体: {lab_}の日は順張りを買わない"] = {"kb": ("S_" + nm_, "trend")}
+        V1[f"市場全体: {lab_}に変わった日に全部売る"] = {"kx": ("T_" + nm_, "all")}
+    V1["横ばいの相場①: S&P500の局面（5日）が横ばいの日は買わない"] = {"kb": ("S_reg5_side", "all")}
+    V1["横ばいの相場④: S&P500の局面（5日）が崩れ始めの日は買わず、崩れ始めに変わった日に全部売る"] = {"kb": ("S_reg5_crash", "all"), "kx": ("T_reg5_crash", "all")}
+    V1["押し目: S&P500の局面（1日）が崩れ始めの日は押し目を買わない"] = {"kb": ("S_reg1_crash", "B")}
+    V1["押し目: 崩れ始めの日・素材・通信の押し目を買わない"] = {"kb": ("S_reg1_crash", "B"), "bsect": True}
+    V1["強い業種（3カ月の強さが上位20%）の銘柄だけ買う（全部のルール）"] = {"indtop": (0.2, ("B", "C", "M", "V"))}
+    V1["強い業種（3カ月の強さが上位20%）の銘柄だけ買う（押し目・ミネルヴィニ）"] = {"indtop": (0.2, ("B", "M"))}
     for k_ in K4G:   # K4 の数値違いは、損の出ている保有を売る形だけ
         V1[f"信用{k_}: 損の出ている保有を翌朝に売る"] = {"kx": (k_, "loser")}
     for k_ in ("K1", "K2", "K3", "K4", "K5"):   # 信用の材料（2026-10-17）
@@ -2167,7 +2217,12 @@ def opt_stage(base, data, sim, days, ind, cache, part):
         if sp["kb"]:   # 信用の悪化の日（合図の日の引けで判定）は新しい買いを止める
             kk, km = sp["kb"]
             stopd = KU[kk] if km == "until" else KD[kk]
-            trs = [t for t in trs if not (t["sd"] in stopd and (km != "trend" or t["rule"] in ("M", "V")))]
+            trs = [t for t in trs if not (t["sd"] in stopd and (km in ("all", "until") or (km == "trend" and t["rule"] in ("M", "V")) or (km == "B" and t["rule"] == "B")))]
+        if sp["bsect"]:   # 押し目の損切りの共通点（backtest_b3_stopouts.py）: 素材（Basic Materials）・通信（Communication Services）のセクターの押し目は買わない
+            trs = [t for t in trs if not (t["rule"] == "B" and sector_of(t["sym"]) in ("Basic Materials", "Communication Services"))]
+        if sp["indtop"]:   # 強い業種だけに当てる（backtest_industry.py）: 合図の日に業種の3カ月の強さが上位 thr 以内の銘柄だけ買う
+            thr_, rr_ = sp["indtop"]
+            trs = [t for t in trs if t["rule"] not in rr_ or ind_rank(t["sym"], t["sd"]) <= thr_]
         if sp["s2"]:   # S2（SOXが直近60取引日の最高値から−10%以上下）の合図の日は、順張り（M・V）を買わない
             trs = [t for t in trs if not (t["s2"] and t["rule"] in ("M", "V"))]
         if sp["streak"]:
@@ -2194,7 +2249,7 @@ def opt_stage(base, data, sim, days, ind, cache, part):
     SEP = os.environ.get("OPT_SEP") == "1"   # 2026-09-01 に空の枠から始めた 10/15 までの増減の列
     sep_lo = min(d for d in days if d >= "2026-09-01")
     if any("kx" in sp_ and sp_["kx"] or "kb" in sp_ and sp_["kb"] for _, sp_ in forms):
-        w("信用の悪化の判定（その日の引けで判定し、翌取引日の寄り付きで手じまう・その日の合図では買わない）。FREDのハイイールド債の利回り差は2023-10より前がないため、"
+        w("使った判定（その日の引けで判定し、翌取引日の寄り付きで手じまう・その日の合図では買わない）。信用の判定（K）は、FREDのハイイールド債の利回り差が2023-10より前にないため、"
           "社債ETFと同じくらいの年限の国債ETFの比（金利の動きを打ち消す。配当調整済み）を使った。2015年〜でその状態だった日の割合と、2026-09-28以降に出た日:\n")
         used_ = {sp_[x][0] for _, sp_ in forms for x in ("kx", "kb") if sp_.get(x)}
         for k_, v_ in KD.items():
