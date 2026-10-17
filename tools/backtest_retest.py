@@ -1902,10 +1902,11 @@ def opt_stage(base, data, sim, days, ind, cache, part):
         last = sm.get(d, last)
         sox.append(last)
     sdd20 = {d: (sox[i] / max(x for x in sox[max(0, i - 19):i + 1] if x) - 1) if sox[i] else 0.0 for i, d in enumerate(days)}
+    sdd60 = {d: (sox[i] / max(x for x in sox[max(0, i - 59):i + 1] if x) - 1) if sox[i] else 0.0 for i, d in enumerate(days)}
     cache_tr = {}
-    def stock_trades(stop, rel8=False):
-        if (stop, rel8) in cache_tr:
-            return cache_tr[(stop, rel8)]
+    def stock_trades(stop, rel8=False, xsell=None):
+        if (stop, rel8, xsell) in cache_tr:
+            return cache_tr[(stop, rel8, xsell)]
         out = []
         for b in base:
             s = data[b["sym"]]
@@ -1921,10 +1922,13 @@ def opt_stage(base, data, sim, days, ind, cache, part):
                     if s["c"][j] <= b["px"] * (1 - lv) and sdd20.get(s["date"][j], 0.0) <= -sv:
                         b = {**b, "i1": j + 1, "xp": s["o"][j + 1]}
                         break
-            p = sim(b, half=xc.c1)
+            # xsell: 順張りの保有に足す売りの合図（2026-10-16、直した数え方の計算し直しで上回ったもの）。翌日の寄り付きで全部売る
+            p = sim(b, half=xc.c1, extra=(xs.macd_div,), extra_rules=("M", "V")) if xsell == "macd" else sim(b, half=xc.c1)
+            sd = days[di[s["date"][b["i0"]]] - 1] if di.get(s["date"][b["i0"]]) else s["date"][b["i0"]]
             out.append({"sym": b["sym"], "in": s["date"][b["i0"]], "out": max(p), "path": p, "rule": b["rule"], "ret": p[max(p)] - 1,
-                        "s50": s50(b), "rs": s["rs"][b["i0"] - 1] or 0, "ai": ind.get(b["sym"]) in AI, "first": streak_first(b)})
-        cache_tr[(stop, rel8)] = out
+                        "s50": s50(b), "rs": s["rs"][b["i0"] - 1] or 0, "ai": ind.get(b["sym"]) in AI, "first": streak_first(b),
+                        "s2": sdd60.get(sd, 0.0) <= -0.10})
+        cache_tr[(stop, rel8, xsell)] = out
         return out
 
     def lev(trs, mode):
@@ -2010,7 +2014,7 @@ def opt_stage(base, data, sim, days, ind, cache, part):
           "rev_rs": lambda t: (0 if t["ai"] else 1, 0 if t["rule"] in ("B", "C") else 1, -t["rs"]),
           "slope_big": lambda t: (0 if t["ai"] else 1, -t["s50"])}
     # 形: 名前 → 決まり（変えない項目は今のルール）
-    BASE = {"rules": ("B", "C", "M", "V"), "prio": "slope", "streak": None, "slots": 4, "cap": 2, "etf": "reg", "stop": STOP, "rel8": False, "swap": None}
+    BASE = {"rules": ("B", "C", "M", "V"), "prio": "slope", "streak": None, "slots": 4, "cap": 2, "etf": "reg", "stop": STOP, "rel8": False, "swap": None, "xsell": None, "s2": False}
     V1 = {"今のルール（傾きの小さい順）": {},
           "買う順番: RSの高い順": {"prio": "rs"},
           "買う順番: RSの高い順（AI半導体を先にしない）": {"prio": "rs_noai"},
@@ -2033,14 +2037,18 @@ def opt_stage(base, data, sim, days, ind, cache, part):
           "乗り換え（急落の底の合図で、含み益のある保有を寄り付きで売る）": {"swap": (("C",), 0.0, 0)},
           "乗り換え（急落の底の合図で、含み益+10%超の保有を寄り付きで売る）": {"swap": (("C",), 0.10, 0)},
           "乗り換え（RS≧80の急落の底の合図で、含み益のある保有を寄り付きで売る）": {"swap": (("C",), 0.0, 80)},
-          "乗り換え（押し目・急落の底の合図で、含み益のある保有を寄り付きで売る）": {"swap": (("B", "C"), 0.0, 0)}}
+          "乗り換え（押し目・急落の底の合図で、含み益のある保有を寄り付きで売る）": {"swap": (("B", "C"), 0.0, 0)},
+          "順張りの保有をMACDの弱気ダイバージェンスで売る": {"xsell": "macd"},
+          "テーマ全体の急落（S2）の日は順張りの新しい買いを止める": {"s2": True}}
     combos = [x for x in os.environ.get("OPT_COMBO", "").split(";") if x]
     forms = list(V1.items()) if part == 1 else [("今のルール（傾きの小さい順）", {})] + [
         (c, {k: v for nm in c.split("＋") for k, v in V1[nm].items()}) for c in combos]
 
     def make(spec):
         sp = {**BASE, **spec}
-        trs = [t for t in stock_trades(sp["stop"], sp["rel8"]) if t["rule"] in sp["rules"]]
+        trs = [t for t in stock_trades(sp["stop"], sp["rel8"], sp["xsell"]) if t["rule"] in sp["rules"]]
+        if sp["s2"]:   # S2（SOXが直近60取引日の最高値から−10%以上下）の合図の日は、順張り（M・V）を買わない
+            trs = [t for t in trs if not (t["s2"] and t["rule"] in ("M", "V"))]
         if sp["streak"]:
             keep = {"all": ("B", "C", "M", "V"), "rev": ("B", "C"), "trend": ("M", "V")}[sp["streak"]]
             trs = [t for t in trs if t["first"] or t["rule"] not in keep]
