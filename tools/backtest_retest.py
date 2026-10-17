@@ -1930,7 +1930,8 @@ def opt_stage(base, data, sim, days, ind, cache, part):
                         b = {**b, "i1": j + 1, "xp": s["o"][j + 1]}
                         break
             # xsell: 順張りの保有に足す売りの合図（2026-10-16、直した数え方の計算し直しで上回ったもの）。翌日の寄り付きで全部売る
-            p = sim(b, half=xc.c1, extra=(xs.macd_div,), extra_rules=("M", "V")) if xsell == "macd" else sim(b, half=xc.c1)
+            import backtest_exit_signals as _xsig   # opt_stage の中では xs を年ごとの表の変数にも使うので、別の名前で
+            p = sim(b, half=xc.c1, extra=(_xsig.macd_div,), extra_rules=("M", "V")) if xsell == "macd" else sim(b, half=xc.c1)
             sd = days[di[s["date"][b["i0"]]] - 1] if di.get(s["date"][b["i0"]]) else s["date"][b["i0"]]
             out.append({"sym": b["sym"], "in": s["date"][b["i0"]], "out": max(p), "path": p, "rule": b["rule"], "ret": p[max(p)] - 1,
                         "s50": s50(b), "rs": s["rs"][b["i0"] - 1] or 0, "ai": ind.get(b["sym"]) in AI, "first": streak_first(b),
