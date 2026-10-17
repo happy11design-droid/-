@@ -1906,12 +1906,28 @@ def opt_stage(base, data, sim, days, ind, cache, part):
     sdd20 = {d: (sox[i] / max(x for x in sox[max(0, i - 19):i + 1] if x) - 1) if sox[i] else 0.0 for i, d in enumerate(days)}
     sdd60 = {d: (sox[i] / max(x for x in sox[max(0, i - 59):i + 1] if x) - 1) if sox[i] else 0.0 for i, d in enumerate(days)}
     cache_tr = {}
-    def stock_trades(stop, rel8=False, xsell=None, close_stop=False):
-        if (stop, rel8, xsell, close_stop) in cache_tr:
-            return cache_tr[(stop, rel8, xsell, close_stop)]
+    def stock_trades(stop, rel8=False, xsell=None, close_stop=False, hotwait=False, c10=False):
+        key_ = (stop, rel8, xsell, close_stop, hotwait, c10)
+        if key_ in cache_tr:
+            return cache_tr[key_]
         out = []
         for b in base:
             s = data[b["sym"]]
+            if hotwait and b["rule"] in ("M", "V"):   # 過熱（合図の日の終値が+2σより上かつRSI(14)>70）の順張りは2日待って寄り付きで買う。待つ間に抜けた水準より下に戻ったら見送る（hot_stage と同じ）
+                j = b["i0"] - 1
+                r14 = (s.get("rsi14") or [None] * len(s["c"]))[j]
+                if s["bb_up"][j] is not None and s["c"][j] > s["bb_up"][j] and r14 is not None and r14 > 70:
+                    k = b["i0"] + 2
+                    if k >= len(s["c"]) - 1 or k >= b["i1"]:
+                        continue
+                    if j > 0 and s["c"][k - 1] < max(s["c"][max(0, j - 20):j]):
+                        continue
+                    b = {**b, "i0": k, "px": s["o"][k]}
+            if c10 and b["rule"] == "C":   # 急落の底の手じまいを、終値が10日線を上回った翌日の寄り付きにする（今は5日線）
+                for j in range(b["i0"], len(s["c"]) - 1):
+                    if j >= 9 and s["c"][j] > sum(s["c"][j - 9:j + 1]) / 10:
+                        b = {**b, "i1": j + 1, "xp": s["o"][j + 1]}
+                        break
             floor = b["px"] * (1 - stop)
             if close_stop and b["rule"] != "B":   # 押し目以外は引け値で損切り価格以下なら翌日の寄り付きで売る（2026-10-16 の計算し直しで上回った形）
                 for j in range(b["i0"], b["i1"]):
@@ -1931,12 +1947,18 @@ def opt_stage(base, data, sim, days, ind, cache, part):
                         break
             # xsell: 順張りの保有に足す売りの合図（2026-10-16、直した数え方の計算し直しで上回ったもの）。翌日の寄り付きで全部売る
             import backtest_exit_signals as _xsig   # opt_stage の中では xs を年ごとの表の変数にも使うので、別の名前で
-            p = sim(b, half=xc.c1, extra=(_xsig.macd_div,), extra_rules=("M", "V")) if xsell == "macd" else sim(b, half=xc.c1)
+            if xsell == "macd":
+                p = sim(b, half=xc.c1, extra=(_xsig.macd_div,), extra_rules=("M", "V"))
+            elif xsell == "bear":   # 出来高2倍の大陰線（押し目・急落の底は今も売る）を順張りにも当てる
+                import backtest_rebuy as _rb
+                p = sim(b, half=xc.c1, extra=(_rb.big_bear,), extra_rules=("M", "V"))
+            else:
+                p = sim(b, half=xc.c1)
             sd = days[di[s["date"][b["i0"]]] - 1] if di.get(s["date"][b["i0"]]) else s["date"][b["i0"]]
             out.append({"sym": b["sym"], "in": s["date"][b["i0"]], "out": max(p), "path": p, "rule": b["rule"], "ret": p[max(p)] - 1,
                         "s50": s50(b), "rs": s["rs"][b["i0"] - 1] or 0, "ai": ind.get(b["sym"]) in AI, "first": streak_first(b),
                         "s2": sdd60.get(sd, 0.0) <= -0.10})
-        cache_tr[(stop, rel8, xsell, close_stop)] = out
+        cache_tr[key_] = out
         return out
 
     def lev(trs, mode):
@@ -2022,7 +2044,7 @@ def opt_stage(base, data, sim, days, ind, cache, part):
           "rev_rs": lambda t: (0 if t["ai"] else 1, 0 if t["rule"] in ("B", "C") else 1, -t["rs"]),
           "slope_big": lambda t: (0 if t["ai"] else 1, -t["s50"])}
     # 形: 名前 → 決まり（変えない項目は今のルール）
-    BASE = {"rules": ("B", "C", "M", "V"), "prio": "slope", "streak": None, "slots": 4, "cap": 2, "etf": "reg", "stop": STOP, "rel8": False, "swap": None, "xsell": None, "s2": False, "close_stop": False}
+    BASE = {"rules": ("B", "C", "M", "V"), "prio": "slope", "streak": None, "slots": 4, "cap": 2, "etf": "reg", "stop": STOP, "rel8": False, "swap": None, "xsell": None, "s2": False, "close_stop": False, "hotwait": False, "c10": False}
     V1 = {"今のルール（傾きの小さい順）": {},
           "買う順番: RSの高い順": {"prio": "rs"},
           "買う順番: RSの高い順（AI半導体を先にしない）": {"prio": "rs_noai"},
@@ -2048,14 +2070,17 @@ def opt_stage(base, data, sim, days, ind, cache, part):
           "乗り換え（押し目・急落の底の合図で、含み益のある保有を寄り付きで売る）": {"swap": (("B", "C"), 0.0, 0)},
           "順張りの保有をMACDの弱気ダイバージェンスで売る": {"xsell": "macd"},
           "テーマ全体の急落（S2）の日は順張りの新しい買いを止める": {"s2": True},
-          "損切りを引け値で判定（押し目以外、翌日の寄り付きで売る）": {"close_stop": True}}
+          "損切りを引け値で判定（押し目以外、翌日の寄り付きで売る）": {"close_stop": True},
+          "出来高2倍の大陰線で順張りも売る": {"xsell": "bear"},
+          "急落の底の手じまいを10日線にする": {"c10": True},
+          "過熱した順張りの合図は2日待って買う": {"hotwait": True}}
     combos = [x for x in os.environ.get("OPT_COMBO", "").split(";") if x]
     forms = list(V1.items()) if part == 1 else [("今のルール（傾きの小さい順）", {})] + [
         (c, {k: v for nm in c.split("＋") for k, v in V1[nm].items()}) for c in combos]
 
     def make(spec):
         sp = {**BASE, **spec}
-        trs = [t for t in stock_trades(sp["stop"], sp["rel8"], sp["xsell"], sp["close_stop"]) if t["rule"] in sp["rules"]]
+        trs = [t for t in stock_trades(sp["stop"], sp["rel8"], sp["xsell"], sp["close_stop"], sp["hotwait"], sp["c10"]) if t["rule"] in sp["rules"]]
         if sp["s2"]:   # S2（SOXが直近60取引日の最高値から−10%以上下）の合図の日は、順張り（M・V）を買わない
             trs = [t for t in trs if not (t["s2"] and t["rule"] in ("M", "V"))]
         if sp["streak"]:
