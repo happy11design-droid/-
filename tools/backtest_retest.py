@@ -2242,6 +2242,7 @@ def opt_stage(base, data, sim, days, ind, cache, part):
             out.append({"sym": b["sym"], "in": s["date"][b["i0"]], "out": max(p), "path": p, "rule": b["rule"], "ret": p[max(p)] - 1,
                         "s50": s50(b), "rs": s["rs"][b["i0"] - 1] or 0, "ai": ind.get(b["sym"]) in AI, "first": streak_first(b),
                         "s2": sdd60.get(sd, 0.0) <= -0.10, "sd": sd, "x": b.get("x"),
+                        "stopped": b["xp"] <= b["px"] * (1 - stop) * 1.000001,   # 損切りで終わった（日中の逆指値。窓を開けて下で寄った場合も）
                         "ichi": b["rule"] not in ("M", "V") or (s["ten"][b["i0"] - 1] is not None and s["kij"][b["i0"] - 1] is not None and s["ten"][b["i0"] - 1] > s["kij"][b["i0"] - 1]),
                         "reg": reg60(s, b["i0"] - 1)})
         cache_tr[key_] = out
@@ -2269,7 +2270,10 @@ def opt_stage(base, data, sim, days, ind, cache, part):
         k_ = pos_.setdefault(sym, {x: i for i, x in enumerate(s_["date"])}).get(d)
         return s_["o"][k_] / s_["c"][k_ - 1] if k_ and s_["c"][k_ - 1] else 1.0
 
-    def port(trs, seed, lo, hi, slots=4, cap=2, swap=None):
+    def port(trs, seed, lo, hi, slots=4, cap=2, swap=None, abn=None, log=None):
+        """abn: 保有全体の異常（2026-10-18）=(銘柄数 N か "all", 買値からの下げ X, "loser"|"all")。引けで、買値から X 以上下げた保有が N 銘柄以上
+        （"all" は2銘柄以上を持っていて全部）なら、翌日の寄り付きで損の出ている保有（"all" なら全部）を売る。買いはふつうに続ける。
+        log: リストを渡すと (買った日, 売った日, "stop"|"rule"|"abn"|"open", 銘柄) と ("eq", 日, 資金) を入れる"""
         by_in = {}
         for t in trs:
             if lo <= t["in"] and t["out"] <= hi:
@@ -2277,8 +2281,18 @@ def opt_stage(base, data, sim, days, ind, cache, part):
         rnd = random.Random(seed)
         cash, held, peak, mdd, eq = 1.0, [], 1.0, 0.0, 1.0
         dd = days[di[lo]:di[hi] + 1]
+        pend = []
         for d in dd:
             ghost_n = 0   # 約定しなかった指値の注文（その日だけ枠を使う）
+            if pend:   # 前の日の引けで異常と判定した保有を、その日の寄り付きで売る（その日にルールで売る保有はルールのまま）
+                for h in pend:
+                    if any(h is x for x in held) and h["t"]["out"] != d:
+                        g_ = open_gap(h["t"]["sym"], d)
+                        cash += h["size"] * h["v"] * max(0.0, 1 + h["t"].get("L", 1) * (g_ - 1)) * (1 - COST)
+                        held = [x for x in held if x is not h]
+                        if log is not None:
+                            log.append((h["t"]["in"], d, "abn", h["t"]["sym"]))
+                pend = []
             still = []
             for h in held:
                 h["vp"] = h["v"]
@@ -2287,6 +2301,8 @@ def opt_stage(base, data, sim, days, ind, cache, part):
                     h["v"] = v
                 if h["t"]["out"] == d:
                     cash += h["size"] * h["v"]
+                    if log is not None:
+                        log.append((h["t"]["in"], d, "stop" if h["t"].get("stopped") else "rule", h["t"]["sym"]))
                 else:
                     still.append(h)
             held = still
@@ -2319,11 +2335,23 @@ def opt_stage(base, data, sim, days, ind, cache, part):
                 v0 = t["path"].get(d, 1.0)
                 if t["out"] == d:
                     cash += size * v0
+                    if log is not None:
+                        log.append((d, d, "stop" if t.get("stopped") else "rule", t["sym"]))
                     continue
                 held.append({"t": t, "size": size, "v": v0})
+            if abn and held:
+                n_, x_, mode_ = abn
+                bad_ = sum(1 for h in held if h["v"] <= 1 - x_)
+                if (bad_ >= n_) if n_ != "all" else (len(held) >= 2 and bad_ == len(held)):
+                    pend = [h for h in held if mode_ == "all" or h["v"] < 1]
             eq = cash + sum(h["size"] * h["v"] for h in held)
             peak = max(peak, eq)
             mdd = max(mdd, 1 - eq / peak)
+            if log is not None:
+                log.append(("eq", d, eq))
+        if log is not None:
+            for h in held:
+                log.append((h["t"]["in"], None, "open", h["t"]["sym"]))
         yrs = (dt.date.fromisoformat(dd[-1]) - dt.date.fromisoformat(dd[0])).days / 365.25
         return eq ** (1 / yrs) - 1, mdd
 
@@ -2339,7 +2367,7 @@ def opt_stage(base, data, sim, days, ind, cache, part):
           "v2cbm_noai": lambda t: ({"V": 0, "C": 1, "B": 2, "M": 3}.get(t["rule"], 4), -t["rs"]),
           "reg": lambda t: (0 if t["ai"] else 1, -t["reg"])}
     # 形: 名前 → 決まり（変えない項目は今のルール）
-    BASE = {"rules": ("B", "C", "M", "V"), "prio": "slope", "streak": None, "slots": 4, "cap": 2, "etf": "reg", "stop": STOP, "rel8": False, "swap": None, "xsell": None, "s2": False, "close_stop": False, "hotwait": False, "c10": False, "kx": None, "kb": None, "bsect": False, "indtop": None, "tstop": None, "pstop": None, "m30": False, "c15": False, "lim2": False, "hadd": None, "ichi": False, "outside": False}
+    BASE = {"rules": ("B", "C", "M", "V"), "prio": "slope", "streak": None, "slots": 4, "cap": 2, "etf": "reg", "stop": STOP, "rel8": False, "swap": None, "xsell": None, "s2": False, "close_stop": False, "hotwait": False, "c10": False, "kx": None, "kb": None, "bsect": False, "indtop": None, "tstop": None, "pstop": None, "m30": False, "c15": False, "lim2": False, "hadd": None, "ichi": False, "outside": False, "abn": None}
     V1 = {"今のルール（傾きの小さい順）": {},
           "買う順番: RSの高い順": {"prio": "rs"},
           "買う順番: RSの高い順（AI半導体を先にしない）": {"prio": "rs_noai"},
@@ -2398,6 +2426,12 @@ def opt_stage(base, data, sim, days, ind, cache, part):
     V1["急落の底をRSI(2)≦15にする（OPT_C15=1 で動かす）"] = {"c15": True}
     # 見送った候補の確かめ直し（2026-10-17）: 買い方・新しい合図・買う順番
     V1["テーマの外の強い銘柄で空き枠を埋める（OPT_OUTSIDE=1、毎朝のツールと同じ）"] = {"outside": True}
+    # 保有全体の異常（2026-10-18 ユーザーの指示「全ての銘柄が損切りに達した異常事態を対策できなかったことが問題」）
+    for n_, x_, md_ in ((2, 0.08, "loser"), (2, 0.10, "loser"), (3, 0.08, "loser"), (3, 0.10, "loser"), ("all", 0.05, "loser"), ("all", 0.08, "loser"),
+                        (2, 0.08, "all"), (3, 0.10, "all")):
+        who_ = "保有が全部（2銘柄以上）" if n_ == "all" else f"{n_}銘柄以上"
+        what_ = "損の出ている保有" if md_ == "loser" else "全部の保有"
+        V1[f"異常: {who_}が買値から−{x_ * 100:g}%以下になったら、{what_}を翌朝売る"] = {"abn": (n_, x_, md_)}
     V1["押し目・急落の底を寄り付きの2%下の指値で買う"] = {"lim2": True}
     V1["順張りは半分を合図で買い、残りは3%下に10日の指値で買い足す"] = {"hadd": (0.03, 10, ("M", "V"))}
     V1["順張りは一目の転換線が基準線より上のときだけ買う"] = {"ichi": True}
@@ -2462,7 +2496,7 @@ def opt_stage(base, data, sim, days, ind, cache, part):
     w("2026-10-16、ユーザーの指示「時間は掛かっても良いので正確に調査して。年率が下がるならきちんと上がるルールを作って」。"
       "**売買の数え方は直した形**（同じ銘柄に続けて出る合図も数える・最終日に持っている売買も最終日の終値で数える）。"
       "今のルール: 後知恵なしの監視銘柄でAI・半導体・データセンター関連の業種を先に買う、4つのルール、4銘柄・1銘柄＝その日の資金÷4、同じ業種2銘柄まで、"
-      "同じ日の候補は50日線の傾きが小さい順、案1、損切りは全部のルールで日中の逆指値15%。2015年〜（株価は2026-10-15まで）、片道0.1%込み。乱数30通り×2組の中央値。"
+      "同じ日の候補は50日線の傾きが小さい順、案1、損切りは全部のルールで日中の逆指値15%。2015年〜（株価は" + days[-1] + "まで）、片道0.1%込み。乱数30通り×2組の中央値。"
       "「続けての合図」＝同じ銘柄・同じルールの合図が前の取引日にも出ていた合図（毎朝のスキャンでは前日の record.json と比べれば分かる）。\n")
     REF = os.environ.get("OPT_REF", "今のルール（傾きの小さい順）")   # 「判定」で比べる相手の形（2026-10-17 から今のルールは RSの高い順）
     SEP = os.environ.get("OPT_SEP") == "1"   # 2026-09-01 に空の枠から始めた 10/15 までの増減の列
@@ -2480,7 +2514,7 @@ def opt_stage(base, data, sim, days, ind, cache, part):
         w("\n対応: 損の出ている保有＝判定の日の終値が買値より下の保有を翌朝に売る／買値から−8%以下の保有を翌朝に売る（Pの SOX の条件を信用の判定に替えた形）／全部の保有を翌朝に売る／"
           "その日（合図の日）が判定の日なら順張り（ミネルヴィニ・新高値V2）だけ、または全部の新しい買いを止める／判定の日から、HYG/IEI の終値が10日線を上回るまで全部の新しい買いを止める。\n")
     w(f"「判定」は、乱数の組ごとに 2015〜2021年・2022年〜 の両方で「{REF}」を上回ったか。\n")
-    w("| 形 | 組 | 年率 | 含み損込みの最大下落率 | 2015〜2021年 | 2022年〜 | 直近3年 |" + (" 2026年9月〜（10/15まで） |" if SEP else "") + " 判定 |")
+    w("| 形 | 組 | 年率 | 含み損込みの最大下落率 | 2015〜2021年 | 2022年〜 | 直近3年 |" + (f" 2026年9月〜（{days[-1][5:].replace('-', '/')}まで） |" if SEP else "") + " 判定 |")
     w("|---|---|---|---|---|---|---|" + ("---|" if SEP else "") + "---|")
     res = {}
     for nm, spec in forms:
@@ -2489,13 +2523,13 @@ def opt_stage(base, data, sim, days, ind, cache, part):
             cg, mm, ii, oo, g3, gs = [], [], [], [], [], []
             sy = (dt.date.fromisoformat(days[-1]) - dt.date.fromisoformat(sep_lo)).days / 365.25
             for q in range(30):
-                g, m = port(trs, s0 + q, days[0], days[-1], sp["slots"], sp["cap"], sp["swap"])
+                g, m = port(trs, s0 + q, days[0], days[-1], sp["slots"], sp["cap"], sp["swap"], sp["abn"])
                 cg.append(g); mm.append(m)
-                ii.append(port(trs, s0 + q, days[0], is_hi, sp["slots"], sp["cap"], sp["swap"])[0])
-                oo.append(port(trs, s0 + q, oos_lo, days[-1], sp["slots"], sp["cap"], sp["swap"])[0])
-                g3.append(port(trs, s0 + q, l3, days[-1], sp["slots"], sp["cap"], sp["swap"])[0])
+                ii.append(port(trs, s0 + q, days[0], is_hi, sp["slots"], sp["cap"], sp["swap"], sp["abn"])[0])
+                oo.append(port(trs, s0 + q, oos_lo, days[-1], sp["slots"], sp["cap"], sp["swap"], sp["abn"])[0])
+                g3.append(port(trs, s0 + q, l3, days[-1], sp["slots"], sp["cap"], sp["swap"], sp["abn"])[0])
                 if SEP:
-                    gs.append((1 + port(trs, s0 + q, sep_lo, days[-1], sp["slots"], sp["cap"], sp["swap"])[0]) ** sy - 1)
+                    gs.append((1 + port(trs, s0 + q, sep_lo, days[-1], sp["slots"], sp["cap"], sp["swap"], sp["abn"])[0]) ** sy - 1)
             res[(nm, s0)] = (med(cg), med(mm), med(ii), med(oo))
             b0 = res.get((REF, s0))
             ok = b0 and nm != REF and med(ii) > b0[2] and med(oo) > b0[3]
@@ -2512,7 +2546,7 @@ def opt_stage(base, data, sim, days, ind, cache, part):
             row = []
             for y in years:
                 ds = [d for d in days if d[:4] == y]
-                xs = [port(trs, 5000 + q, ds[0], ds[-1], sp["slots"], sp["cap"], sp["swap"]) for q in range(30)]
+                xs = [port(trs, 5000 + q, ds[0], ds[-1], sp["slots"], sp["cap"], sp["swap"], sp["abn"]) for q in range(30)]
                 yrs_ = (dt.date.fromisoformat(ds[-1]) - dt.date.fromisoformat(ds[0])).days / 365.25
                 row.append(pct(med([(1 + g) ** yrs_ - 1 for g, _ in xs])))
             w(f"| {nm} | " + " | ".join(row) + " |")
@@ -2522,6 +2556,67 @@ def opt_stage(base, data, sim, days, ind, cache, part):
     w("- この結果はルールの条件どおりに機械的に計算したもので、Claudeによる個別銘柄の売買判断ではない。")
     open(OUTDIR + f"直した数え方で年率を上げる形を探す_{part}" + os.environ.get("OUT_SUFFIX", "") + ".md", "w", encoding="utf-8").write("\n".join(L) + "\n")
     print("書き出し", file=sys.stderr)
+    if os.environ.get("OPT_STOPLOG") == "1":   # 下げごとの損切りの数と、その間の資金の増減（2026-10-18 ユーザーの指示）
+        # 下げの回: SOXが直近20取引日の最高値から−7%以上になった日のうち、その前の20取引日にその状態がなかった日（2015年〜）。今回（2026-10-12〜）も入れる
+        i15 = min(k for k, d in enumerate(days) if d >= "2015-01-01")
+        isD = [sdd20[d] <= -0.07 for d in days]
+        eps, last = [], -999
+        for k in range(i15, len(days)):
+            if isD[k]:
+                if k - last > 20:
+                    eps.append(k)
+                last = k
+        cur_ = min((k for k, d in enumerate(days) if d >= "2026-10-12" and isD[k]), default=None)
+        if cur_ is not None and cur_ not in eps:
+            eps.append(cur_)
+        eps.sort()
+        W_ = 30
+        big = {k: (min(x for x in sox[k:k + 61] if x) / sox[k] - 1) <= -0.15 for k in eps}
+        stats = {}   # (形, 回) -> [損切りの数, 全部が損切りだったか, 持っていた数, 異常の売りの数, 30日の資金の増減]
+        for nm, spec in forms:
+            trs, sp = make(spec)
+            for q in range(30):
+                lg = []
+                port(trs, 5000 + q, days[0], days[-1], sp["slots"], sp["cap"], sp["swap"], sp["abn"], log=lg)
+                eqd = {x[1]: x[2] for x in lg if x[0] == "eq"}
+                pos_ = [x for x in lg if x[0] != "eq"]
+                for k in eps:
+                    e, we = days[k], days[min(k + W_, len(days) - 1)]
+                    pe = days[k - 1]
+                    held0 = [x for x in pos_ if x[0] < e and (x[1] is None or x[1] >= e)]
+                    st_ = sum(1 for x in pos_ if x[2] == "stop" and x[1] is not None and e <= x[1] <= we)
+                    allst = bool(held0) and all(x[2] == "stop" and x[1] is not None and x[1] <= we for x in held0)
+                    ab_ = sum(1 for x in pos_ if x[2] == "abn" and e <= x[1] <= we)
+                    r_ = eqd[we] / eqd[pe] - 1 if pe in eqd and we in eqd else 0.0
+                    stats.setdefault((nm, k), []).append((st_, allst, len(held0), ab_, r_))
+            print("損切りの数", nm, file=sys.stderr)
+        mean = lambda xs: sum(xs) / len(xs) if xs else 0.0
+        L2 = [f"---\ntype: backtest\ntitle: 下げごとの損切りの数と資金の増減\ncreated: {dt.date.today()}\nscript: tools/backtest_retest.py --stage opt2（OPT_STOPLOG=1）\n---\n",
+              f"# SOXの下げごとの、損切りの数と資金の増減{'（87銘柄に固定・後知恵あり）' if os.environ.get('OUT_SUFFIX', '').endswith('87銘柄') else ''}\n",
+              "2026-10-18、ユーザーの指示「33回下げた時、損切りしてないのですか？問題なのは全ての銘柄が損切りに達した事で異常事態を対策できなかった事」。"
+              f"下げの回＝SOXが直近20取引日の最高値から−7%以上になった日のうち、その前の20取引日にその状態がなかった日（2015年〜、株価は{days[-1]}まで）。今回（2026-10-12〜）も入れた。"
+              f"それぞれの回の日から{W_}取引日の間を数えた。乱数30通りの平均。「大きな下げ」＝その後60取引日の間にSOXがさらに−15%以上下げた回。\n",
+              "- 損切り: 日中の逆指値15%（窓を開けて下で寄った場合も）で終わった売買の数。全部が損切り: 下げの日に持っていた保有が、全部その期間に損切りで終わった割合。\n"]
+        base_nm = forms[1][0] if len(forms) > 1 else forms[0][0]
+        others = [nm for nm, _ in forms if nm not in (base_nm, "今のルール（傾きの小さい順）")]
+        L2.append(f"| 下げの日 | 大きな下げ | {base_nm}: 損切り | 全部が損切り | 持っていた数 | 30日の資金の増減 | " + " | ".join(f"{nm.replace(base_nm + '＋', '')}: 30日の増減（異常の売り）" for nm in others) + " |")
+        L2.append("|---|---|---|---|---|---|" + "---|" * len(others))
+        for k in eps:
+            b_ = stats[(base_nm, k)]
+            row = f"| {days[k]}{'（今回）' if k == cur_ else ''} | {'大' if big[k] else ''} | {mean([x[0] for x in b_]):.1f} | {mean([x[1] for x in b_]) * 100:.0f}% | {mean([x[2] for x in b_]):.1f} | {mean([x[4] for x in b_]) * 100:+.1f}% | "
+            row += " | ".join(f"{mean([x[4] for x in stats[(nm, k)]]) * 100:+.1f}%（{mean([x[3] for x in stats[(nm, k)]]):.1f}）" for nm in others) + " |"
+            L2.append(row)
+        L2.append("\n## まとめ（30日の資金の増減の合計。土台との差）\n")
+        L2.append("| 形 | 大きな下げの回（" + str(sum(1 for k in eps if big[k])) + "回） | それ以外の回（" + str(sum(1 for k in eps if not big[k] and k != cur_)) + "回） | 今回 |")
+        L2.append("|---|---|---|---|")
+        for nm in [base_nm] + others:
+            def tot(sel):
+                return sum(mean([x[4] for x in stats[(nm, k)]]) - (0 if nm == base_nm else mean([x[4] for x in stats[(base_nm, k)]])) for k in eps if sel(k)) * 100
+            lab = "（土台そのもの: 増減の合計）" if nm == base_nm else "（土台との差の合計）"
+            L2.append(f"| {nm.replace(base_nm + '＋', '')}{lab} | {tot(lambda k: big[k]):+.1f}ポイント | {tot(lambda k: not big[k] and k != cur_):+.1f}ポイント | {tot(lambda k: k == cur_):+.1f}ポイント |")
+        L2.append("\n- この結果はルールの条件どおりに機械的に計算したもので、Claudeによる個別銘柄の売買判断ではない。")
+        open(OUTDIR + "下げごとの損切りの数" + os.environ.get("OUT_SUFFIX", "") + ".md", "w", encoding="utf-8").write("\n".join(L2) + "\n")
+        print("書き出し（損切りの数）", file=sys.stderr)
 
 
 def audit_stage(base, data, sim, days, ind, cache, flags):
@@ -2629,7 +2724,7 @@ def audit_stage(base, data, sim, days, ind, cache, flags):
     lab = "以前の数え方" if flags == "old" else "直した数え方（--keep-open --overlap）"
     w(f"---\ntype: backtest\ntitle: 点検 採用した決まりの確かめ直し（{lab}）\ncreated: {dt.date.today()}\nscript: tools/backtest_retest.py --stage audit{'' if flags == 'old' else ' --keep-open --overlap'}\n---\n")
     w(f"# 点検: 今まで採用した決まりが、{lab}でも成り立つか\n")
-    w("2026-10-16、ユーザーの指示「今まで行った全てのバックテストで不備がないか確認して」。後知恵なしの監視銘柄、損切りは全部のルールで日中の逆指値15%、4銘柄・1銘柄＝その日の資金÷4、同じ業種2銘柄まで、2015年〜（株価は2026-10-15まで）、片道0.1%込み。乱数30通り×2組の中央値。\n")
+    w("2026-10-16、ユーザーの指示「今まで行った全てのバックテストで不備がないか確認して」。後知恵なしの監視銘柄、損切りは全部のルールで日中の逆指値15%、4銘柄・1銘柄＝その日の資金÷4、同じ業種2銘柄まで、2015年〜（株価は" + days[-1] + "まで）、片道0.1%込み。乱数30通り×2組の中央値。\n")
     w("## 1. ルールごとの合図の成績（株の値段、枠に入らなかった合図も含む）\n")
     w("| ルール | 合図の数（年） | 勝率 | 1回平均 | 1回の中央値 |")
     w("|---|---|---|---|---|")
