@@ -2579,14 +2579,14 @@ def opt_stage(base, data, sim, days, ind, cache, part):
                 lg = []
                 port(trs, 5000 + q, days[0], days[-1], sp["slots"], sp["cap"], sp["swap"], sp["abn"], log=lg)
                 eqd = {x[1]: x[2] for x in lg if x[0] == "eq"}
-                pos_ = [x for x in lg if x[0] != "eq"]
+                plog_ = [x for x in lg if x[0] != "eq"]
                 for k in eps:
                     e, we = days[k], days[min(k + W_, len(days) - 1)]
                     pe = days[k - 1]
-                    held0 = [x for x in pos_ if x[0] < e and (x[1] is None or x[1] >= e)]
-                    st_ = sum(1 for x in pos_ if x[2] == "stop" and x[1] is not None and e <= x[1] <= we)
+                    held0 = [x for x in plog_ if x[0] < e and (x[1] is None or x[1] >= e)]
+                    st_ = sum(1 for x in plog_ if x[2] == "stop" and x[1] is not None and e <= x[1] <= we)
                     allst = bool(held0) and all(x[2] == "stop" and x[1] is not None and x[1] <= we for x in held0)
-                    ab_ = sum(1 for x in pos_ if x[2] == "abn" and e <= x[1] <= we)
+                    ab_ = sum(1 for x in plog_ if x[2] == "abn" and e <= x[1] <= we)
                     r_ = eqd[we] / eqd[pe] - 1 if pe in eqd and we in eqd else 0.0
                     stats.setdefault((nm, k), []).append((st_, allst, len(held0), ab_, r_))
             print("損切りの数", nm, file=sys.stderr)
