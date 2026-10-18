@@ -419,6 +419,49 @@ def main():
         base += [{**t, "x": "c15"} for t in from_gen(G(ctx["CR"](15), ctx["above5"], ctx["ok_rot"], STOP, 60), "C") if (t["sym"], t["i0"]) not in have_]
     base += from_gen(G(bm2.E_base(2.0), ctx["below50"], ctx["ok_rot"], STOP), "M")
     base += from_gen(G(ctx["v2o"], ctx["below50"], ctx["ok10"], STOP), "V")
+    if os.environ.get("OPT_OUTSIDE") == "1":   # テーマの外の強い銘柄（毎朝の theme_scan.py の空き枠の候補。2026-10-18、バックテストに入れていなかったので確かめる）
+        # S&P500の構成銘柄で、その週の監視銘柄でないもの: RS≧90・終値＞150日線＞20日前の150日線・流動性・業種の3カ月の強さが上位20%（backtest_industry と同じ）。
+        # 4つのルールを同じように当て、新高値V2のRS上位10はテーマの外の銘柄の中で数える。opt の形 outside のときだけ使い、同じ日の監視銘柄の候補の後に買う
+        import backtest_industry as _bi
+        for x_ in data:
+            data[x_]["ind"] = ind.get(x_)
+        IR_ = _bi.industry_ranks(data, members)
+        elig_ = {}
+        for sym_, s_ in data.items():
+            c_ = s_["c"]
+            cs_ = [0.0]
+            for v_ in c_:
+                cs_.append(cs_[-1] + v_)
+            for i in range(170, len(c_)):
+                r_ = s_["rs"][i]
+                if r_ is None or r_ < 90:
+                    continue
+                m150, m150p = (cs_[i + 1] - cs_[i - 149]) / 150, (cs_[i - 19] - cs_[i - 169]) / 150
+                if not (c_[i] > m150 > m150p) or not cb.bt.liquid(s_, i, members.get(sym_, [])) or ctx["ok_rot"](s_, i, members.get(sym_, [])):
+                    continue
+                rk_ = IR_.get(s_["date"][i], {}).get(ind.get(sym_))
+                if rk_ is None or rk_ > 0.2:
+                    continue
+                elig_.setdefault(s_["date"][i], {})[sym_] = r_
+        top10_ = {d_: set(sorted(m_, key=lambda k: -m_[k])[:10]) for d_, m_ in elig_.items()}
+        ok_out = lambda s_, i, sp: s_["sym"] in elig_.get(s_["date"][i], ())
+        ok10_out = lambda s_, i, sp: s_["sym"] in top10_.get(s_["date"][i], ())
+        old2_, bs.STOP_MAX = bs.STOP_MAX, STOP
+        try:
+            b3o_ = bs.simulate(data, members, bs.O_method3, bs.X_upper_band, cb.START, end, ok=ok_out)
+        finally:
+            bs.STOP_MAX = old2_
+        outs_ = []
+        for t in b3o_:
+            x = b3_exit(t)
+            if x:
+                outs_.append(rec(t["sym"], idx(t["sym"], t["in"]), x[0], t["px"], x[1], "B"))
+        outs_ += from_gen(G(ctx["CR"](10), ctx["above5"], ok_out, STOP, 60), "C")
+        outs_ += from_gen(G(bm2.E_base(2.0), ctx["below50"], ok_out, STOP), "M")
+        outs_ += from_gen(G(ctx["v2o"], ctx["below50"], ok10_out, STOP), "V")
+        base += [{**t, "x": "out"} for t in outs_]
+        print(f"テーマの外: 対象の日 {len(elig_)}日・1日平均 {sum(len(v) for v in elig_.values()) / max(1, len(elig_)):.1f}銘柄、売買 "
+              + "、".join(f"{r_} {sum(1 for t in outs_ if t['rule'] == r_)}" for r_ in "BCMV"), file=sys.stderr)
     XTRA = {x for x in os.environ.get("OPT_EXTRA", "").split(",") if x}   # 見送った候補の確かめ直し（2026-10-17）で足す買いの合図。opt の形で rules に入れたときだけ使う
     if XTRA:
         import json as _json
@@ -2296,7 +2339,7 @@ def opt_stage(base, data, sim, days, ind, cache, part):
           "v2cbm_noai": lambda t: ({"V": 0, "C": 1, "B": 2, "M": 3}.get(t["rule"], 4), -t["rs"]),
           "reg": lambda t: (0 if t["ai"] else 1, -t["reg"])}
     # 形: 名前 → 決まり（変えない項目は今のルール）
-    BASE = {"rules": ("B", "C", "M", "V"), "prio": "slope", "streak": None, "slots": 4, "cap": 2, "etf": "reg", "stop": STOP, "rel8": False, "swap": None, "xsell": None, "s2": False, "close_stop": False, "hotwait": False, "c10": False, "kx": None, "kb": None, "bsect": False, "indtop": None, "tstop": None, "pstop": None, "m30": False, "c15": False, "lim2": False, "hadd": None, "ichi": False}
+    BASE = {"rules": ("B", "C", "M", "V"), "prio": "slope", "streak": None, "slots": 4, "cap": 2, "etf": "reg", "stop": STOP, "rel8": False, "swap": None, "xsell": None, "s2": False, "close_stop": False, "hotwait": False, "c10": False, "kx": None, "kb": None, "bsect": False, "indtop": None, "tstop": None, "pstop": None, "m30": False, "c15": False, "lim2": False, "hadd": None, "ichi": False, "outside": False}
     V1 = {"今のルール（傾きの小さい順）": {},
           "買う順番: RSの高い順": {"prio": "rs"},
           "買う順番: RSの高い順（AI半導体を先にしない）": {"prio": "rs_noai"},
@@ -2354,6 +2397,7 @@ def opt_stage(base, data, sim, days, ind, cache, part):
     V1["ミネルヴィニの手じまいを30日線にする"] = {"m30": True}
     V1["急落の底をRSI(2)≦15にする（OPT_C15=1 で動かす）"] = {"c15": True}
     # 見送った候補の確かめ直し（2026-10-17）: 買い方・新しい合図・買う順番
+    V1["テーマの外の強い銘柄で空き枠を埋める（OPT_OUTSIDE=1、毎朝のツールと同じ）"] = {"outside": True}
     V1["押し目・急落の底を寄り付きの2%下の指値で買う"] = {"lim2": True}
     V1["順張りは半分を合図で買い、残りは3%下に10日の指値で買い足す"] = {"hadd": (0.03, 10, ("M", "V"))}
     V1["順張りは一目の転換線が基準線より上のときだけ買う"] = {"ichi": True}
@@ -2384,7 +2428,7 @@ def opt_stage(base, data, sim, days, ind, cache, part):
         sp = {**BASE, **spec}
         trs = [t for t in stock_trades(sp["stop"], sp["rel8"], sp["xsell"], sp["close_stop"], sp["hotwait"], sp["c10"], sp["kx"], sp["tstop"], sp["pstop"], sp["m30"],
                                        sp["lim2"], sp["hadd"])
-               if t["rule"] in sp["rules"] and (not t["x"] or (t["x"] == "c15" and sp["c15"]))]
+               if t["rule"] in sp["rules"] and (not t["x"] or (t["x"] == "c15" and sp["c15"]) or (t["x"] == "out" and sp["outside"]))]
         if sp["ichi"]:   # 順張りは、合図の日に一目の転換線＞基準線のときだけ買う（--stage filter）
             trs = [t for t in trs if t["ichi"]]
         if sp["kb"]:   # 信用の悪化の日（合図の日の引けで判定）は新しい買いを止める
@@ -2402,6 +2446,8 @@ def opt_stage(base, data, sim, days, ind, cache, part):
             keep = {"all": ("B", "C", "M", "V"), "rev": ("B", "C"), "trend": ("M", "V")}[sp["streak"]]
             trs = [t for t in trs if t["first"] or t["rule"] not in keep]
         trs = [{**t, "prio": PR[sp["prio"]](t)} for t in trs]
+        if sp["outside"]:   # テーマの外の候補は、同じ日の監視銘柄の候補の後（毎朝の theme_scan.py と同じ）
+            trs = [{**t, "prio": (1 if t["x"] == "out" else 0,) + (t["prio"] if isinstance(t["prio"], tuple) else (t["prio"],))} for t in trs]
         return lev(trs, sp["etf"]), sp
 
     last3 = (dt.date.fromisoformat(days[-1]) - dt.timedelta(days=365 * 3)).isoformat()
