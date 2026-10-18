@@ -5,6 +5,8 @@ created: 2026-10-04
 script: tools/backtest_retest.py --stage etfrule
 ---
 
+> **注意（2026-10-18 追記）**: この結果は以前の数え方（2026-10-16 より前。同じ銘柄に続けて出る合図を数えず、最終日に持っている売買を捨てていた）で計算したもの（直した数え方で計算し直しても、結論は変わらなかった）。直した数え方の結果は `直した数え方_2026-10-17/2倍ETFを使う決まり.md`。以前の結論が直した数え方でも成り立つかの判定は「**変わらない**」（`点検_2026-10-17_全バックテストの計算し直し.md` の 8.）。今のルール（RSの高い順）を土台にした確かめは同じ点検の 4.・9.。
+
 # 2倍ETFを使う決まり（ルールごと・目減りの大きいETFを除く）
 
 2倍ETFがある38銘柄（ユーザーがムームー証券で買えることを確認）: AAPL・ADBE・AFRM・AMD・AMZN・APP・ARM・ASML・AVGO・BABA・COIN・CRM・CRWD・CRWV・DELL・GOOG・GOOGL・HOOD・INTC・LITE・META・MRVL・MSFT・MSTR・MU・NBIS・NFLX・NOW・NVDA・ORCL・PANW・PLTR・RDDT・SMCI・SNDK・TSLA・TSM・VRT。目減りは直近1年の実測（`個別株2倍ETFの比べ方.md`、表にないものは年12%）。合図・売る日は今のルールのまま。乱数3組。
