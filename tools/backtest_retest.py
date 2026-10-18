@@ -2570,7 +2570,7 @@ def opt_stage(base, data, sim, days, ind, cache, part):
             elif x[0] != "eq" and (x[1] is None or x[1] >= d0):
                 t = byd.get((x[3], x[0]))
                 pv = sorted((t or {}).get("path", {}).items())[-6:]
-                print("保有", x[3], "買い", x[0], "売り", x[1], x[2], "2倍" if t and t.get("L") == 2 else "株", " ".join(f"{d[5:]}:{v:.3f}" for d, v in pv), file=sys.stderr)
+                print("保有", x[3], "買い", x[0], "売り", x[1], x[2], "2倍" if t and t.get("L") == 2 else "株", (t or {}).get("rule"), " ".join(f"{d[5:]}:{v:.3f}" for d, v in pv), file=sys.stderr)
     if os.environ.get("OPT_STOPLOG") == "1":   # 下げごとの損切りの数と、その間の資金の増減（2026-10-18 ユーザーの指示）
         # 下げの回: SOXが直近20取引日の最高値から−7%以上になった日のうち、その前の20取引日にその状態がなかった日（2015年〜）。今回（2026-10-12〜）も入れる
         i15 = min(k for k, d in enumerate(days) if d >= "2015-01-01")
