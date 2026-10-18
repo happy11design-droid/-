@@ -13,6 +13,9 @@
 
 税: 両方のツールとも、売って確定した損益を暦年ごとに通算し、年末に利益の20.315%を払う（損失の繰越はしない）。
 最後に持っている株・QQQには税をかけない。QQQの売買の損益には税をかけない（簡単のため）。
+環境変数 BT_QQQ_TAX=1（2026-10-18）: 待っている現金のQQQも、売った分の損益を税の通算に入れ、QQQの売買にも手数料をかける
+（その日の売買の後のQQQの増減を、買い足し・一部売りとみなす。一部売りの損益は平均の取得価格で計算）。
+環境変数 BT_COST: 片道の手数料（既定 0.001）。ムームー証券の米国株の手数料は約定代金の0.132%（上限22ドル）なので 0.00132。
 """
 import argparse
 import datetime as dt
@@ -31,8 +34,10 @@ from backtest_lib import DEFAULT_CACHE, load_prices
 
 TAX = 0.20315
 SELL_AT_2X = 1 / (2 - TAX)
-COST = 0.001
-NEW_PKL = os.path.join(DEFAULT_CACHE, "newtool_trades_fixed.pkl" if os.environ.get("BT_FIXED") == "1" else "newtool_trades.pkl")   # 直した数え方の売買の一覧は別のファイル
+COST = float(os.environ.get("BT_COST", "0.001"))
+QQQ_TAX = os.environ.get("BT_QQQ_TAX") == "1"
+NEW_PKL = os.path.join(DEFAULT_CACHE, ("newtool_trades_fixed" if os.environ.get("BT_FIXED") == "1" else "newtool_trades")
+                       + (f"_c{os.environ['BT_COST']}" if os.environ.get("BT_COST") else "") + ".pkl")   # 直した数え方の売買の一覧は別のファイル
 
 
 # ---------- 新分析ツールの売買の一覧（backtest_retest.py から写した） ----------
@@ -44,7 +49,7 @@ def cmd_newtrades(a):
     import backtest_minervini2 as bm2
     import backtest_rebuy as rb
     import backtest_swing as bs
-    STOP, R_COST = 0.15, 0.001
+    STOP, R_COST = 0.15, COST
     ctx = cb.setup(DEFAULT_CACHE, with_parts=False)
     data, members, ind, days, G, end = (ctx[k] for k in ("data", "members", "ind", "days", "G", "end"))
     pos = {}
@@ -211,6 +216,8 @@ class Account:
         self.onk = {}     # sym -> 株数
         self.onk_cost = {}  # sym -> 恩株の買値の合計
         self.realized = 0.0
+        self.qh = 0.0     # 前の日の終わりのQQQの価値（BT_QQQ_TAX）
+        self.qb = 0.0     # QQQの取得価格の合計
 
 
 def run(feats, new_trades, ind, days, dbl_sig, mode, seed=0, cash_px=None, split=None, fund="free", slots_d=3, slots_n=4,
@@ -531,6 +538,20 @@ def run(feats, new_trades, ind, days, dbl_sig, mode, seed=0, cash_px=None, split
                     hits = [x for x in hits if all(x != y for _, y in delayed)]
                     delayed += [(t + 1 + delay, x) for x in hits[:free]]
                     pending = []
+        if QQQ_TAX and cash_px and cash_regs is None:   # 待っているQQQの売買: その日の増減を買い足し・一部売りとみなし、税の通算と手数料に入れる
+            g_ = cash_px[d] / cash_px[days[t - 1]] if t > 0 and d in cash_px and days[t - 1] in cash_px else 1.0
+            for acc in accts:
+                h_exp, h_end = acc.qh * g_, max(acc.cash, 0.0)
+                flow = h_end - h_exp
+                if flow < -1e-9 and h_exp > 0:
+                    f_ = min(1.0, -flow / h_exp)
+                    acc.realized += f_ * (h_exp - acc.qb)
+                    acc.qb *= (1 - f_)
+                    acc.cash -= COST * (-flow)
+                elif flow > 1e-9:
+                    acc.qb += flow * (1 - COST)
+                    acc.cash -= COST * flow
+                acc.qh = max(acc.cash, 0.0)
         eq = 0.0
         for acc in accts:
             eq += acc.cash + sum(h["size"] * h["v"] for h in acc.new.values())

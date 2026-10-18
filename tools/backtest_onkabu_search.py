@@ -307,14 +307,62 @@ def cmd_portfolio(a):
     print(text)
 
 
+def cmd_portfolio_design(a):
+    """形の選び直し（2026-10-18、点検 2026-10-16 の #4・2026-10-17 の #9）: 段階1・2 を 2015〜2020年だけの成績（SPYとの差）で並べ、
+    そこで選ばれた形と今の採用の形を、4つの条件（2021年〜を含む）で比べる。段階1の枠の数に、今の実際の1銘柄（4,500ドル）も入れる"""
+    from multiprocessing import Pool
+    global CONDS
+    full = list(CONDS)
+    members, spy, feats = load_all()
+    qd = load_prices(DEFAULT_CACHE, "QQQ")
+    qqq = dict(zip(qd["date"], qd["c"]))
+    CONDS = [full[0]]   # 選ぶのは 2015〜2020年だけ
+    with Pool(4, initializer=_init, initargs=(feats, spy, qqq)) as pool:
+        grid1 = [{"slots": n, "stop": st_, "T": T, "rot": r, "entry": "open"}
+                 for n in (1, 2, 3, 4, 6, 8) for st_ in (None, 0.08, 0.12, 0.15, 0.2, 0.3) for T in (63, 126, 189, 252) for r in (None, -0.05, 0.0, 0.1)]
+        r1 = pool.map(_run, [(SIG_BASE, c, a.seeds) for c in grid1], chunksize=4)
+        r1.sort(key=lambda x: score(x[2]), reverse=True)
+        print("段階1 完了", flush=True)
+        top_cfgs = [c for _, c, _ in r1[:8]]
+        jobs = [(sg, {**c, "entry": e}) for sg in SIGS2 for c in top_cfgs for e in ("open", "dip5", "dip10", "confirm", "half")]
+        r2 = pool.map(_run, [(sg, c, a.seeds) for sg, c in jobs], chunksize=4)
+        r2.sort(key=lambda x: score(x[2]), reverse=True)
+        print("段階2 完了", flush=True)
+    CONDS = full
+    adopted_sig = {"mom": ("r126", 1.0), "hi": "nh", "rev": 0.1, "extra": None}
+    adopted = [(adopted_sig, {"slots": n, "stop": 0.3, "T": 189, "rot": None, "entry": "open"}) for n in (1, 3)]
+    with Pool(4, initializer=_init, initargs=(feats, spy, qqq)) as pool:
+        fin = pool.map(_run, [(sg, c, a.seeds) for sg, c, _ in r2[:10]] + [(sg, c, a.seeds) for sg, c in adopted])
+    sel, adp = fin[:10], fin[10:]
+    head = ("| 順位（2015〜2020年で） | 合図 | 買い方・売り方 | " + " | ".join(f"{c[0]}" for c in full) + " |\n|---|---|---|" + "---|" * len(full))
+    def row(k, sig, cfg, res):
+        return f"| {k} | {ol.describe(sig)} | {fmt_cfg(cfg)} | " + " | ".join(f"{r['cagr']:.1%}（{r['mdd']:.0%}・恩株{r['onk']:.0f}）" for r in res) + " |"
+    rank1 = next((k for k, (_, c, _) in enumerate(r1, 1) if c == {"slots": 3, "stop": 0.3, "T": 189, "rot": None, "entry": "open"}), None)
+    rank1b = next((k for k, (_, c, _) in enumerate(r1, 1) if c == {"slots": 1, "stop": 0.3, "T": 189, "rot": None, "entry": "open"}), None)
+    out = ["---\ntype: backtest\ntitle: 恩株ツールの形を2020年までで選び直す\ncreated: " + str(dt.date.today()) + "\nscript: tools/backtest_onkabu_search.py portfolio_design\n---\n",
+           "# 恩株ツール（倍増ツール）の形を、2015〜2020年の成績だけで選び直して、2021年〜で確かめる\n",
+           "点検（`点検_2026-10-16_恩株ツールのバックテスト.md` の #4）: 今の採用の形は、確かめる期間（2021年〜）も入れた4つの条件で選んでいた。"
+           "同じ探索（段階1: 枠の数・損切り・期限・乗り換えの " + str(len(r1)) + "通り、段階2: 合図11通り×段階1の上位8×買い方5通り）を、2015〜2020年の成績（SPYとの差）だけで並べ直した。"
+           f"乱数{a.seeds}通りの中央値、資金6,000ドル、待っている現金はQQQ、恩株ツールだけ（新分析ツールなし）、税は入れない。SPYの年率: " + " / ".join(f"{r['cond']} {r['spy']:.1%}" for r in adp[0][2]) + "\n",
+           f"- 今の採用の売り方（3銘柄・−30%・189日・乗り換えなし）は、段階1の2015〜2020年の順位で {rank1}位／{len(r1)}通り。1銘柄（今の実際）は {rank1b}位。\n",
+           "## 2015〜2020年で選んだ上位10（4つの条件の年率（最大下落率・恩株の数））\n", head]
+    out += [row(k, sg, c, res) for k, (sg, c, res) in enumerate(sel, 1)]
+    out += ["\n## 今の採用の形\n", head.replace("| 順位（2015〜2020年で） |", "| 形 |")]
+    out += [row("今の採用" + ("（1銘柄・今の実際）" if c["slots"] == 1 else "（3銘柄・探索のときの形）"), sg, c, res) for sg, c, res in adp]
+    out += ["\n- この結果はルールの条件どおりに機械的に計算したもので、Claudeによる個別銘柄の売買判断ではない。"]
+    text = "\n".join(out) + "\n"
+    open(a.out, "w", encoding="utf-8").write(text)
+    print(text)
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("cmd", choices=("signals", "portfolio"))
+    ap.add_argument("cmd", choices=("signals", "portfolio", "portfolio_design"))
     ap.add_argument("--seeds", type=int, default=6)
     ap.add_argument("--out")
     ap.add_argument("--summary")
     a = ap.parse_args()
-    {"signals": cmd_signals, "portfolio": cmd_portfolio}[a.cmd](a)
+    {"signals": cmd_signals, "portfolio": cmd_portfolio, "portfolio_design": cmd_portfolio_design}[a.cmd](a)
 
 
 if __name__ == "__main__":
