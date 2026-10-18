@@ -62,6 +62,8 @@ def main():
         s, sym = data[t["sym"]], t["sym"]
         o, h, l, c = s["o"], s["h"], s["l"], s["c"]
         i0, n, px = idx(sym, t["in"]), len(c), t["px"]
+        if i0 >= n - 1:   # 2026-10-18: データの最終日に買う売買は数えない（同じ日に買って売る扱いになり、枠を使わずに何十銘柄も買っていた）
+            return None
         floor, pend, j = px * (1 - STOP), False, i0
         while j < n:
             if pend:

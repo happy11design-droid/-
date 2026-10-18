@@ -223,6 +223,8 @@ def simulate(data, members, order, exit_fn, start, end, allow=None, trail=None, 
                         i += 1
                         continue
                     px = od["trigger"]
+            if bl_.KEEP_OPEN and e >= len(c) - 1:   # 2026-10-18: データの最終日に買う売買は数えない（同じ日に買って売る扱いになり、枠を使わずに何十銘柄も買っていた）
+                break
             floor = px * (1 - STOP_MAX)
             stop = max(od["stop"], floor) if od.get("stop") is not None else floor
             t = {"px": px, "stop": stop, "entry": e}

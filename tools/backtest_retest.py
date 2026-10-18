@@ -380,6 +380,8 @@ def main():
         s, sym = data[t["sym"]], t["sym"]
         o, h, l, c = s["o"], s["h"], s["l"], s["c"]
         i0, n, px = idx(sym, t["in"]), len(c), t["px"]
+        if i0 >= n - 1:   # 2026-10-18: データの最終日に買う売買は数えない（同じ日に買って売る扱いになり、枠を使わずに何十銘柄も買っていた）
+            return None
         floor, pend, j = px * (1 - STOP), False, i0
         while j < n:
             if pend:
@@ -2556,6 +2558,19 @@ def opt_stage(base, data, sim, days, ind, cache, part):
     w("- この結果はルールの条件どおりに機械的に計算したもので、Claudeによる個別銘柄の売買判断ではない。")
     open(OUTDIR + f"直した数え方で年率を上げる形を探す_{part}" + os.environ.get("OUT_SUFFIX", "") + ".md", "w", encoding="utf-8").write("\n".join(L) + "\n")
     print("書き出し", file=sys.stderr)
+    if os.environ.get("OPT_DEBUG_EQ"):   # 調べる用: 最初の形の乱数1通りの、指定の日からの資金と保有（OPT_DEBUG_EQ=開始日）
+        trs, sp = make(forms[1][1] if len(forms) > 1 else forms[0][1])
+        lg = []
+        port(trs, 5000, days[0], days[-1], sp["slots"], sp["cap"], sp["swap"], sp["abn"], log=lg)
+        d0 = os.environ["OPT_DEBUG_EQ"]
+        byd = {(t["sym"], t["in"]): t for t in trs}
+        for x in lg:
+            if x[0] == "eq" and x[1] >= d0:
+                print("資金", x[1], f"{x[2]:.4f}", file=sys.stderr)
+            elif x[0] != "eq" and (x[1] is None or x[1] >= d0):
+                t = byd.get((x[3], x[0]))
+                pv = sorted((t or {}).get("path", {}).items())[-6:]
+                print("保有", x[3], "買い", x[0], "売り", x[1], x[2], "2倍" if t and t.get("L") == 2 else "株", " ".join(f"{d[5:]}:{v:.3f}" for d, v in pv), file=sys.stderr)
     if os.environ.get("OPT_STOPLOG") == "1":   # 下げごとの損切りの数と、その間の資金の増減（2026-10-18 ユーザーの指示）
         # 下げの回: SOXが直近20取引日の最高値から−7%以上になった日のうち、その前の20取引日にその状態がなかった日（2015年〜）。今回（2026-10-12〜）も入れる
         i15 = min(k for k, d in enumerate(days) if d >= "2015-01-01")

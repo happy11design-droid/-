@@ -264,7 +264,7 @@ def gen_trades(data, members, entry, exit_fn, start, end, *, ok, fill="open", al
             if reason == "データ終端":
                 if not (KEEP_OPEN if keep_open is None else keep_open):
                     break  # 手じまいが未確定のトレードは数えない（以前の数え方）
-                if i + lag > n - 1:
+                if i + lag >= n - 1:   # 2026-10-18: データの最終日に買う売買は数えない（同じ日に買って売る扱いになり、枠を使わずに何十銘柄も買っていた）
                     break
                 trades.append({"sym": sym, "in": s["date"][i + lag], "out": s["date"][n - 1], "px": px,
                                "ret": s["c"][n - 1] / px - 1, "days": n - 1 - i, "rank": rank, "why": "保有中（最終日の終値）"})
