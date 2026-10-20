@@ -11,8 +11,9 @@ Yahooファイナンスの銘柄ごとの見出しを、日付・媒体名付き
 使い方:
   tools/news_headlines.py daily <movers.json> <出力.md>
       毎朝のテーマ監視（tools/theme_daily.sh prepare が呼ぶ。movers.json は tools/theme_scan.py が書く）。
-      その取引日の市場全体・半導体・信用（社債）・「〇〇ショック」の呼び名に加え、
-      1週間で−5%以下のグループごとに下げの大きい3銘柄と、1日で−7%以下の銘柄（合わせて最大12）の直近1週間の見出し。
+      その取引日の市場全体・半導体・信用（社債）・「〇〇ショック」の呼び名・引け後（時間外）の動きに加え、
+      1週間で−5%以下のグループごとに下げの大きい3銘柄と、1日で−7%以下の銘柄（合わせて最大12）、
+      1週間で+5%以上のグループごとに上げの大きい3銘柄と、1日で+7%以上の銘柄（合わせて最大6。2026-10-21〜）の直近1週間の見出し。
   tools/news_headlines.py day <YYYY-MM-DD> [--tickers A,B] [--per N]
   tools/news_headlines.py range <開始 YYYY-MM-DD> <終了 YYYY-MM-DD> [--tickers A,B] [--per N]
       質問を受けたとき（CLAUDE.md「相場の急な下げについて質問されたとき」）。取引日（平日）ごとに市場全体などの見出しと、
@@ -42,10 +43,13 @@ MARKET = [
     ("半導体・AI株（英語）", "chip stocks OR semiconductor stocks OR AI stocks", EN),
     ("信用（社債・借金）", "AI debt OR bonds OR credit spreads OR CDS", EN),
     ("「〇〇ショック」の呼び名（日本語）", "ショック 株", JA),
+    # 引け後の決算で時間外に動いた銘柄（2026-10-20 のSpaceX・Super Microの決算でAI半導体が時間外に上げた。2026-10-21 ユーザーの指示）
+    ("引け後・時間外の動き（英語）", '"after hours" OR "after the bell" OR "extended trading" stocks', EN),
+    ("引け後・時間外の動き（日本語）", "時間外 決算 株", JA),
 ]
 # 銘柄のページ・予想・役員の株式の受け取りなど、原因の確認に使えない見出し
 NOISE = re.compile(r"Forecast & Analyst|Price History|price, news, quote|Stock Price, News|Average Price Target|withheld for taxes|"
-                   r"units vest|Real-Time Signals|Outperforming Other|Should You Buy\?|Better Buy", re.I)
+                   r"units vest|Real-Time Signals|Outperforming Other|Should You Buy\?|Better Buy|株価・株式情報", re.I)
 # 銘柄の検索語。「〇〇 stock」だけでは株価のページが多いので、下げ・上げの理由を書いた記事を探す語を足す（2026-10-20 に比べた）
 TICKER_Q = "{name} stock (falls OR drops OR slides OR plunges OR sinks OR tumbles OR jumps OR soars OR why)"
 SUFFIX = re.compile(r"[,.]?\s+(Inc|Incorporated|Corporation|Corp|Co|Company|Holdings?|Group|plc|PLC|N\.?V|Ltd|Limited|S\.?A|SE|AG|"
@@ -166,28 +170,42 @@ def cmd_daily(a):
     o.L.append(f"# ニュースの見出し（{day} の値動きの原因の確認用）\n")
     o.L.append("- Googleニュース（日付を指定）とYahooファイナンスの見出しを `tools/news_headlines.py` が自動で並べたもの。"
                "日付は米国東部時間の配信日（引け後の記事は翌日付）。原因の判断・売買の判断はしていない。")
-    picks, info = [], {}
-    if mv:
+    picks, ups, info = [], [], {}
+
+    def choose(sign, cap):
+        """sign=-1: 下げ、+1: 上げ。1週の中央値が±5%を超えたグループの上位3銘柄と、1日で±7%を超えた銘柄"""
         st = [x for x in mv["stocks"] if x.get("w1") is not None]
-        weak = sorted(((g, v) for g, v in mv["groups"].items() if v.get("w1") is not None and v["w1"] <= -0.05), key=lambda x: x[1]["w1"])
-        for g, v in weak:
-            mem = sorted((x for x in st if x["group"] == g), key=lambda x: x["w1"])[:3]
-            picks += [x["sym"] for x in mem if x["sym"] not in picks]
-        one = sorted((x for x in mv["stocks"] if x.get("d1") is not None and x["d1"] <= -0.07), key=lambda x: x["d1"])
-        picks += [x["sym"] for x in one if x["sym"] not in picks]
-        picks = picks[:12]
+        grp = sorted(((g, v) for g, v in mv["groups"].items() if v.get("w1") is not None and sign * v["w1"] >= 0.05),
+                     key=lambda x: -sign * x[1]["w1"])
+        out = []
+        for g, v in grp:
+            mem = sorted((x for x in st if x["group"] == g), key=lambda x: -sign * x["w1"])[:3]
+            out += [x["sym"] for x in mem if x["sym"] not in out]
+        one = sorted((x for x in mv["stocks"] if x.get("d1") is not None and sign * x["d1"] >= 0.07), key=lambda x: -sign * x["d1"])
+        out += [x["sym"] for x in one if x["sym"] not in out]
+        return out[:cap], grp
+
+    if mv:
+        picks, weak = choose(-1, 12)
+        ups, strong = choose(+1, 6)
+        ups = [x for x in ups if x not in picks]
         for x in mv["stocks"]:
             info[x["sym"]] = f"{x['group']}、前日比 {pct(x['d1'])}、1週 {pct(x['w1'])}"
-        o.L.append("- 調べた銘柄の選び方: 1週の騰落率（中央値）が−5%以下のグループごとに、1週で下げの大きい3銘柄＋1日で−7%以下の銘柄（最大12）。")
+        o.L.append("- 調べた銘柄の選び方: 1週の騰落率（中央値）が−5%以下のグループごとに下げの大きい3銘柄＋1日で−7%以下の銘柄（最大12）と、"
+                   "+5%以上のグループごとに上げの大きい3銘柄＋1日で+7%以上の銘柄（最大6）。")
         o.L.append("- 1週で−5%以下のグループ: " + ("、".join(f"{g}（{pct(v['w1'])}）" for g, v in weak) if weak else "なし"))
+        o.L.append("- 1週で+5%以上のグループ: " + ("、".join(f"{g}（{pct(v['w1'])}）" for g, v in strong) if strong else "なし"))
     with ThreadPoolExecutor(6) as pool:
         o.L.append(f"\n## 1. 市場全体（{day}）")
         market_sections(o, day, a.per, pool)
         if picks:
             o.L.append(f"\n## 2. 大きく下げた銘柄（{day - dt.timedelta(days=6)}〜{day} の見出し）")
             ticker_sections(o, picks, day - dt.timedelta(days=6), day, 4, pool, info)
+        if ups:
+            o.L.append(f"\n## 3. 大きく上げた銘柄（{day - dt.timedelta(days=6)}〜{day} の見出し）")
+            ticker_sections(o, ups, day - dt.timedelta(days=6), day, 4, pool, info)
     open(a.out, "w", encoding="utf-8").write("\n".join(o.L) + "\n")
-    print(f"headlines: {a.out}（銘柄: {' '.join(picks) or 'なし'}）")
+    print(f"headlines: {a.out}（下げ: {' '.join(picks) or 'なし'}／上げ: {' '.join(ups) or 'なし'}）")
 
 
 def cmd_range(a, start, end):

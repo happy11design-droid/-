@@ -350,6 +350,12 @@
 
 # ニュース調査（2026-10-20の引け時点、調査日 2026-10-21）
 
+## 引け後・時間外の材料（10/21 7:50 追記。ユーザーの質問を受けて、見出しと株価で確かめた）
+- 通常の取引時間（10/20）: 半導体は寄り付き直後が安値（SOX 前日比−2.2%、9:40 ET）で、10:55 に+1.2%まで上げたが、引けは−0.3%。寄り後の上げは、下の引け後の決算より前（見出し: 「Chip stocks recover as AI jitters fade」Yahoo Finance 10/20、「Stocks whipsaw as investors digest new AI jitters after a dismal debut for Korean AI-cloud firm」Business Insider 10/20）。
+- 引け後: Super Micro（SMCI）が暫定決算で予想を上回り、時間外で+14.6%（「スーパー・マイクロ株急伸、暫定決算が予想上回る－時間外で12%高」ブルームバーグ 10/20）。SpaceX（SPCX）は7〜9月期決算で黒字化し、時間外で+7.5%（「Musk says backs SpaceX-Tesla merger as rocket firm turns profit」AFP 10/20、「Musk Says AI Spending Could Payback in 6 Months」Barron's 10/20、「Futures Rise On SpaceX Earnings」IBD 10/20）。Netflix は見通しが弱く−5.7%。
+- 時間外のAI半導体（18:43 ET、10/20の終値比、Yahoo）: SMH +2.1%、NVDA +2.0%、AMD +2.4%、MU +2.3%、AVGO +1.2%。
+- 背景（前の四半期の報道）: SpaceXのAIの設備への支出は直近12か月で約158億ドル。マスク氏はAIのシステムをNvidiaのGPUだけで作ると話していた（S&P Global・Motley Fool、2026-08）。
+
 ## テーマ全体の下げの原因
 - 該当日（S2あり、5グループが1週-5%以下）。見出し(headlines.md)と検索で確認。
 - きっかけ: 10/14 CoreWeave社債の急落。2032年債が額面78セント・利回り16%超、CDS 1,000bp超、負債約350億ドルが時価総額を上回る（TradingNews 10/15頃）。同日DELLが-11%（CNBC 10/14「enterprise AI timing」への懸念）、HPE・SMCI・FLEXも下落。
