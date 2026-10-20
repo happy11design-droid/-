@@ -31,6 +31,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import backtest_combo2 as cb
 import backtest_minervini2 as bm2
 import backtest_swing as bs
+import backtest_lib as bl_
 from backtest_lib import DEFAULT_CACHE, is_member, pct
 
 COST = 0.001
@@ -199,7 +200,7 @@ def main():
                 s = data[sym]
                 nxt = 0
                 for i, rk in lst:
-                    if i < nxt:
+                    if i < nxt and not bl_.OVERLAP:   # 直した数え方（BT_FIXED=1）では、持っている扱いの間の合図も数える
                         continue
                     res = position(s, i, xrule, dict(P))
                     if res is None:

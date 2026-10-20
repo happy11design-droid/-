@@ -86,13 +86,38 @@ def cmd_fetch(a):
     print(f"対象 {len(syms)} 銘柄、取得 {len(syms) - len(missing)}、取得不可 {len(missing)}")
 
 
+# ティッカーを変えた会社（2026-10-17 の点検）: 構成銘柄の一覧の古いティッカーの期間を、後継のティッカー（同じ会社で、株価に変更前の期間も入っている）に付け替える。
+# 古いティッカーの株価ファイルは、別の銘柄（FB・LB）か、ない。値は (後継, この日より前だけ付け替える)。後継の株価で同じ会社と確かめたもの。
+# 付け替えない: 後継の株価がない・壊れている（COG→CTRA、DISCA→WBD、CDAY→DAY、CBS/VIAC→PARA）、別の会社（ANDV→MPC）。
+TICKER_ALIAS = {"FB": ("META", None), "ANTM": ("ELV", None), "ABC": ("COR", None), "BLL": ("BALL", None), "NLOK": ("GEN", None), "SYMC": ("GEN", None),
+                "MYL": ("VTRS", None), "FLT": ("CPAY", None), "PKI": ("RVTY", None), "HFC": ("DINO", None), "JEC": ("J", None), "KORS": ("CPRI", None),
+                "LB": ("BBWI", None), "PEAK": ("DOC", None), "HCP": ("DOC", None), "RE": ("EG", None), "TMK": ("GL", None), "CTL": ("LUMN", None),
+                "DWDP": ("DD", None), "HRS": ("LHX", None), "FBHS": ("FBIN", None), "ARNC": ("HWM", None), "BHGE": ("BKR", None), "FI": ("FISV", None),
+                "GPS": ("GAP", None), "ADS": ("BFH", None), "UTX": ("RTX", None), "BK": ("BNY", None), "MMC": ("MRSH", None), "WLTW": ("WTW", None),
+                "IR": ("TT", "2020-03-03")}   # IR: 2020-03-02 までは Ingersoll-Rand plc（今の TT）。それ以降は今の IR（旧 Gardner Denver）
+
+
 def load_members(cache):
-    """{ticker: [(start, end), ...]}（2015年以降に構成銘柄だったもののみ。endが空なら現在も構成銘柄）"""
+    """{ticker: [(start, end), ...]}（2015年以降に構成銘柄だったもののみ。endが空なら現在も構成銘柄）。
+    ティッカーを変えた会社は後継のティッカーに付け替える（TICKER_ALIAS。環境変数 BT_NO_ALIAS=1 で付け替えない＝2026-10-17 より前の形）"""
     m = {}
+    alias = {} if os.environ.get("BT_NO_ALIAS") == "1" else TICKER_ALIAS
     for r in csv.DictReader(open(os.path.join(cache, "members.csv"))):
         end = r["end_date"] or "9999-12-31"
-        if end >= MEMBER_SINCE:
-            m.setdefault(r["ticker"], []).append((r["start_date"], end))
+        if end < MEMBER_SINCE:
+            continue
+        t, st = r["ticker"], r["start_date"]
+        if t in alias:
+            new, until = alias[t]
+            if until is None:
+                m.setdefault(new, []).append((st, end))
+                continue
+            if st < until:
+                m.setdefault(new, []).append((st, min(end, until)))
+            if end > until:
+                m.setdefault(t, []).append((max(st, until), end))
+            continue
+        m.setdefault(t, []).append((st, end))
     return m
 
 
@@ -183,8 +208,13 @@ def is_member(spans, day):
 
 
 
+# 環境変数 BT_FIXED=1 で、どのスクリプトも直した数え方（KEEP_OPEN・OVERLAP とも True）で動く（2026-10-16、全バックテストの計算し直し用）
+KEEP_OPEN = os.environ.get("BT_FIXED") == "1"   # True: データの最終日までに手じまいが来ていない売買も、最終日の終値で数える（2026-10-16 の点検で追加。False が以前の数え方）
+OVERLAP = os.environ.get("BT_FIXED") == "1"     # True: 同じ銘柄の売買を持っている間の合図も数える（ポートフォリオ側で同じ銘柄の二重の保有は防ぐ。False が以前の数え方）
+
+
 def gen_trades(data, members, entry, exit_fn, start, end, *, ok, fill="open", allow=None, max_hold=30,
-               stop_pct=None, time_stop=None, target=None, breakeven_at=None):
+               stop_pct=None, time_stop=None, target=None, breakeven_at=None, keep_open=None, overlap=None):
     """シグナルから売買を再現する。
     entry(i, s) -> シグナルなら並べ替え用の値（小さいほど優先）、なければNone
     exit_fn(j, s, k, px) -> k日目（仕掛けからの経過取引日）の引けで手じまい条件が出たか
@@ -232,10 +262,19 @@ def gen_trades(data, members, entry, exit_fn, start, end, *, ok, fill="open", al
                 if breakeven_at is not None and c >= px * (1 + breakeven_at):
                     floor = max(floor or 0, px)
             if reason == "データ終端":
-                break  # 手じまいが未確定のトレードは数えない
+                if not (KEEP_OPEN if keep_open is None else keep_open):
+                    break  # 手じまいが未確定のトレードは数えない（以前の数え方）
+                if i + lag >= n - 1:   # 2026-10-18: データの最終日に買う売買は数えない（同じ日に買って売る扱いになり、枠を使わずに何十銘柄も買っていた）
+                    break
+                trades.append({"sym": sym, "in": s["date"][i + lag], "out": s["date"][n - 1], "px": px,
+                               "ret": s["c"][n - 1] / px - 1, "days": n - 1 - i, "rank": rank, "why": "保有中（最終日の終値）"})
+                if not (OVERLAP if overlap is None else overlap):
+                    break
+                i += 1
+                continue
             trades.append({"sym": sym, "in": s["date"][i + lag], "out": s["date"][j + lag], "px": px,
                            "ret": price(s, j + lag) / px - 1, "days": j - i, "rank": rank, "why": reason})
-            i = j + lag + 1  # 同じ銘柄は手じまい後に次のシグナルを探す
+            i = (i + 1) if (OVERLAP if overlap is None else overlap) else (j + lag + 1)  # 以前の数え方: 同じ銘柄は手じまい後に次のシグナルを探す
     trades.sort(key=lambda t: (t["out"], t["sym"]))
     return trades
 

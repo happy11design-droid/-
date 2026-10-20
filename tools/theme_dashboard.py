@@ -124,7 +124,7 @@ def md_to_html(text, shift=1):
 
 def split_top(md):
     """report.md を「# 見出し」ごとに分ける"""
-    keys = ("著者の回答（全文）", "スキャン（数値と事実）", "ニュース（サブエージェントの調査）")
+    keys = ("判定のまとめ（ルールの判定と著者の判定を分けて表示）", "著者の回答（全文）", "スキャン（数値と事実）", "ニュース（サブエージェントの調査）")
     parts, cur, buf = {}, None, []
     for ln in md.splitlines():
         m = re.match(r"^# (.+)", ln)
@@ -198,6 +198,7 @@ def main():
     rec = json.load(open(a.record, encoding="utf-8"))
     parts = split_top(md)
     answers = parts.get("著者の回答（全文）", "")
+    verdicts = parts.get("判定のまとめ（ルールの判定と著者の判定を分けて表示）", "")
     scan = parts.get("スキャン（数値と事実）", "")
     news = parts.get("ニュース（サブエージェントの調査）", "")
 
@@ -227,7 +228,7 @@ def main():
     w(f'<div class="row"><span class="label">買い（成行）</span><span class="pill {"good" if orders else ""}">{html.escape(names(orders))}</span></div>')
     w(f'<div class="row"><span class="label">買い（予約）</span><span class="pill {"good" if reserves else ""}">{html.escape(names(reserves))}</span></div>')
     w(f'<div class="row"><span class="label">様子見</span><span class="pill {"warn" if skips else ""}">{html.escape(names(skips))}</span></div>')
-    w(f'<div class="row"><span class="label">売り（保有中）</span><span class="pill {"bad" if exits else ""}">{html.escape(names(exits))}</span></div>')
+    w(f'<div class="row"><span class="label">売り（保有中・著者の判定）</span><span class="pill {"bad" if exits else ""}">{html.escape(names(exits))}</span></div>')
     # 優先順位: 監視銘柄の候補 → テーマの外、成行（A）→ 予約（B）、50日線の傾きが小さい順（毎朝のツールの買う順番と同じ。2026-10-09 ユーザー採用）。空き枠を超える分は「枠外」
     rows = cand_rows(scan)
     def rs_(c):   # 並べ替えの値（50日線の傾き。小さいほど先。古いレポートで列がなければRSの高い順）
@@ -258,7 +259,11 @@ def main():
             w(f'<p class="note"><strong>{html.escape(c["sym"])}</strong>: {html.escape(od)}</p>')
     w('<p class="note">買いの条件は採用したルールが決め、著者は注文を止める理由だけを判定しています。下に著者の回答の全文があります。</p>')
     w("</div>")
-    w('<nav><a href="#answers">著者の回答</a><a href="#groups">テーマの強さ</a><a href="#moves">急騰・急落</a>'
+    if verdicts:   # ルールの判定と著者の判定を分けた表（2026-10-14 ユーザーの指示。tools/theme_summary.py）
+        w('<section id="verdicts"><h2>判定のまとめ（ルールと著者を分けて表示）</h2>')
+        w(md_to_html(verdicts, shift=1))
+        w("</section>")
+    w('<nav><a href="#verdicts">判定のまとめ</a><a href="#answers">著者の回答</a><a href="#groups">テーマの強さ</a><a href="#moves">急騰・急落</a>'
       '<a href="#news">ニュース</a><a href="#history">推移</a><a href="#heatmap">業種ランキング</a></nav>')
 
     w('<section id="answers"><h2>著者の回答（全文）</h2>')

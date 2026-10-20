@@ -34,7 +34,7 @@ def main():
     import onkabu_lib as ol
     members, spy, feats = bs_.load_all()
     nt = pickle.load(open(m.NEW_PKL, "rb"))
-    trades, has = m.upgrade_trades(nt["trades"])
+    trades, has = m.upgrade_trades(nt["trades"], ind=nt["ind"])
     ind = nt["ind"]
     sig = {"mom": ("r126", 1.0), "hi": "nh", "rev": 0.1, "extra": None}
     sb = {}

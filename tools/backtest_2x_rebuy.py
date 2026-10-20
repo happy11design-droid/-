@@ -29,6 +29,7 @@ import backtest_exit_signals as xs
 import backtest_minervini2 as bm2
 import backtest_rebuy as rb
 import backtest_swing as bs
+import backtest_lib as _bl
 from backtest_lib import COSTS, DEFAULT_CACHE, pct
 
 COST = COSTS[2]
@@ -61,6 +62,8 @@ def main():
         s, sym = data[t["sym"]], t["sym"]
         o, h, l, c = s["o"], s["h"], s["l"], s["c"]
         i0, n, px = idx(sym, t["in"]), len(c), t["px"]
+        if i0 >= n - 1:   # 2026-10-18: データの最終日に買う売買は数えない（同じ日に買って売る扱いになり、枠を使わずに何十銘柄も買っていた）
+            return None
         floor, pend, j = px * (1 - STOP), False, i0
         while j < n:
             if pend:
@@ -70,7 +73,7 @@ def main():
             if j > i0 and s["bb_up"][j - 1] is not None and h[j] >= s["bb_up"][j - 1]:
                 return j, max(o[j], s["bb_up"][j - 1])
             if j + 1 >= n:
-                return None
+                return (j, c[j]) if _bl.KEEP_OPEN else None   # 直した数え方（BT_FIXED=1）: 最終日に持っている分は最終日の終値で数える
             if j - i0 >= bs.MAX_HOLD or (s["pctb"][j] is not None and s["pctb"][j] >= 1.0):
                 pend = True
             j += 1

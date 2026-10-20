@@ -13,6 +13,9 @@
 
 税: 両方のツールとも、売って確定した損益を暦年ごとに通算し、年末に利益の20.315%を払う（損失の繰越はしない）。
 最後に持っている株・QQQには税をかけない。QQQの売買の損益には税をかけない（簡単のため）。
+環境変数 BT_QQQ_TAX=1（2026-10-18）: 待っている現金のQQQも、売った分の損益を税の通算に入れ、QQQの売買にも手数料をかける
+（その日の売買の後のQQQの増減を、買い足し・一部売りとみなす。一部売りの損益は平均の取得価格で計算）。
+環境変数 BT_COST: 片道の手数料（既定 0.001）。ムームー証券の米国株の手数料は約定代金の0.132%（上限22ドル）なので 0.00132。
 """
 import argparse
 import datetime as dt
@@ -26,12 +29,15 @@ import sys
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import backtest_lib as bl_
 from backtest_lib import DEFAULT_CACHE, load_prices
 
 TAX = 0.20315
 SELL_AT_2X = 1 / (2 - TAX)
-COST = 0.001
-NEW_PKL = os.path.join(DEFAULT_CACHE, "newtool_trades.pkl")
+COST = float(os.environ.get("BT_COST", "0.001"))
+QQQ_TAX = os.environ.get("BT_QQQ_TAX") == "1"
+NEW_PKL = os.path.join(DEFAULT_CACHE, ("newtool_trades_fixed" if os.environ.get("BT_FIXED") == "1" else "newtool_trades")
+                       + (f"_c{os.environ['BT_COST']}" if os.environ.get("BT_COST") else "") + ".pkl")   # 直した数え方の売買の一覧は別のファイル
 
 
 # ---------- 新分析ツールの売買の一覧（backtest_retest.py から写した） ----------
@@ -43,7 +49,7 @@ def cmd_newtrades(a):
     import backtest_minervini2 as bm2
     import backtest_rebuy as rb
     import backtest_swing as bs
-    STOP, R_COST = 0.15, 0.001
+    STOP, R_COST = 0.15, COST
     ctx = cb.setup(DEFAULT_CACHE, with_parts=False)
     data, members, ind, days, G, end = (ctx[k] for k in ("data", "members", "ind", "days", "G", "end"))
     pos = {}
@@ -57,6 +63,8 @@ def cmd_newtrades(a):
         s, sym = data[t["sym"]], t["sym"]
         o, h, l, c = s["o"], s["h"], s["l"], s["c"]
         i0, n, px = idx(sym, t["in"]), len(c), t["px"]
+        if i0 >= n - 1:   # 2026-10-18: データの最終日に買う売買は数えない（同じ日に買って売る扱いになり、枠を使わずに何十銘柄も買っていた）
+            return None
         floor, pend, j = px * (1 - STOP), False, i0
         while j < n:
             if pend:
@@ -66,7 +74,7 @@ def cmd_newtrades(a):
             if j > i0 and s["bb_up"][j - 1] is not None and h[j] >= s["bb_up"][j - 1]:
                 return j, max(o[j], s["bb_up"][j - 1])
             if j + 1 >= n:
-                return None
+                return (j, c[j]) if bl_.KEEP_OPEN else None   # 直した数え方（BT_FIXED=1）: 最終日に持っている分は最終日の終値で数える
             if j - i0 >= bs.MAX_HOLD or (s["pctb"][j] is not None and s["pctb"][j] >= 1.0):
                 pend = True
             j += 1
@@ -143,12 +151,24 @@ def cmd_newtrades(a):
     out = []
     for t in base:
         p = sim(t)
-        out.append({"sym": t["sym"], "in": data[t["sym"]]["date"][t["i0"]], "out": max(p), "path": p, "prio": t["prio"], "rule": t["rule"]})
+        rs_ = data[t["sym"]].get("rs")
+        out.append({"sym": t["sym"], "in": data[t["sym"]]["date"][t["i0"]], "out": max(p), "path": p, "prio": t["prio"], "rule": t["rule"],
+                    "rs": (rs_[t["i0"] - 1] or 0) if rs_ else 0})   # RS（買う前の日）。NEW_PRIO=rs で買う順番に使う（2026-10-17）
     pickle.dump({"trades": out, "ind": ind, "days": days}, open(NEW_PKL, "wb"))
     print(f"新分析ツールの売買 {len(out)}件を保存（{NEW_PKL}）")
 
 
-def upgrade_trades(trades, cache=DEFAULT_CACHE):
+_AI = {}
+
+
+def _ai_set():
+    """新分析ツールの毎朝のスキャンで先に買う業種（AI・半導体・データセンター関連）。backtest_retest.opt_stage と同じ"""
+    from backtest_caps import THEME
+    return set(THEME) | {"Electrical Equipment & Parts", "Specialty Industrial Machinery", "Engineering & Construction", "Building Products & Equipment",
+                         "Utilities—Independent Power Producers", "REIT—Specialty"}
+
+
+def upgrade_trades(trades, cache=DEFAULT_CACHE, ind=None):
     """新分析ツールの今の形にする（2026-10-09〜）: 同じ日の候補は50日線の傾き（20日前からの上昇率、買う前の日）が小さい順、
     2倍ETFの対応表で目減り年15%未満の銘柄は2倍ETF（実測の目減り）。backtest_retest.slope3_stage と同じ作り方"""
     root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
@@ -165,6 +185,9 @@ def upgrade_trades(trades, cache=DEFAULT_CACHE):
         c, pos = px[s]
         j = pos[t["in"]] - 1
         prio = (sum(c[j - 49:j + 1]) / 50) / (sum(c[j - 69:j - 19]) / 50) - 1 if j >= 70 else 0.0
+        if os.environ.get("NEW_PRIO") == "rs":   # 2026-10-17 ユーザー決定の今の形: AI・半導体を先に、その中はRSの高い順
+            ai_ = _AI.setdefault("s", _ai_set())
+            prio = (0 if (ind or {}).get(s) in ai_ else 1, -(t.get("rs") or 0))
         path = t["path"]
         if s in has:
             fee = drag[s] / 252
@@ -195,6 +218,8 @@ class Account:
         self.onk = {}     # sym -> 株数
         self.onk_cost = {}  # sym -> 恩株の買値の合計
         self.realized = 0.0
+        self.qh = 0.0     # 前の日の終わりのQQQの価値（BT_QQQ_TAX）
+        self.qb = 0.0     # QQQの取得価格の合計
 
 
 def run(feats, new_trades, ind, days, dbl_sig, mode, seed=0, cash_px=None, split=None, fund="free", slots_d=3, slots_n=4,
@@ -515,6 +540,20 @@ def run(feats, new_trades, ind, days, dbl_sig, mode, seed=0, cash_px=None, split
                     hits = [x for x in hits if all(x != y for _, y in delayed)]
                     delayed += [(t + 1 + delay, x) for x in hits[:free]]
                     pending = []
+        if QQQ_TAX and cash_px and cash_regs is None:   # 待っているQQQの売買: その日の増減を買い足し・一部売りとみなし、税の通算と手数料に入れる
+            g_ = cash_px[d] / cash_px[days[t - 1]] if t > 0 and d in cash_px and days[t - 1] in cash_px else 1.0
+            for acc in accts:
+                h_exp, h_end = acc.qh * g_, max(acc.cash, 0.0)
+                flow = h_end - h_exp
+                if flow < -1e-9 and h_exp > 0:
+                    f_ = min(1.0, -flow / h_exp)
+                    acc.realized += f_ * (h_exp - acc.qb)
+                    acc.qb *= (1 - f_)
+                    acc.cash -= COST * (-flow)
+                elif flow > 1e-9:
+                    acc.qb += flow * (1 - COST)
+                    acc.cash -= COST * flow
+                acc.qh = max(acc.cash, 0.0)
         eq = 0.0
         for acc in accts:
             eq += acc.cash + sum(h["size"] * h["v"] for h in acc.new.values())
@@ -715,7 +754,7 @@ def cmd_run(a):
     new_trades, ind = nt["trades"], nt["ind"]
     has2x = set()
     if a.form == "current":
-        new_trades, has2x = upgrade_trades(new_trades)
+        new_trades, has2x = upgrade_trades(new_trades, ind=ind)
     # 倍増ツールの株価に新分析ツールの銘柄も要る（同じ銘柄の移し替えで使うのは倍増側だけなので不要）
     sig = {"mom": ("r126", 1.0), "hi": "nh", "rev": 0.1, "extra": None}
     q = load_prices(DEFAULT_CACHE, "QQQ")
@@ -759,6 +798,7 @@ def cmd_run(a):
             d0 = load_prices(DEFAULT_CACHE, sym)
             cash_prices[sym] = dict(zip(d0["date"], d0["c"]))
     stats_rows = []
+    yearly, spread = {}, {}   # 年ごと・乱数の幅（2026-10-17）
     for label, kw in (VS[-a.last:] if a.last else VS):
         cells = []
         for name, lo, hi, ex in CONDS:
@@ -779,7 +819,17 @@ def cmd_run(a):
                 res.append((c, m, n_onk, metrics(rcurve, days)[1]))
                 if seed == 0 and name == "2015年〜 NVDAを除く" and kw.get("use_new", True) and kw.get("use_dbl", True):
                     stats_rows.append((label, dict(STATS)))
+                if seed == 0 and name == "2015年〜 NVDAを除く":   # 年ごと（2026-10-17）: その年の終わりの資産÷前の年の終わりの資産−1
+                    ye = {}
+                    for d_, v_ in zip(days, curve):
+                        ye[d_[:4]] = v_
+                    ys, prev_ = sorted(ye), curve[0]
+                    yearly[label] = []
+                    for y_ in ys:
+                        yearly[label].append((y_, ye[y_] / prev_ - 1))
+                        prev_ = ye[y_]
             cells.append(tuple(st.median(r[k] for r in res) for k in range(4)))
+            spread.setdefault(label, []).append((min(r[0] for r in res), max(r[0] for r in res)))
         rows.append((label, cells))
         print(label, [f"{c:.1%}/{m:.0%}/{rm:.0%}" for c, m, _, rm in cells], flush=True)
     out = []
@@ -809,6 +859,22 @@ def cmd_run(a):
                 w(f"| （参考）{lab}を持ち続ける | " + " | ".join(f"{bench[(c[0], sym)][0]:.1%}（{bench[(c[0], sym)][1]:.0%}）" for c in CONDS) + " |")
     for label, cells in rows:
         w(f"| {label} | " + " | ".join(f"{c:.1%}（{m:.0%}・確定{rm:.0%}）" for c, m, _, rm in cells) + " |")
+    if spread:
+        w(f"\n## 乱数の幅（年率の最小〜最大、{a.seeds}通り）\n")
+        w("| 組み合わせ | " + " | ".join(c[0] for c in CONDS) + " |")
+        w("|---|" + "---|" * len(CONDS))
+        for label, _ in rows:
+            w(f"| {label} | " + " | ".join(f"{lo_:.1%}〜{hi_:.1%}" for lo_, hi_ in spread[label]) + " |")
+    if yearly:
+        ys = sorted({y for v in yearly.values() for y, _ in v})
+        w("\n## 年ごとの成績（2015年〜 NVDAを除く、乱数1通り。その年の終わりの資産÷前の年の終わり−1、税引き後）\n")
+        w("| 組み合わせ | " + " | ".join(ys) + " |")
+        w("|---|" + "---|" * len(ys))
+        for label, _ in rows:
+            dd_ = dict(yearly.get(label, []))
+            w(f"| {label} | " + " | ".join(f"{dd_[y]:.1%}" if y in dd_ else "—" for y in ys) + " |")
+    if os.environ.get("NEW_PRIO") == "rs":
+        w("\n- **新分析ツールの買う順番は、今の形（AI・半導体を先に、その中はRSの高い順。2026-10-17 ユーザー決定）**（環境変数 NEW_PRIO=rs）。上の前提の「50日線の傾きが小さい順」「乱数」の記述より、こちらが正。")
     if stats_rows:
         w("\n## 倍増ツールの合図の扱い（2015年〜 NVDAを除く・乱数1通り）\n")
         w("| 組み合わせ | 倍増ツールの合図（枠が空いていた回数） | 現金がなく見送り（待たせる形は、待ちに入った回数） | 半分未満しか買えず | 待って買えた | 同じ銘柄を両方で持った |")

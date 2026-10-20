@@ -94,7 +94,8 @@ def cmd_record(a):
         meta = json.load(open(mp, encoding="utf-8"))
         for c in cands:
             m_ = meta.get(c["sym"]) or {}
-            c["hot"], c["rsi14"], c["s50"] = m_.get("hot"), m_.get("rsi14"), m_.get("s50")
+            c["hot"], c["rsi14"], c["s50"], c["rs"] = m_.get("hot"), m_.get("rsi14"), m_.get("s50"), m_.get("rs")
+            c["s2_skip"] = m_.get("s2_skip")
     holds = []
     cand_syms = {c["sym"] for c in cands}
     for r in table_rows(scan, "## 5."):
@@ -103,7 +104,8 @@ def cmd_record(a):
         holds.append({"sym": r["銘柄"], "rule": r["ルール"], "buy_date": r["買った日"], "buy_price": float(r["買値"]),
                       "verdict": vv[0], "author": vv[1]})
     rec = {"trade_date": trade_date, "run_date": dt.datetime.now(dt.timezone(dt.timedelta(hours=9))).date().isoformat(),
-           "theme_stage": stage, "candidates": cands, "holdings": holds}
+           "theme_stage": stage, "candidates": cands, "holdings": holds,
+           "s2": (json.load(open(mp, encoding="utf-8")).get("_s2") if os.path.exists(mp) else None)}   # テーマ全体の急落 S2 の記録（2026-10-14）
     path = os.path.join(d, "record.json")
     json.dump(rec, open(path, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
     print(path)
@@ -272,6 +274,9 @@ def load_real(path):
                 t["shares"] = 2 * float(m.group(2)) * float(m.group(3)) / t["buy"]
             if len(c) >= 7 and re.match(r"^\d{4}-\d{2}-\d{2}$", c[5]) and c[6]:
                 t["sell_date"], t["sell"] = c[5], float(c[6])
+                e = re.search(r"ETFの売値 ([0-9.]+)", line)
+                if m and e and t["sell"] != t["buy"]:   # ETFの実際の売値があれば、損益が実際のETFの損益と同じになる株数に直す（2026-10-15）
+                    t["shares"] = float(m.group(2)) * (float(e.group(1)) - float(m.group(3))) / (t["sell"] - t["buy"])
         except ValueError:
             continue
         out.append(t)
