@@ -2139,6 +2139,8 @@ def opt_stage(base, data, sim, days, ind, cache, part):
         return sum((k - xm) * (v - ym) for k, v in enumerate(y)) / sum((k - xm) ** 2 for k in range(60)) * 252
 
     cache_tr = {}
+    def ddh(s, j):   # 合図の日の終値が、直近20・60・252取引日の高値（日中の高値）からどれだけ下か（2026-10-20 ユーザーの指示「直近の高値からより多く下落している順」）
+        return {f"dh{n}": (s["c"][j] / max(s["h"][max(0, j - n + 1):j + 1]) - 1) if j >= 0 else 0.0 for n in (20, 60, 252)}
     def stock_trades(stop, rel8=False, xsell=None, close_stop=False, hotwait=False, c10=False, kx=None, tstop=None, pstop=None, m30=False, lim2=False, hadd=None):
         key_ = (stop, rel8, xsell, close_stop, hotwait, c10, kx, tstop, pstop, m30, lim2, hadd)
         if key_ in cache_tr:
@@ -2246,7 +2248,7 @@ def opt_stage(base, data, sim, days, ind, cache, part):
                         "s2": sdd60.get(sd, 0.0) <= -0.10, "sd": sd, "x": b.get("x"),
                         "stopped": b["xp"] <= b["px"] * (1 - stop) * 1.000001,   # 損切りで終わった（日中の逆指値。窓を開けて下で寄った場合も）
                         "ichi": b["rule"] not in ("M", "V") or (s["ten"][b["i0"] - 1] is not None and s["kij"][b["i0"] - 1] is not None and s["ten"][b["i0"] - 1] > s["kij"][b["i0"] - 1]),
-                        "reg": reg60(s, b["i0"] - 1)})
+                        "reg": reg60(s, b["i0"] - 1), **ddh(s, b["i0"] - 1)})
         cache_tr[key_] = out
         return out
 
@@ -2367,7 +2369,13 @@ def opt_stage(base, data, sim, days, ind, cache, part):
           "rs_low": lambda t: (1 if t["rule"] in ("E", "G", "U", "K") else 0, 0 if t["ai"] else 1, -t["rs"]),   # 足した合図は空き枠だけ（同じ日の4つのルールの後）
           "v2cbm": lambda t: (0 if t["ai"] else 1, {"V": 0, "C": 1, "B": 2, "M": 3}.get(t["rule"], 4), -t["rs"]),
           "v2cbm_noai": lambda t: ({"V": 0, "C": 1, "B": 2, "M": 3}.get(t["rule"], 4), -t["rs"]),
-          "reg": lambda t: (0 if t["ai"] else 1, -t["reg"])}
+          "reg": lambda t: (0 if t["ai"] else 1, -t["reg"]),
+          # 直近の高値からの下落率が大きい順（2026-10-20）。AI半導体を先にするのは今のルール（RSの高い順）と同じ
+          "dh20": lambda t: (0 if t["ai"] else 1, t.get("dh20", 0.0)),
+          "dh60": lambda t: (0 if t["ai"] else 1, t.get("dh60", 0.0)),
+          "dh252": lambda t: (0 if t["ai"] else 1, t.get("dh252", 0.0)),
+          "rs80_dh60": lambda t: (0 if t["ai"] else 1, 0 if t["rs"] >= 80 else 1, t.get("dh60", 0.0)),
+          "rev_dh60": lambda t: (0 if t["ai"] else 1, 0 if t["rule"] in ("B", "C") else 1, t.get("dh60", 0.0) if t["rule"] in ("B", "C") else -t["rs"])}
     # 形: 名前 → 決まり（変えない項目は今のルール）
     BASE = {"rules": ("B", "C", "M", "V"), "prio": "slope", "streak": None, "slots": 4, "cap": 2, "etf": "reg", "stop": STOP, "rel8": False, "swap": None, "xsell": None, "s2": False, "close_stop": False, "hotwait": False, "c10": False, "kx": None, "kb": None, "bsect": False, "indtop": None, "tstop": None, "pstop": None, "m30": False, "c15": False, "lim2": False, "hadd": None, "ichi": False, "outside": False, "abn": None}
     V1 = {"今のルール（傾きの小さい順）": {},
@@ -2447,6 +2455,11 @@ def opt_stage(base, data, sim, days, ind, cache, part):
     V1["買う順番: AI半導体を先に、新高値V2→急落の底→押し目→ミネルヴィニ、その中はRSの高い順"] = {"prio": "v2cbm"}
     V1["買う順番: 新高値V2→急落の底→押し目→ミネルヴィニ、その中はRSの高い順"] = {"prio": "v2cbm_noai"}
     V1["買う順番: 60日のトレンドラインの角度が大きい順（AI半導体を先に）"] = {"prio": "reg"}
+    V1["買う順番: 20日の高値からの下落率が大きい順"] = {"prio": "dh20"}
+    V1["買う順番: 60日の高値からの下落率が大きい順"] = {"prio": "dh60"}
+    V1["買う順番: 52週の高値からの下落率が大きい順"] = {"prio": "dh252"}
+    V1["買う順番: RS80以上を先に、その中は60日の高値からの下落率が大きい順"] = {"prio": "rs80_dh60"}
+    V1["買う順番: 押し目・急落の底を先に60日の高値からの下落率が大きい順、次に順張りをRSの高い順"] = {"prio": "rev_dh60"}
     for k_ in K4G:   # K4 の数値違いは、損の出ている保有を売る形だけ
         V1[f"信用{k_}: 損の出ている保有を翌朝に売る"] = {"kx": (k_, "loser")}
     for k_ in ("K1", "K2", "K3", "K4", "K5"):   # 信用の材料（2026-10-17）
