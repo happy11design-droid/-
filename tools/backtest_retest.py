@@ -2141,13 +2141,103 @@ def opt_stage(base, data, sim, days, ind, cache, part):
     cache_tr = {}
     def ddh(s, j):   # 合図の日の終値が、直近20・60・252取引日の高値（日中の高値）からどれだけ下か（2026-10-20 ユーザーの指示「直近の高値からより多く下落している順」）
         return {f"dh{n}": (s["c"][j] / max(s["h"][max(0, j - n + 1):j + 1]) - 1) if j >= 0 else 0.0 for n in (20, 60, 252)}
-    def stock_trades(stop, rel8=False, xsell=None, close_stop=False, hotwait=False, c10=False, kx=None, tstop=None, pstop=None, m30=False, lim2=False, hadd=None):
-        key_ = (stop, rel8, xsell, close_stop, hotwait, c10, kx, tstop, pstop, m30, lim2, hadd)
+    def gem_trade(b, s, mode, stop):
+        """Geminiの手順（2026-10-20 ユーザーの指示）で、押し目・急落の底の合図の後の買い方・売り方を置き換える。
+        mode = (買い方, 売り方)。買い方 "g3": 合図の日から10取引日以内の反転の足（陽線で、前日の高値を終値で上抜くか、下ヒゲが実体の2倍以上で終値が値幅の上半分か、陽の抱き線）の翌日の寄り付きで30%、
+        その後に終値が20日線を上回った翌日の寄り付きで40%、終値が直近20取引日の高値（戻り高値）を上回った翌日の寄り付きで30%。20日線の上抜けが合図の日から25取引日以内に来なければ、その翌日の寄り付きで売る。
+        "ma2": 合図の日から20取引日以内に終値が20日線を2日続けて上回ったら、翌日の寄り付きで100%。
+        売り方 "ma20": 20日線を上回った後に終値が20日線を下回った翌日の寄り付き／"band": 日中の高値がボリンジャーの上のバンドに届いたらそこで売る（押し目と同じ）。
+        どちらも、平均の買値の15%下で日中の逆指値、最初の買いから60取引日で手じまう。買えなかった分は枠の中の現金"""
+        o, h, l, c, n = s["o"], s["h"], s["l"], s["c"], len(s["c"])
+        sig = b["i0"] - 1
+        buy, ex = mode
+        ma = lambda j: sum(c[j - 19:j + 1]) / 20 if j >= 19 else None
+        def rev(j):
+            if j < 1 or c[j] <= o[j]:
+                return False
+            body, lo_sh = c[j] - o[j], min(o[j], c[j]) - l[j]
+            return c[j] > h[j - 1] or (lo_sh >= 2 * body and c[j] >= (h[j] + l[j]) / 2) or (c[j - 1] < o[j - 1] and o[j] <= c[j - 1] and c[j] >= o[j - 1])
+        plan = []   # (判定の日, 割合)
+        if buy == "g3":
+            j1 = next((j for j in range(sig, min(sig + 11, n - 1)) if rev(j)), None)
+            if j1 is None:
+                return None
+            plan = [(j1, 0.3)]
+        else:
+            j1 = next((j for j in range(sig + 1, min(sig + 21, n - 1)) if ma(j) and ma(j - 1) and c[j] > ma(j) and c[j - 1] > ma(j - 1)), None)
+            if j1 is None:
+                return None
+            plan = [(j1, 1.0)]
+        i0 = j1 + 1
+        if i0 >= n - 1:
+            return None
+        cash, sh, cost_in, done2, done3, above = 1.0, 0.0, 0.0, buy != "g3", buy != "g3", buy != "g3"
+        def do_buy(j, f):
+            nonlocal cash, sh, cost_in
+            sh += f * (1 - COST) / o[j]
+            cost_in += f
+            cash -= f
+        do_buy(i0, plan[0][1])
+        path, pend, xp, i1 = {}, None, None, None
+        for j in range(i0, n):
+            if j > i0 and pend:
+                if pend == "sell":
+                    xp, i1 = o[j], j
+                    break
+                do_buy(j, pend)
+                pend = None
+            avg = cost_in / (sh / (1 - COST)) if sh else o[i0]
+            floor = avg * (1 - stop)
+            if l[j] <= floor:
+                xp, i1 = (min(o[j], floor) if j > i0 else floor), j
+                break
+            if ex == "band" and j > i0 and s["bb_up"][j - 1] is not None and h[j] >= s["bb_up"][j - 1]:
+                xp, i1 = max(o[j], s["bb_up"][j - 1]), j
+                break
+            path[s["date"][j]] = cash + sh * c[j]
+            if j + 1 >= n:
+                xp, i1 = (c[j], j) if bl.KEEP_OPEN else (None, None)
+                break
+            m_ = ma(j)
+            if j - i0 >= 60:
+                pend = "sell"
+                continue
+            if not done2:
+                if m_ and c[j] > m_:
+                    done2, above, pend = True, True, 0.4
+                elif j - sig >= 25:
+                    pend = "sell"
+                continue
+            if not done3 and c[j] > max(h[j - 20:j]):
+                done3, pend = True, 0.3
+                continue
+            if ex == "ma20" and above and m_ and c[j] < m_:
+                pend = "sell"
+        if i1 is None:
+            return None
+        path[s["date"][i1]] = cash + sh * xp * (1 - COST)
+        return {**b, "i0": i0, "i1": i1, "px": o[i0], "xp": xp}, path
+
+    def stock_trades(stop, rel8=False, xsell=None, close_stop=False, hotwait=False, c10=False, kx=None, tstop=None, pstop=None, m30=False, lim2=False, hadd=None, gem=None):
+        key_ = (stop, rel8, xsell, close_stop, hotwait, c10, kx, tstop, pstop, m30, lim2, hadd, gem)
         if key_ in cache_tr:
             return cache_tr[key_]
         out = []
+        seen_g = set()
         for b in base:
             s = data[b["sym"]]
+            if gem and b["rule"] in gem[1]:   # Geminiの手順（gem_trade）。同じ銘柄・同じ買いの日になった合図は1つにまとめる
+                g_ = gem_trade(b, s, gem[0], stop)
+                if not g_ or (b["sym"], g_[0]["i0"]) in seen_g:
+                    continue
+                seen_g.add((b["sym"], g_[0]["i0"]))
+                b, p = g_
+                sd = days[di[s["date"][b["i0"]]] - 1] if di.get(s["date"][b["i0"]]) else s["date"][b["i0"]]
+                out.append({"sym": b["sym"], "in": s["date"][b["i0"]], "out": max(p), "path": p, "rule": b["rule"], "ret": p[max(p)] - 1,
+                            "s50": s50(b), "rs": s["rs"][b["i0"] - 1] or 0, "ai": ind.get(b["sym"]) in AI, "first": streak_first(b),
+                            "s2": sdd60.get(sd, 0.0) <= -0.10, "sd": sd, "x": b.get("x"), "stopped": False, "ichi": True,
+                            "reg": reg60(s, b["i0"] - 1), **ddh(s, b["i0"] - 1)})
+                continue
             if lim2 and b["rule"] in ("B", "C"):   # 押し目・急落の底を寄り付きの2%下の指値で買う（backtest_execution.py）。約定しなければその日の枠を1つ使ったまま見送る（ghost）
                 i0_ = b["i0"]
                 lim_ = s["o"][i0_] * 0.98
@@ -2377,7 +2467,7 @@ def opt_stage(base, data, sim, days, ind, cache, part):
           "rs80_dh60": lambda t: (0 if t["ai"] else 1, 0 if t["rs"] >= 80 else 1, t.get("dh60", 0.0)),
           "rev_dh60": lambda t: (0 if t["ai"] else 1, 0 if t["rule"] in ("B", "C") else 1, t.get("dh60", 0.0) if t["rule"] in ("B", "C") else -t["rs"])}
     # 形: 名前 → 決まり（変えない項目は今のルール）
-    BASE = {"rules": ("B", "C", "M", "V"), "prio": "slope", "streak": None, "slots": 4, "cap": 2, "etf": "reg", "stop": STOP, "rel8": False, "swap": None, "xsell": None, "s2": False, "close_stop": False, "hotwait": False, "c10": False, "kx": None, "kb": None, "bsect": False, "indtop": None, "tstop": None, "pstop": None, "m30": False, "c15": False, "lim2": False, "hadd": None, "ichi": False, "outside": False, "abn": None}
+    BASE = {"rules": ("B", "C", "M", "V"), "prio": "slope", "streak": None, "slots": 4, "cap": 2, "etf": "reg", "stop": STOP, "rel8": False, "swap": None, "xsell": None, "s2": False, "close_stop": False, "hotwait": False, "c10": False, "kx": None, "kb": None, "bsect": False, "indtop": None, "tstop": None, "pstop": None, "m30": False, "c15": False, "lim2": False, "hadd": None, "ichi": False, "outside": False, "abn": None, "gem": None}
     V1 = {"今のルール（傾きの小さい順）": {},
           "買う順番: RSの高い順": {"prio": "rs"},
           "買う順番: RSの高い順（AI半導体を先にしない）": {"prio": "rs_noai"},
@@ -2455,6 +2545,14 @@ def opt_stage(base, data, sim, days, ind, cache, part):
     V1["買う順番: AI半導体を先に、新高値V2→急落の底→押し目→ミネルヴィニ、その中はRSの高い順"] = {"prio": "v2cbm"}
     V1["買う順番: 新高値V2→急落の底→押し目→ミネルヴィニ、その中はRSの高い順"] = {"prio": "v2cbm_noai"}
     V1["買う順番: 60日のトレンドラインの角度が大きい順（AI半導体を先に）"] = {"prio": "reg"}
+    V1["押し目・急落の底をGeminiの3段階（反転の足30%→20日線の上抜け40%→戻り高値の上抜け30%）・20日線割れで売る"] = {"gem": (("g3", "ma20"), ('B', 'C'))}
+    V1["急落の底だけをGeminiの3段階（反転の足30%→20日線の上抜け40%→戻り高値の上抜け30%）・20日線割れで売る"] = {"gem": (("g3", "ma20"), ('C',))}
+    V1["押し目・急落の底をGeminiの3段階（反転の足30%→20日線の上抜け40%→戻り高値の上抜け30%）・上のバンドで売る"] = {"gem": (("g3", "band"), ('B', 'C'))}
+    V1["急落の底だけをGeminiの3段階（反転の足30%→20日線の上抜け40%→戻り高値の上抜け30%）・上のバンドで売る"] = {"gem": (("g3", "band"), ('C',))}
+    V1["押し目・急落の底を20日線を2日続けて上回ってから買う・20日線割れで売る"] = {"gem": (("ma2", "ma20"), ('B', 'C'))}
+    V1["急落の底だけを20日線を2日続けて上回ってから買う・20日線割れで売る"] = {"gem": (("ma2", "ma20"), ('C',))}
+    V1["押し目・急落の底を20日線を2日続けて上回ってから買う・上のバンドで売る"] = {"gem": (("ma2", "band"), ('B', 'C'))}
+    V1["急落の底だけを20日線を2日続けて上回ってから買う・上のバンドで売る"] = {"gem": (("ma2", "band"), ('C',))}
     V1["買う順番: 20日の高値からの下落率が大きい順"] = {"prio": "dh20"}
     V1["買う順番: 60日の高値からの下落率が大きい順"] = {"prio": "dh60"}
     V1["買う順番: 52週の高値からの下落率が大きい順"] = {"prio": "dh252"}
@@ -2476,7 +2574,7 @@ def opt_stage(base, data, sim, days, ind, cache, part):
     def make(spec):
         sp = {**BASE, **spec}
         trs = [t for t in stock_trades(sp["stop"], sp["rel8"], sp["xsell"], sp["close_stop"], sp["hotwait"], sp["c10"], sp["kx"], sp["tstop"], sp["pstop"], sp["m30"],
-                                       sp["lim2"], sp["hadd"])
+                                       sp["lim2"], sp["hadd"], sp["gem"])
                if t["rule"] in sp["rules"] and (not t["x"] or (t["x"] == "c15" and sp["c15"]) or (t["x"] == "out" and sp["outside"]))]
         if sp["ichi"]:   # 順張りは、合図の日に一目の転換線＞基準線のときだけ買う（--stage filter）
             trs = [t for t in trs if t["ichi"]]
