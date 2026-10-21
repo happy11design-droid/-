@@ -2461,6 +2461,15 @@ def opt_stage(base, data, sim, days, ind, cache, part):
           "v2cbm_noai": lambda t: ({"V": 0, "C": 1, "B": 2, "M": 3}.get(t["rule"], 4), -t["rs"]),
           "reg": lambda t: (0 if t["ai"] else 1, -t["reg"]),
           # 直近の高値からの下落率が大きい順（2026-10-20）。AI半導体を先にするのは今のルール（RSの高い順）と同じ
+          # RSの高い順に並べた後に、高値からの下落率が大きい順（2026-10-21 ユーザーの指示）。rsb{b}_dh{n}: RSを b 刻みにまとめ（b=1 は整数に丸めたRS）、同じまとまりの中は n 日の高値からの下落率が大きい順
+          "rsb1_dh60": lambda t: (0 if t["ai"] else 1, -int(round(t["rs"]) // 1), t.get("dh60", 0.0)),
+          "rsb5_dh20": lambda t: (0 if t["ai"] else 1, -int(round(t["rs"]) // 5), t.get("dh20", 0.0)),
+          "rsb5_dh60": lambda t: (0 if t["ai"] else 1, -int(round(t["rs"]) // 5), t.get("dh60", 0.0)),
+          "rsb5_dh252": lambda t: (0 if t["ai"] else 1, -int(round(t["rs"]) // 5), t.get("dh252", 0.0)),
+          "rsb10_dh20": lambda t: (0 if t["ai"] else 1, -int(round(t["rs"]) // 10), t.get("dh20", 0.0)),
+          "rsb10_dh60": lambda t: (0 if t["ai"] else 1, -int(round(t["rs"]) // 10), t.get("dh60", 0.0)),
+          "rsb10_dh252": lambda t: (0 if t["ai"] else 1, -int(round(t["rs"]) // 10), t.get("dh252", 0.0)),
+          "rsb20_dh60": lambda t: (0 if t["ai"] else 1, -int(round(t["rs"]) // 20), t.get("dh60", 0.0)),
           "dh20": lambda t: (0 if t["ai"] else 1, t.get("dh20", 0.0)),
           "dh60": lambda t: (0 if t["ai"] else 1, t.get("dh60", 0.0)),
           "dh252": lambda t: (0 if t["ai"] else 1, t.get("dh252", 0.0)),
@@ -2553,6 +2562,14 @@ def opt_stage(base, data, sim, days, ind, cache, part):
     V1["急落の底だけを20日線を2日続けて上回ってから買う・20日線割れで売る"] = {"gem": (("ma2", "ma20"), ('C',))}
     V1["押し目・急落の底を20日線を2日続けて上回ってから買う・上のバンドで売る"] = {"gem": (("ma2", "band"), ('B', 'C'))}
     V1["急落の底だけを20日線を2日続けて上回ってから買う・上のバンドで売る"] = {"gem": (("ma2", "band"), ('C',))}
+    V1["買う順番: RSの高い順（整数に丸めたRS）、同じRSの中は60日の高値からの下落率が大きい順"] = {"prio": "rsb1_dh60"}
+    V1["買う順番: RSを5刻みで高い順、同じ刻みの中は20日の高値からの下落率が大きい順"] = {"prio": "rsb5_dh20"}
+    V1["買う順番: RSを5刻みで高い順、同じ刻みの中は60日の高値からの下落率が大きい順"] = {"prio": "rsb5_dh60"}
+    V1["買う順番: RSを5刻みで高い順、同じ刻みの中は52週の高値からの下落率が大きい順"] = {"prio": "rsb5_dh252"}
+    V1["買う順番: RSを10刻みで高い順、同じ刻みの中は20日の高値からの下落率が大きい順"] = {"prio": "rsb10_dh20"}
+    V1["買う順番: RSを10刻みで高い順、同じ刻みの中は60日の高値からの下落率が大きい順"] = {"prio": "rsb10_dh60"}
+    V1["買う順番: RSを10刻みで高い順、同じ刻みの中は52週の高値からの下落率が大きい順"] = {"prio": "rsb10_dh252"}
+    V1["買う順番: RSを20刻みで高い順、同じ刻みの中は60日の高値からの下落率が大きい順"] = {"prio": "rsb20_dh60"}
     V1["買う順番: 20日の高値からの下落率が大きい順"] = {"prio": "dh20"}
     V1["買う順番: 60日の高値からの下落率が大きい順"] = {"prio": "dh60"}
     V1["買う順番: 52週の高値からの下落率が大きい順"] = {"prio": "dh252"}
