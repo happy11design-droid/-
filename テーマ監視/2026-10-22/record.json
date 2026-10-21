@@ -1,0 +1,128 @@
+{
+ "trade_date": "2026-10-21",
+ "run_date": "2026-10-22",
+ "theme_stage": "【ステージ2】",
+ "candidates": [
+  {
+   "sym": "LITE",
+   "kind": "予約: ボリンジャー メソッドIII（%bが0.05未満に近い）",
+   "pattern": "B",
+   "close": 850.7,
+   "limit": null,
+   "stop_buy": null,
+   "limit_buy": 791.26,
+   "verdict": "買い（予約）",
+   "author": "ボリンジャー",
+   "hot": false,
+   "rsi14": 41.0689490757168,
+   "s50": 0.0946224245461742,
+   "rs": 98.4187866927593,
+   "s2_skip": false
+  },
+  {
+   "sym": "KEYS",
+   "kind": "予約: ボリンジャー メソッドIII（%bが0.05未満に近い）",
+   "pattern": "B",
+   "close": 341.35,
+   "limit": null,
+   "stop_buy": null,
+   "limit_buy": 331.1,
+   "verdict": "買い（予約）",
+   "author": "ボリンジャー",
+   "hot": false,
+   "rsi14": 43.841705351761696,
+   "s50": 0.048533371797550906,
+   "rs": 91.83170254403132,
+   "s2_skip": false
+  },
+  {
+   "sym": "ANET",
+   "kind": "予約: ボリンジャー メソッドIII（%bが0.05未満に近い）",
+   "pattern": "B",
+   "close": 184.33,
+   "limit": null,
+   "stop_buy": null,
+   "limit_buy": 179.52,
+   "verdict": "買い（予約）",
+   "author": "ボリンジャー",
+   "hot": false,
+   "rsi14": 39.56600479276316,
+   "s50": 0.047854420818983945,
+   "rs": 76.52641878669276,
+   "s2_skip": false
+  },
+  {
+   "sym": "GLW",
+   "kind": "予約: ボリンジャー メソッドIII（%bが0.05未満に近い）",
+   "pattern": "B",
+   "close": 134.92,
+   "limit": null,
+   "stop_buy": null,
+   "limit_buy": 130.15,
+   "verdict": "買い（予約）",
+   "author": "ボリンジャー",
+   "hot": false,
+   "rsi14": 38.91810427718095,
+   "s50": -0.0021180719341801213,
+   "rs": 67.03326810176125,
+   "s2_skip": false
+  },
+  {
+   "sym": "PWR",
+   "kind": "予約: ボリンジャー メソッドIII（%bが0.05未満に近い）",
+   "pattern": "B",
+   "close": 601.14,
+   "limit": null,
+   "stop_buy": null,
+   "limit_buy": 599.87,
+   "verdict": "買い（予約）",
+   "author": "ボリンジャー",
+   "hot": false,
+   "rsi14": 36.83065976902128,
+   "s50": 0.008606643283328719,
+   "rs": 61.22113502935421,
+   "s2_skip": false
+  },
+  {
+   "sym": "EMR",
+   "kind": "予約: ミネルヴィニ（ピボットの手前）",
+   "pattern": "B",
+   "close": 163.11,
+   "limit": 170.76,
+   "stop_buy": 165.79,
+   "limit_buy": null,
+   "verdict": "買い（予約）",
+   "author": "ミネルヴィニ",
+   "hot": false,
+   "rsi14": 60.428364410355606,
+   "s50": 0.03057561410341103,
+   "rs": 74.39530332681018,
+   "s2_skip": true
+  }
+ ],
+ "holdings": [
+  {
+   "sym": "SNDK",
+   "rule": "ルール外（ユーザーの判断。この日はどのルールの合図もなし）",
+   "buy_date": "2026-10-21",
+   "buy_price": 1371.3,
+   "verdict": "未判定",
+   "author": ""
+  },
+  {
+   "sym": "AMD",
+   "rule": "ボリンジャーIII",
+   "buy_date": "2026-10-21",
+   "buy_price": 549.97,
+   "verdict": "保有継続",
+   "author": "ボリンジャー"
+  }
+ ],
+ "s2": {
+  "on": true,
+  "label": "あり（S2）",
+  "close": 11505.5556640625,
+  "hi60": 13217.8203125,
+  "drop": -0.12954213387348168
+ }
+}
