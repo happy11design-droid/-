@@ -36,7 +36,8 @@ CANDS = {
     "META": ["METU", "FBL", "METX"], "AMZN": ["AMZU", "AMZZ", "AMZX"], "ORCL": ["ORCX", "ORCU"], "PLTR": ["PLTU", "PTIR", "PLTG"],
     "NBIS": ["NEBX", "NBIL"], "CRWV": ["CORW", "CWVX", "CRWG"], "TSLA": ["TSLL", "TSLR", "TSLT"], "APP": ["APPX"],
     "CRWD": ["CRWL", "CRWU"], "PANW": ["PALU"], "SHOP": ["SHPU"], "RDDT": ["RDTL", "RDTX"], "TSM": ["TSMX", "TSMU", "TSMG"],
-    "COIN": ["CONL", "CONX"], "MSTR": ["MSTU", "MSTX"], "SNDK": ["SNXX", "SNDU"], "NOW": ["NOWL"], "CRM": ["CRMG"],
+    "COIN": ["CONL", "CONX"], "MSTR": ["MSTU", "MSTX"], "SNDK": ["SNDU"],   # SNXX はムームー証券で取り扱いなし（2026-10-21 ユーザーの確認）
+    "NOW": ["NOWL"], "CRM": ["CRMG"],
     "LITE": ["LITX"], "IBM": ["IBMX"], "ADBE": ["ADBG"], "HOOD": ["ROBN", "HOOG"], "NFLX": ["NFXL"], "UBER": ["UBRL"],
     "LLY": ["ELIL"], "BA": ["BOEU"], "WDC": ["WDCX", "WDCC"], "STX": ["STXX", "STXU"],
     "HPE": ["HPEL"],
