@@ -135,9 +135,9 @@
   "dollar_volume": 237097486
  },
  "SNDK": {
-  "etf": "SNXX",
-  "drag": -0.1368,
-  "dollar_volume": 1226072935
+  "etf": "SNDU",
+  "drag": -0.22,
+  "dollar_volume": 149141101
  },
  "NOW": {
   "etf": "NOWL",
