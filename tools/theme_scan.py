@@ -435,6 +435,13 @@ def main():
         desc = f"{st}（{pct(gi['c'][-1] / m30[-1] - 1)}、{pct(m30[-1] / m30[-21] - 1)}）" if m30[-1] and m30[-21] else st
         rows.append((g, len(mem), r, ab, desc))
     order = sorted(rows, key=lambda x: -(x[2][2] or -9))
+    # 下げの原因の見出しを取るための騰落率（tools/news_headlines.py daily が読む。2026-10-20）
+    chg = lambda c, k: c[-1] / c[-1 - k] - 1 if len(c) > k and c[-1 - k] else None
+    json.dump({"day": day,
+               "groups": {g: {"w1": r[0], "m1": r[1], "n": n} for g, n, r, ab, desc in rows},
+               "stocks": [{"sym": s, "group": wl[s], "d1": chg(d["c"], 1), "w1": chg(d["c"], 5), "m1": chg(d["c"], 21)}
+                          for s, d in data.items()]},
+              open(os.path.join(os.path.dirname(os.path.abspath(a.out)), "movers.json"), "w", encoding="utf-8"), ensure_ascii=False)
     for g, n, r, ab, desc in rows:
         w(f"| {g} | {n} | {pct(r[0])} | {pct(r[1])} | {pct(r[2])} | {[x[0] for x in order].index(g) + 1}位 | {pct(ab, 0).lstrip('+')} | {desc} |")
 

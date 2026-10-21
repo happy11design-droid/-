@@ -4,7 +4,8 @@
 # 使い方:
 #   tools/theme_daily.sh prepare <作業ディレクトリ>
 #       スキャン（scan.md）と、候補・保有銘柄の数値データ（<ティッカー>_data.txt）を作り、
-#       ニュースを調べる銘柄の一覧（news_targets.txt）を書き出す。
+#       ニュースを調べる銘柄の一覧（news_targets.txt）と、下げの原因を確かめるニュースの見出し（headlines.md、
+#       tools/news_headlines.py。2026-10-20〜）を書き出す。
 #   （ここでメインが、`新分析ツール/ニュース調査指示.md` を読ませた単一のサブエージェントに <作業ディレクトリ>/news.md を書かせる）
 #   tools/theme_daily.sh send <作業ディレクトリ>
 #       著者ごとのプロンプトとテーマの局面のプロンプトを組み立て、NotebookLMへ並列に送り、
@@ -51,6 +52,8 @@ if [[ "$CMD" == prepare ]]; then
     fi
   fi
   python3 "$ROOT/tools/theme_scan.py" "$D/scan.md" "${PREV[@]}" > /dev/null
+  # ニュースの見出し（市場全体・半導体・信用・「〇〇ショック」と、1週で大きく下げたグループの銘柄。どの銘柄を調べるかはプログラムが決める）
+  python3 "$ROOT/tools/news_headlines.py" daily "$D/movers.json" "$D/headlines.md" || echo "ニュースの見出しを取得できませんでした" >&2
   { tickers "## 4."; tickers "## 4-2."; tickers "## 5."; tickers "## 6."; } | sort -u > "$D/news_targets.txt"
   { tickers "## 5."; tickers "## 6."; } | sort -u > "$D/data_targets.txt"
   while read -r t; do
@@ -59,6 +62,7 @@ if [[ "$CMD" == prepare ]]; then
     [[ -f "$D/${t}_data.txt" ]] && { echo; python3 "$ROOT/tools/fundamentals.py" "$t"; } >> "$D/${t}_data.txt"
   done < "$D/data_targets.txt"
   echo "scan: $D/scan.md"
+  [[ -s "$D/headlines.md" ]] && echo "headlines: $D/headlines.md（ニュースのサブエージェントに最初に読ませる）"
   echo "ニュースを調べる銘柄（急騰・急落・監視外の注目・保有・候補）: $(tr '\n' ' ' < "$D/news_targets.txt")"
   echo "候補・保有銘柄: $(tr '\n' ' ' < "$D/data_targets.txt")"
   exit 0
@@ -174,6 +178,11 @@ for j in "${JOBS[@]}"; do wait "$j" || true; done
     echo "# ニュース（サブエージェントの調査）"
     echo
     cat "$D/news.md"
+  fi
+  if [[ -s "$D/headlines.md" ]]; then   # 後から下げの原因を確かめるための記録（2026-10-20〜）
+    echo
+    echo "# ニュースの見出し（プログラムが自動で取得）"   # 携帯のページ（theme_dashboard.py）はこの節を表示しない
+    tail -n +2 "$D/headlines.md"
   fi
 } > "$D/report.md"
 # 週次レビュー用の記録（候補・保有銘柄と著者の結論）
