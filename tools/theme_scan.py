@@ -339,8 +339,15 @@ def rule_key(kind):
 
 
 def load_industries():
-    """{ティッカー: 業種}。テーマ監視銘柄.md の表の3列目（Yahoo Financeの業種）。監視銘柄にない銘柄はバックテストのキャッシュから補う"""
+    """{ティッカー: 業種}。テーマ監視銘柄.md の表の3列目（Yahoo Financeの業種）。監視銘柄にない銘柄は `新分析ツール/業種一覧.json` と
+    バックテストのキャッシュから補う。
+    2026-10-23: 毎朝のRoutineの環境にはキャッシュがなく、監視銘柄以外の業種が取れずに「テーマの外」が 2026-10-02 から毎日0銘柄だった。
+    そのため業種の一覧（キャッシュの universe.json から作った約2,600銘柄）をリポジトリに入れた"""
     out = {}
+    try:
+        out.update(json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "新分析ツール", "業種一覧.json"), encoding="utf-8")))
+    except Exception:
+        pass
     for f in ("universe.json", "industry_extra.json"):
         p = os.path.join(DEFAULT_CACHE, f)
         if os.path.exists(p):
