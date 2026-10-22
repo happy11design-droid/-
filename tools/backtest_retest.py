@@ -1856,11 +1856,12 @@ def theme_stage(base, data, build, ind, days, cache):
     print("書き出し", file=sys.stderr)
 
 
-def etf_up_days(cache):
+def etf_up_days(cache, sym="SPY"):
     """案1（2026-10-13 採用）の局面: S&P500（SPY）の終値が100日線（20週線）より上かつ線が20取引日前より上の日。
-    買う日の前の取引日（引け後に判定する日）がこの集合に入っていれば2倍ETFで買う。(上昇の日の集合, 前の取引日を返す関数)"""
+    買う日の前の取引日（引け後に判定する日）がこの集合に入っていれば2倍ETFで買う。(上昇の日の集合, 前の取引日を返す関数)
+    sym="^SOX" で半導体指数の同じ局面（2026-10-23「2倍ETFはSOXも上昇のときだけ」の形）"""
     from backtest_lib import load_prices
-    g = load_prices(cache, "SPY")
+    g = load_prices(cache, sym)
     c, ds = g["c"], g["date"]
     up = set()
     for i in range(120, len(c)):
@@ -2008,6 +2009,7 @@ def opt_stage(base, data, sim, days, ind, cache, part):
     drag = {s: -x["drag"] for s, x in tab.items() if isinstance(x, dict) and "drag" in x}
     HAS = {s for s, d in drag.items() if d < 0.15}
     up, prev = etf_up_days(cache)
+    up_sox = etf_up_days(cache, "^SOX")[0]   # 2026-10-23: テーマだけが崩れた今回（S&P500は上昇の局面）も2倍ETFで買っていた
     di = {d: k for k, d in enumerate(days)}
     # 同じ銘柄・同じルールの合図が、前の取引日にも出ていたか（続けての合図）
     sig = {(b["sym"], b["rule"], data[b["sym"]]["date"][b["i0"]]) for b in base}
@@ -2253,7 +2255,8 @@ def opt_stage(base, data, sim, days, ind, cache, part):
     def lev(trs, mode):
         out = []
         for t in trs:
-            if t.get("ghost") or t["sym"] not in HAS or mode == "none" or (mode == "reg" and prev(t["in"]) not in up):
+            if t.get("ghost") or t["sym"] not in HAS or mode == "none" or (mode == "reg" and prev(t["in"]) not in up) \
+                    or (mode == "reg_sox" and (prev(t["in"]) not in up or prev(t["in"]) not in up_sox)):
                 out.append(t)
                 continue
             fee = drag[t["sym"]] / 252
@@ -2383,6 +2386,7 @@ def opt_stage(base, data, sim, days, ind, cache, part):
           "銘柄数3": {"slots": 3}, "銘柄数5": {"slots": 5}, "銘柄数6": {"slots": 6}, "銘柄数7": {"slots": 7},
           "同じ業種1銘柄まで": {"cap": 1}, "同じ業種の上限なし": {"cap": 0},
           "2倍ETFを使わない": {"etf": "none"}, "2倍ETFをいつでも使う": {"etf": "all"},
+          "2倍ETFはSOXも上昇のときだけ": {"etf": "reg_sox"},   # 2026-10-23: S&P500 と半導体指数（SOX）の両方が100日線の上で線が上向きの日だけ
           "損切り10%（日中の逆指値）": {"stop": 0.10}, "損切り12%（日中の逆指値）": {"stop": 0.12},
           "ミネルヴィニを外す": {"rules": ("B", "C", "V")}, "急落の底を外す": {"rules": ("B", "M", "V")},
           "押し目を外す": {"rules": ("C", "M", "V")}, "新高値V2を外す": {"rules": ("B", "C", "M")},
@@ -2561,20 +2565,25 @@ def opt_stage(base, data, sim, days, ind, cache, part):
     if os.environ.get("OPT_EQDUMP"):   # 毎日の資金を書き出す（2026-10-23 ユーザーの質問「実際の候補での成績は過去に前例のない下げか」）
         # REF の形、乱数30通り。2015年〜続けて運用した資金（eq）と、OPT_EQDUMP_START（既定 2026-10-02 の引け＝実際の運用の開始）に空の枠から始めた資金（live）
         import json as _js
-        trs, sp = make(dict(forms)[REF])
         st_ = os.environ.get("OPT_EQDUMP_START", "2026-10-02")
-        out = {"days": days, "eq": [], "live": [], "live_trades": []}
-        for q in range(30):
-            for key, d_from in (("eq", days[0]), ("live", st_)):
-                lg = []
-                port(trs, 5000 + q, d_from, days[-1], sp["slots"], sp["cap"], sp["swap"], sp["abn"], log=lg)
-                eqd = {x[1]: x[2] for x in lg if x[0] == "eq"}
-                out[key].append([eqd.get(d) for d in days])
-                if key == "live":
-                    byd = {(t["sym"], t["in"]): t for t in trs}
-                    out["live_trades"].append([[x[0], x[1], x[2], x[3], (byd.get((x[3], x[0])) or {}).get("rule"),
-                                                2 if (byd.get((x[3], x[0])) or {}).get("L") == 2 else 1] for x in lg if x[0] != "eq"])
-        _js.dump(out, open(os.environ["OPT_EQDUMP"], "w"), ensure_ascii=False)
+        allf = {}
+        for nm_, spec_ in forms:   # OPT_EQDUMP_ALL=1 なら全部の形（キーは形の名前）、なければ REF だけ（以前の形式）
+            if nm_ != REF and os.environ.get("OPT_EQDUMP_ALL") != "1":
+                continue
+            trs, sp = make(spec_)
+            out = {"days": days, "eq": [], "live": [], "live_trades": []}
+            for q in range(30):
+                for key, d_from in (("eq", days[0]), ("live", st_)):
+                    lg = []
+                    port(trs, 5000 + q, d_from, days[-1], sp["slots"], sp["cap"], sp["swap"], sp["abn"], log=lg)
+                    eqd = {x[1]: x[2] for x in lg if x[0] == "eq"}
+                    out[key].append([eqd.get(d) for d in days])
+                    if key == "live":
+                        byd = {(t["sym"], t["in"]): t for t in trs}
+                        out["live_trades"].append([[x[0], x[1], x[2], x[3], (byd.get((x[3], x[0])) or {}).get("rule"),
+                                                    2 if (byd.get((x[3], x[0])) or {}).get("L") == 2 else 1] for x in lg if x[0] != "eq"])
+            allf[nm_] = out
+        _js.dump(allf if os.environ.get("OPT_EQDUMP_ALL") == "1" else allf[REF], open(os.environ["OPT_EQDUMP"], "w"), ensure_ascii=False)
         print("資金を書き出し", os.environ["OPT_EQDUMP"], file=sys.stderr)
     if os.environ.get("OPT_DEBUG_EQ"):   # 調べる用: 最初の形の乱数1通りの、指定の日からの資金と保有（OPT_DEBUG_EQ=開始日）
         trs, sp = make(forms[1][1] if len(forms) > 1 else forms[0][1])
