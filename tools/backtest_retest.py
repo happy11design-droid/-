@@ -2558,6 +2558,24 @@ def opt_stage(base, data, sim, days, ind, cache, part):
     w("- この結果はルールの条件どおりに機械的に計算したもので、Claudeによる個別銘柄の売買判断ではない。")
     open(OUTDIR + f"直した数え方で年率を上げる形を探す_{part}" + os.environ.get("OUT_SUFFIX", "") + ".md", "w", encoding="utf-8").write("\n".join(L) + "\n")
     print("書き出し", file=sys.stderr)
+    if os.environ.get("OPT_EQDUMP"):   # 毎日の資金を書き出す（2026-10-23 ユーザーの質問「実際の候補での成績は過去に前例のない下げか」）
+        # REF の形、乱数30通り。2015年〜続けて運用した資金（eq）と、OPT_EQDUMP_START（既定 2026-10-02 の引け＝実際の運用の開始）に空の枠から始めた資金（live）
+        import json as _js
+        trs, sp = make(dict(forms)[REF])
+        st_ = os.environ.get("OPT_EQDUMP_START", "2026-10-02")
+        out = {"days": days, "eq": [], "live": [], "live_trades": []}
+        for q in range(30):
+            for key, d_from in (("eq", days[0]), ("live", st_)):
+                lg = []
+                port(trs, 5000 + q, d_from, days[-1], sp["slots"], sp["cap"], sp["swap"], sp["abn"], log=lg)
+                eqd = {x[1]: x[2] for x in lg if x[0] == "eq"}
+                out[key].append([eqd.get(d) for d in days])
+                if key == "live":
+                    byd = {(t["sym"], t["in"]): t for t in trs}
+                    out["live_trades"].append([[x[0], x[1], x[2], x[3], (byd.get((x[3], x[0])) or {}).get("rule"),
+                                                2 if (byd.get((x[3], x[0])) or {}).get("L") == 2 else 1] for x in lg if x[0] != "eq"])
+        _js.dump(out, open(os.environ["OPT_EQDUMP"], "w"), ensure_ascii=False)
+        print("資金を書き出し", os.environ["OPT_EQDUMP"], file=sys.stderr)
     if os.environ.get("OPT_DEBUG_EQ"):   # 調べる用: 最初の形の乱数1通りの、指定の日からの資金と保有（OPT_DEBUG_EQ=開始日）
         trs, sp = make(forms[1][1] if len(forms) > 1 else forms[0][1])
         lg = []
