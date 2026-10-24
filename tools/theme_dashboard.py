@@ -59,7 +59,7 @@ details{background:var(--surface);border:1px solid var(--line);border-radius:10p
 summary{cursor:pointer;color:var(--accent);font-weight:500}
 details[open] summary{margin-bottom:8px}
 .note{font-size:12px;color:var(--muted)}
-.plan{margin:0;padding-left:1.6em;display:flex;flex-direction:column;gap:8px}.plan li{padding-left:2px}.plan .sym{font-weight:700}.plan .out{color:var(--muted)}.plan .num{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.plan{margin:0;padding-left:1.6em;display:flex;flex-direction:column;gap:8px}.plan li{padding-left:2px}.plan .sym{font-weight:700}.plan .out{color:var(--muted)}.tablewrap{overflow-x:auto;margin:8px 0}table.plan{border-collapse:collapse;font-size:.9em;width:100%}table.plan th,table.plan td{border-bottom:1px solid var(--line,#ddd);padding:6px 8px;text-align:left;vertical-align:top}table.plan .sub{color:var(--muted);font-size:.85em}table.plan tr.out td{color:var(--muted)}.plan .num{font-family:var(--mono);font-variant-numeric:tabular-nums}
 a:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 """
 
@@ -140,6 +140,10 @@ def split_top(md):
     return parts
 
 
+try:   # 日本語（カタカナ）の会社名。`新分析ツール/銘柄名.json`（監視銘柄の分）。ないティッカーは空
+    NAMES = json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "新分析ツール", "銘柄名.json"), encoding="utf-8"))
+except (OSError, ValueError):
+    NAMES = {}
 SLOTS, STOP = 4, 0.15   # tools/theme_scan.py と同じ（同時保有4銘柄、損切り15%）
 
 
@@ -185,7 +189,7 @@ def order_plan(od):
     what = f"2倍ETF <b>{etf.group(1)}</b>" if etf else "株"
     qty = f"<span class=num>{sh.group(1)}</span>株" if sh else "株数不明"
     money = f"約<span class=num>{amt.group(1)}</span>ドル" if amt else ""
-    return what, how, qty, money, stop
+    return what, how, qty, money, stop, (etf.group(1) if etf else None)
 
 
 def main():
@@ -230,30 +234,34 @@ def main():
     w(f'<div class="row"><span class="label">買い（予約）</span><span class="pill {"good" if reserves else ""}">{html.escape(names(reserves))}</span></div>')
     w(f'<div class="row"><span class="label">様子見</span><span class="pill {"warn" if skips else ""}">{html.escape(names(skips))}</span></div>')
     w(f'<div class="row"><span class="label">売り（保有中・著者の判定）</span><span class="pill {"bad" if exits else ""}">{html.escape(names(exits))}</span></div>')
-    # 優先順位: 監視銘柄の候補 → テーマの外、成行（A）→ 予約（B）、50日線の傾きが小さい順（毎朝のツールの買う順番と同じ。2026-10-09 ユーザー採用）。空き枠を超える分は「枠外」
+    # 買う順番はこの表1つだけ: 監視銘柄の候補 → テーマの外、成行（A）→ 予約（B）、RSの高い順（tools/theme_summary.py と同じ。2026-10-17 ユーザー決定。
+    # 以前ここだけ50日線の傾きが小さい順のままで、判定のまとめの表と順番が食い違っていた。2026-10-24 直した）。空き枠を超える分は「枠外」
     rows = cand_rows(scan)
-    def rs_(c):   # 並べ替えの値（50日線の傾き。小さいほど先。古いレポートで列がなければRSの高い順）
-        r = rows.get(c["sym"], {})
+    def rs_(c):
         try:
-            if "50日線の傾き" in r:
-                return -float(r["50日線の傾き"].replace("%", "").replace("+", ""))
-            return float(r.get("RS", "0"))
+            return float(rows.get(c["sym"], {}).get("RS", "0"))
         except ValueError:
             return 0.0
     held = {h["sym"] for h in rec["holdings"]}   # 保有中の銘柄は買い増ししない（theme_scan でも候補から外す）
     plan = sorted([c for c in orders + reserves if c["sym"] not in held], key=lambda c: (rows.get(c["sym"], {}).get("グループ") == "テーマの外", c not in orders, -rs_(c)))
     free = max(0, SLOTS - len(rec["holdings"]))
     if plan:
-        w(f'<div class="row"><span class="label">注文の順番</span><span>空き枠 {free}（同時保有{SLOTS}銘柄まで・保有{len(rec["holdings"])}）。上から順に、空き枠の数まで注文する</span></div>')
-        w('<ol class="plan">')
-        for k, c in enumerate(plan):
+        w(f'<div class="row"><span class="label">買う順番</span><span>RSの高い順（成行A→予約B。テーマの外は後）。空き枠 {free}（同時保有{SLOTS}銘柄まで・保有{len(rec["holdings"])}）。上から空き枠の数までが今日の注文</span></div>')
+        w('<div class="tablewrap"><table class="plan"><thead><tr><th>順番</th><th>買うもの</th><th>買い方</th><th>株数</th><th>金額</th><th>損切りの逆指値</th></tr></thead><tbody>')
+        for k, c in enumerate(plan, 1):
             od = rows.get(c["sym"], {}).get("注文の目安", "")
-            what, how, qty, money, stop = order_plan(od)
-            out = k >= free
-            tag = "（枠外: 上の注文が約定せず枠が空いたとき）" if out else ""
-            w(f'<li class="{"out" if out else ""}"><span class="sym">{html.escape(c["sym"])}</span> {html.escape(c["verdict"])}{tag}<br>'
-              f'{what}・{how}・{qty}・{money}<br>損切りの逆指値: {stop}</li>')
-        w("</ol>")
+            what, how, qty, money, stop, etf = order_plan(od)
+            nm = NAMES.get(c["sym"], "")
+            under = f'{html.escape(c["sym"])}{"（" + html.escape(nm) + "）" if nm else ""}'
+            if etf:   # 2倍ETFで買うときは、元の株も書く
+                buy = f'<b>{etf}</b> 2倍ETF<br><span class="sub">元の株: {under}</span>'
+            else:
+                buy = f'<b>{html.escape(c["sym"])}</b>' + (f'<br><span class="sub">{html.escape(nm)}</span>' if nm else "")
+            out = k > free
+            w(f'<tr class="{"out" if out else ""}"><td>{k}{"<br>（枠外）" if out else ""}</td><td>{buy}<br><span class="sub">{html.escape(c["verdict"])}</span></td>'
+              f'<td>{how}</td><td>{qty}</td><td>{money}</td><td>{stop}</td></tr>')
+        w("</tbody></table></div>")
+        w('<p class="note">枠外: 上の注文が約定せず枠が空いたときだけ使う。</p>')
     for c in plan:
         od = rows.get(c["sym"], {}).get("注文の目安", "")
         if od:
