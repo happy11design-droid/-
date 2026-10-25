@@ -14,6 +14,10 @@ import os
 import re
 import sys
 
+try:   # カタカナの会社名（`新分析ツール/銘柄名.json`）
+    NAMES = json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "新分析ツール", "銘柄名.json"), encoding="utf-8"))
+except (OSError, ValueError):
+    NAMES = {}
 SLOTS = 4   # 同時保有の上限（theme_scan.SLOTS と同じ）
 
 
@@ -91,7 +95,7 @@ def main():
             out.append(f"| {sym} | {r.get('ルール', '')} | {r.get('損益', '')} | {rv} | {why} | {av} |")
     else:
         out.append("保有銘柄なし")
-    out += ["", "## 候補（買う順番に並べた表）", ""]
+    out += ["", "## 候補の判定（並びは上の「買う順番」の表と同じ）", ""]
     cands = rec.get("candidates", [])
     if cands:
         rows6 = {r.get("銘柄", ""): r for r in table_rows(scan, "## 6. 候補")}
@@ -109,10 +113,10 @@ def main():
             r = rows6.get(c["sym"], {})
             return (r.get("グループ") == "テーマの外", c.get("pattern") != "A", -(rs_of(c) or 0))
         cands = sorted([c for c in cands if c["sym"] not in held], key=key)
-        out += [f"- **並び順は「買う順番」**（ツールが空き枠に入れる順。監視銘柄の候補→テーマの外、成行のA→予約のB、RSの高い順）。**勝率の高い順ではない**。"
+        out += [f"- 並びは上の「買う順番」の表と同じ（RSの高い順。勝率の高い順ではない）。注文の値段・株数・逆指値は上の表を見る。"
                 f"勝率・1回平均は、そのルールの過去の成績（後知恵なしの監視銘柄・2015年〜の全部の合図）。",
-                f"- 空き枠: {free}（同時保有{SLOTS}銘柄まで。保有{len(held)}、うちルールの売り{exits}）。上から空き枠の数までが今日の注文。著者が【様子見】の候補を見送るかはユーザーが決める。", "",
-                "| 買う順番 | 銘柄 | ルール | 過去の勝率 | 過去の1回平均 | RS | ルールの判定 | 著者の判定 |", "|---|---|---|---|---|---|---|---|"]
+                f"- 空き枠: {free}（同時保有{SLOTS}銘柄まで。保有{len(held)}、うちルールの売り{exits}）。著者が【様子見】の候補を見送るかはユーザーが決める。", "",
+                "| 順 | 銘柄 | ルール | 過去の勝率 | 過去の1回平均 | RS | ルールの判定 | 著者の判定 |", "|---|---|---|---|---|---|---|---|"]
         for k, c in enumerate(cands, 1):
             r = rows6.get(c["sym"], {})
             m = re.search(r"勝率(\d+)%・1回平均([+\-]?[\d.]+%)", r.get("ルールの過去の成績", ""))
@@ -130,7 +134,7 @@ def main():
             rs_ = rs_of(c)
             s50 = f"{rs_:.0f}" if rs_ is not None else "—"
             n = f"{k}" + ("" if k <= free else "（枠外）")
-            out.append(f"| {n} | {c['sym']} | {c.get('kind', '')} | {wr} | {avg} | {s50} | {rv} | {av} |")
+            out.append(f"| {n} | {c['sym']}{'（' + NAMES[c['sym']] + '）' if NAMES.get(c['sym']) else ''} | {c.get('kind', '')} | {wr} | {avg} | {s50} | {rv} | {av} |")
     else:
         out.append("候補なし")
     print("\n".join(out))

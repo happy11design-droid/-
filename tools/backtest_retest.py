@@ -1858,11 +1858,12 @@ def theme_stage(base, data, build, ind, days, cache):
     print("書き出し", file=sys.stderr)
 
 
-def etf_up_days(cache):
+def etf_up_days(cache, sym="SPY"):
     """案1（2026-10-13 採用）の局面: S&P500（SPY）の終値が100日線（20週線）より上かつ線が20取引日前より上の日。
-    買う日の前の取引日（引け後に判定する日）がこの集合に入っていれば2倍ETFで買う。(上昇の日の集合, 前の取引日を返す関数)"""
+    買う日の前の取引日（引け後に判定する日）がこの集合に入っていれば2倍ETFで買う。(上昇の日の集合, 前の取引日を返す関数)
+    sym="^SOX" で半導体指数の同じ局面（2026-10-23「2倍ETFはSOXも上昇のときだけ」の形）"""
     from backtest_lib import load_prices
-    g = load_prices(cache, "SPY")
+    g = load_prices(cache, sym)
     c, ds = g["c"], g["date"]
     up = set()
     for i in range(120, len(c)):
@@ -2010,6 +2011,14 @@ def opt_stage(base, data, sim, days, ind, cache, part):
     drag = {s: -x["drag"] for s, x in tab.items() if isinstance(x, dict) and "drag" in x}
     HAS = {s for s, d in drag.items() if d < 0.15}
     up, prev = etf_up_days(cache)
+    up_sox = etf_up_days(cache, "^SOX")[0]   # 2026-10-23: テーマだけが崩れた今回（S&P500は上昇の局面）も2倍ETFで買っていた
+    # 2026-10-25: AIを先に買うのを切り替える合図 (a) SOX÷SPY（終値の比）がその150日線より上の日
+    from backtest_lib import load_prices as _lp
+    _sx, _sp = _lp(cache, "^SOX"), _lp(cache, "SPY")
+    _spm = dict(zip(_sp["date"], _sp["c"]))
+    _rd = [d for d in _sx["date"] if d in _spm]
+    _rv = [c / _spm[d] for d, c in zip(_sx["date"], _sx["c"]) if d in _spm]
+    SOXREL = {_rd[k] for k in range(149, len(_rv)) if _rv[k] > sum(_rv[k - 149:k + 1]) / 150}
     di = {d: k for k, d in enumerate(days)}
     # 同じ銘柄・同じルールの合図が、前の取引日にも出ていたか（続けての合図）
     sig = {(b["sym"], b["rule"], data[b["sym"]]["date"][b["i0"]]) for b in base}
@@ -2347,7 +2356,8 @@ def opt_stage(base, data, sim, days, ind, cache, part):
     def lev(trs, mode):
         out = []
         for t in trs:
-            if t.get("ghost") or t["sym"] not in HAS or mode == "none" or (mode == "reg" and prev(t["in"]) not in up):
+            if t.get("ghost") or t["sym"] not in HAS or mode == "none" or (mode == "reg" and prev(t["in"]) not in up) \
+                    or (mode == "reg_sox" and (prev(t["in"]) not in up or prev(t["in"]) not in up_sox)):
                 out.append(t)
                 continue
             fee = drag[t["sym"]] / 252
@@ -2476,12 +2486,19 @@ def opt_stage(base, data, sim, days, ind, cache, part):
           "dh60": lambda t: (0 if t["ai"] else 1, t.get("dh60", 0.0)),
           "dh252": lambda t: (0 if t["ai"] else 1, t.get("dh252", 0.0)),
           "rs80_dh60": lambda t: (0 if t["ai"] else 1, 0 if t["rs"] >= 80 else 1, t.get("dh60", 0.0)),
-          "rev_dh60": lambda t: (0 if t["ai"] else 1, 0 if t["rule"] in ("B", "C") else 1, t.get("dh60", 0.0) if t["rule"] in ("B", "C") else -t["rs"])}
+          "rev_dh60": lambda t: (0 if t["ai"] else 1, 0 if t["rule"] in ("B", "C") else 1, t.get("dh60", 0.0) if t["rule"] in ("B", "C") else -t["rs"]),
+          # 2026-10-25: AIを先に買うのを合図で切り替える（AIを先に買う形が負けた5年を避けられるか）
+          "rs_soxrel": lambda t: (0 if t["ai"] and t["sd"] in SOXREL else 1, -t["rs"]),
+          "rs_aiind": lambda t: (0 if t["ai"] and (ind_rank(t["sym"], t["sd"]) or 1.0) <= 0.2 else 1, -t["rs"]),
+          "rs_recent": lambda t: (0 if t["ai"] and t.get("ai_good") else 1, -t["rs"])}
     # 形: 名前 → 決まり（変えない項目は今のルール）
     BASE = {"rules": ("B", "C", "M", "V"), "prio": "slope", "streak": None, "slots": 4, "cap": 2, "etf": "reg", "stop": STOP, "rel8": False, "swap": None, "xsell": None, "s2": False, "close_stop": False, "hotwait": False, "c10": False, "kx": None, "kb": None, "bsect": False, "indtop": None, "tstop": None, "pstop": None, "m30": False, "c15": False, "lim2": False, "hadd": None, "ichi": False, "outside": False, "abn": None, "gem": None}
     V1 = {"今のルール（傾きの小さい順）": {},
           "買う順番: RSの高い順": {"prio": "rs"},
           "買う順番: RSの高い順（AI半導体を先にしない）": {"prio": "rs_noai"},
+          "買う順番: RSの高い順（SOX÷S&P500が150日線より上の日だけAIを先に）": {"prio": "rs_soxrel"},
+          "買う順番: RSの高い順（業種の3カ月の強さが上位20%のAIだけ先に）": {"prio": "rs_aiind"},
+          "買う順番: RSの高い順（直近60取引日に終わった合図の成績がAIの方が良い日だけAIを先に）": {"prio": "rs_recent"},
           "買う順番: 続けての合図より初日の合図を先に、その中はRSの高い順": {"prio": "first_rs"},
           "買う順番: 順張りを先に、その中はRSの高い順": {"prio": "trend_rs"},
           "買う順番: 逆張りを先に、その中はRSの高い順": {"prio": "rev_rs"},
@@ -2492,6 +2509,7 @@ def opt_stage(base, data, sim, days, ind, cache, part):
           "銘柄数3": {"slots": 3}, "銘柄数5": {"slots": 5}, "銘柄数6": {"slots": 6}, "銘柄数7": {"slots": 7},
           "同じ業種1銘柄まで": {"cap": 1}, "同じ業種の上限なし": {"cap": 0},
           "2倍ETFを使わない": {"etf": "none"}, "2倍ETFをいつでも使う": {"etf": "all"},
+          "2倍ETFはSOXも上昇のときだけ": {"etf": "reg_sox"},   # 2026-10-23: S&P500 と半導体指数（SOX）の両方が100日線の上で線が上向きの日だけ
           "損切り10%（日中の逆指値）": {"stop": 0.10}, "損切り12%（日中の逆指値）": {"stop": 0.12},
           "ミネルヴィニを外す": {"rules": ("B", "C", "V")}, "急落の底を外す": {"rules": ("B", "M", "V")},
           "押し目を外す": {"rules": ("C", "M", "V")}, "新高値V2を外す": {"rules": ("B", "C", "M")},
@@ -2611,6 +2629,34 @@ def opt_stage(base, data, sim, days, ind, cache, part):
         if sp["streak"]:
             keep = {"all": ("B", "C", "M", "V"), "rev": ("B", "C"), "trend": ("M", "V")}[sp["streak"]]
             trs = [t for t in trs if t["first"] or t["rule"] not in keep]
+        if sp["prio"] == "rs_recent":   # 合図の日の前の60取引日に終わった合図（株の損益）の平均を、AIとそれ以外で比べる
+            ex_ = {}
+            for t in trs:
+                if t.get("ghost") or t["out"] not in di:
+                    continue
+                a_ = ex_.setdefault(t["out"], [0.0, 0, 0.0, 0])
+                r_ = t["path"][t["out"]] - 1
+                if t["ai"]:
+                    a_[0] += r_; a_[1] += 1
+                else:
+                    a_[2] += r_; a_[3] += 1
+            cum, acc = [], [0.0, 0, 0.0, 0]
+            for d in days:
+                x_ = ex_.get(d)
+                if x_:
+                    acc = [acc[j] + x_[j] for j in range(4)]
+                cum.append(list(acc))
+            def good_(sd):
+                k = di.get(sd)
+                if k is None or k < 61:
+                    return True
+                hi_, lo_ = cum[k - 1], cum[k - 61]
+                n_a, n_o = hi_[1] - lo_[1], hi_[3] - lo_[3]
+                if n_a < 5 or n_o < 5:
+                    return True
+                return (hi_[0] - lo_[0]) / n_a > (hi_[2] - lo_[2]) / n_o
+            gd_ = {}
+            trs = [{**t, "ai_good": gd_.setdefault(t["sd"], good_(t["sd"]))} for t in trs]
         trs = [{**t, "prio": PR[sp["prio"]](t)} for t in trs]
         if sp["outside"]:   # テーマの外の候補は、同じ日の監視銘柄の候補の後（毎朝の theme_scan.py と同じ）
             trs = [{**t, "prio": (1 if t["x"] == "out" else 0,) + (t["prio"] if isinstance(t["prio"], tuple) else (t["prio"],))} for t in trs]
@@ -2688,6 +2734,29 @@ def opt_stage(base, data, sim, days, ind, cache, part):
     w("- この結果はルールの条件どおりに機械的に計算したもので、Claudeによる個別銘柄の売買判断ではない。")
     open(OUTDIR + f"直した数え方で年率を上げる形を探す_{part}" + os.environ.get("OUT_SUFFIX", "") + ".md", "w", encoding="utf-8").write("\n".join(L) + "\n")
     print("書き出し", file=sys.stderr)
+    if os.environ.get("OPT_EQDUMP"):   # 毎日の資金を書き出す（2026-10-23 ユーザーの質問「実際の候補での成績は過去に前例のない下げか」）
+        # REF の形、乱数30通り。2015年〜続けて運用した資金（eq）と、OPT_EQDUMP_START（既定 2026-10-02 の引け＝実際の運用の開始）に空の枠から始めた資金（live）
+        import json as _js
+        st_ = os.environ.get("OPT_EQDUMP_START", "2026-10-02")
+        allf = {}
+        for nm_, spec_ in forms:   # OPT_EQDUMP_ALL=1 なら全部の形（キーは形の名前）、なければ REF だけ（以前の形式）
+            if nm_ != REF and os.environ.get("OPT_EQDUMP_ALL") != "1":
+                continue
+            trs, sp = make(spec_)
+            out = {"days": days, "eq": [], "live": [], "live_trades": []}
+            for q in range(30):
+                for key, d_from in (("eq", days[0]), ("live", st_)):
+                    lg = []
+                    port(trs, 5000 + q, d_from, days[-1], sp["slots"], sp["cap"], sp["swap"], sp["abn"], log=lg)
+                    eqd = {x[1]: x[2] for x in lg if x[0] == "eq"}
+                    out[key].append([eqd.get(d) for d in days])
+                    if key == "live":
+                        byd = {(t["sym"], t["in"]): t for t in trs}
+                        out["live_trades"].append([[x[0], x[1], x[2], x[3], (byd.get((x[3], x[0])) or {}).get("rule"),
+                                                    2 if (byd.get((x[3], x[0])) or {}).get("L") == 2 else 1] for x in lg if x[0] != "eq"])
+            allf[nm_] = out
+        _js.dump(allf if os.environ.get("OPT_EQDUMP_ALL") == "1" else allf[REF], open(os.environ["OPT_EQDUMP"], "w"), ensure_ascii=False)
+        print("資金を書き出し", os.environ["OPT_EQDUMP"], file=sys.stderr)
     if os.environ.get("OPT_DEBUG_EQ"):   # 調べる用: 最初の形の乱数1通りの、指定の日からの資金と保有（OPT_DEBUG_EQ=開始日）
         trs, sp = make(forms[1][1] if len(forms) > 1 else forms[0][1])
         lg = []
