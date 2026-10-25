@@ -105,7 +105,9 @@ def cmd_record(a):
                       "verdict": vv[0], "author": vv[1]})
     rec = {"trade_date": trade_date, "run_date": dt.datetime.now(dt.timezone(dt.timedelta(hours=9))).date().isoformat(),
            "theme_stage": stage, "candidates": cands, "holdings": holds,
-           "s2": (json.load(open(mp, encoding="utf-8")).get("_s2") if os.path.exists(mp) else None)}   # テーマ全体の急落 S2 の記録（2026-10-14）
+           "s2": (json.load(open(mp, encoding="utf-8")).get("_s2") if os.path.exists(mp) else None),   # テーマ全体の急落 S2 の記録（2026-10-14）
+           # 枠外で表に出さず、著者・ニュース調査に回さなかった候補（2026-10-25〜。バックテストとの一致の点検に使う）
+           "omitted": (json.load(open(mp, encoding="utf-8")).get("_omitted", []) if os.path.exists(mp) else [])}
     path = os.path.join(d, "record.json")
     json.dump(rec, open(path, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
     print(path)
