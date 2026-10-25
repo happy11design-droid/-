@@ -21,7 +21,7 @@ import subprocess
 import time
 
 CACHE = os.path.expanduser("~/.cache/stock_backtest/long")
-OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "新分析ツール", "バックテスト結果", "半導体指数の急落の後の戻り.md")
+OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "新分析ツール", "バックテスト結果", "ムームーAIの提案_2026-10-25", "半導体指数の急落の後の戻り.md")
 
 
 def fetch(sym, max_age_h=12):
