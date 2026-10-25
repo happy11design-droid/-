@@ -446,13 +446,19 @@ def macro_sets(days, cache):
     for d in days:
         last = tm.get(d, last)
         tn.append(last)
-    out = {"M_rate": set(), "M_cpi": set(), "M_stag": set()}
+    out = {"M_rate": set(), "M_cpi": set(), "M_stag": set(), "M_rate100": set(), "M_rate20d": set()}
     info = {}
     for i, d in enumerate(days):
         if i >= 70 and all(x is not None for x in tn[i - 69:i + 1]):
             m50, m50p = sum(tn[i - 49:i + 1]) / 50, sum(tn[i - 69:i - 19]) / 50
             if tn[i] > m50 > m50p:
                 out["M_rate"].add(d)
+            if tn[i] > tn[i - 20]:   # 数値違いの確かめ: 20取引日前より高い
+                out["M_rate20d"].add(d)
+        if i >= 120 and all(x is not None for x in tn[i - 119:i + 1]):
+            m100, m100p = sum(tn[i - 99:i + 1]) / 100, sum(tn[i - 119:i - 19]) / 100
+            if tn[i] > m100 > m100p:   # 数値違いの確かめ: 100日線
+                out["M_rate100"].add(d)
         k = bisect.bisect_right(c_av, d) - 1
         if k >= 15 and yoy(k) is not None and yoy(k - 3) is not None and yoy(k) > yoy(k - 3):
             out["M_cpi"].add(d)
@@ -2261,7 +2267,9 @@ def opt_stage(base, data, sim, days, ind, cache, part):
     MAC = macro_sets(days, cache)   # 金利・インフレの局面（2026-10-25）
     MACN = {"M_rate": "10年金利が上昇局面（終値が50日線より上で、50日線が上向き）",
             "M_cpi": "物価の伸びの再加速（CPI前年比が3か月前より高い。発表後の数字）",
-            "M_stag": "物価の伸びの再加速＋雇用の伸び（3か月平均）が10万人未満"}
+            "M_stag": "物価の伸びの再加速＋雇用の伸び（3か月平均）が10万人未満",
+            "M_rate100": "10年金利が上昇局面（終値が100日線より上で、100日線が上向き。数値違い）",
+            "M_rate20d": "10年金利が20取引日前より高い（数値違い）"}
     for k_, v_ in MAC.items():
         KD[k_] = v_
         KN[k_] = MACN[k_]
@@ -2865,6 +2873,8 @@ def opt_stage(base, data, sim, days, ind, cache, part):
     V1["押し目・急落の底: 合図で20%→20日線を2日続けて上回ったら残り80%、売りは20日線割れ（ムームーAIの3段階）"] = {"stg": (("m2", "ma20"), ('B', 'C'))}
     V1["急落の底だけ: 合図で20%→20日線を2日続けて上回ったら残り80%、売りは20日線割れ（ムームーAIの3段階）"] = {"stg": (("m2", "ma20"), ('C',))}
     V1["10年金利が上昇局面の日は2倍ETFを使わない（元の株で買う）"] = {"etf": "reg_not_M_rate"}
+    V1["10年金利が100日線より上で上向きの日は2倍ETFを使わない（数値違い）"] = {"etf": "reg_not_M_rate100"}
+    V1["10年金利が20取引日前より高い日は2倍ETFを使わない（数値違い）"] = {"etf": "reg_not_M_rate20d"}
     V1["10年金利が上昇局面の日はAI半導体を先に買わない"] = {"prio": "rs_not_M_rate"}
     V1["10年金利が上昇局面の日は新しい買いを止める"] = {"kb": ("M_rate", "all")}
     V1["物価の伸びが再加速の日は2倍ETFを使わない（元の株で買う）"] = {"etf": "reg_not_M_cpi"}
