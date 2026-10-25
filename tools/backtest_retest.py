@@ -2010,6 +2010,13 @@ def opt_stage(base, data, sim, days, ind, cache, part):
     HAS = {s for s, d in drag.items() if d < 0.15}
     up, prev = etf_up_days(cache)
     up_sox = etf_up_days(cache, "^SOX")[0]   # 2026-10-23: テーマだけが崩れた今回（S&P500は上昇の局面）も2倍ETFで買っていた
+    # 2026-10-25: AIを先に買うのを切り替える合図 (a) SOX÷SPY（終値の比）がその150日線より上の日
+    from backtest_lib import load_prices as _lp
+    _sx, _sp = _lp(cache, "^SOX"), _lp(cache, "SPY")
+    _spm = dict(zip(_sp["date"], _sp["c"]))
+    _rd = [d for d in _sx["date"] if d in _spm]
+    _rv = [c / _spm[d] for d, c in zip(_sx["date"], _sx["c"]) if d in _spm]
+    SOXREL = {_rd[k] for k in range(149, len(_rv)) if _rv[k] > sum(_rv[k - 149:k + 1]) / 150}
     di = {d: k for k, d in enumerate(days)}
     # 同じ銘柄・同じルールの合図が、前の取引日にも出ていたか（続けての合図）
     sig = {(b["sym"], b["rule"], data[b["sym"]]["date"][b["i0"]]) for b in base}
@@ -2370,12 +2377,19 @@ def opt_stage(base, data, sim, days, ind, cache, part):
           "rs_low": lambda t: (1 if t["rule"] in ("E", "G", "U", "K") else 0, 0 if t["ai"] else 1, -t["rs"]),   # 足した合図は空き枠だけ（同じ日の4つのルールの後）
           "v2cbm": lambda t: (0 if t["ai"] else 1, {"V": 0, "C": 1, "B": 2, "M": 3}.get(t["rule"], 4), -t["rs"]),
           "v2cbm_noai": lambda t: ({"V": 0, "C": 1, "B": 2, "M": 3}.get(t["rule"], 4), -t["rs"]),
-          "reg": lambda t: (0 if t["ai"] else 1, -t["reg"])}
+          "reg": lambda t: (0 if t["ai"] else 1, -t["reg"]),
+          # 2026-10-25: AIを先に買うのを合図で切り替える（AIを先に買う形が負けた5年を避けられるか）
+          "rs_soxrel": lambda t: (0 if t["ai"] and t["sd"] in SOXREL else 1, -t["rs"]),
+          "rs_aiind": lambda t: (0 if t["ai"] and (ind_rank(t["sym"], t["sd"]) or 1.0) <= 0.2 else 1, -t["rs"]),
+          "rs_recent": lambda t: (0 if t["ai"] and t.get("ai_good") else 1, -t["rs"])}
     # 形: 名前 → 決まり（変えない項目は今のルール）
     BASE = {"rules": ("B", "C", "M", "V"), "prio": "slope", "streak": None, "slots": 4, "cap": 2, "etf": "reg", "stop": STOP, "rel8": False, "swap": None, "xsell": None, "s2": False, "close_stop": False, "hotwait": False, "c10": False, "kx": None, "kb": None, "bsect": False, "indtop": None, "tstop": None, "pstop": None, "m30": False, "c15": False, "lim2": False, "hadd": None, "ichi": False, "outside": False, "abn": None}
     V1 = {"今のルール（傾きの小さい順）": {},
           "買う順番: RSの高い順": {"prio": "rs"},
           "買う順番: RSの高い順（AI半導体を先にしない）": {"prio": "rs_noai"},
+          "買う順番: RSの高い順（SOX÷S&P500が150日線より上の日だけAIを先に）": {"prio": "rs_soxrel"},
+          "買う順番: RSの高い順（業種の3カ月の強さが上位20%のAIだけ先に）": {"prio": "rs_aiind"},
+          "買う順番: RSの高い順（直近60取引日に終わった合図の成績がAIの方が良い日だけAIを先に）": {"prio": "rs_recent"},
           "買う順番: 続けての合図より初日の合図を先に、その中はRSの高い順": {"prio": "first_rs"},
           "買う順番: 順張りを先に、その中はRSの高い順": {"prio": "trend_rs"},
           "買う順番: 逆張りを先に、その中はRSの高い順": {"prio": "rev_rs"},
@@ -2485,6 +2499,34 @@ def opt_stage(base, data, sim, days, ind, cache, part):
         if sp["streak"]:
             keep = {"all": ("B", "C", "M", "V"), "rev": ("B", "C"), "trend": ("M", "V")}[sp["streak"]]
             trs = [t for t in trs if t["first"] or t["rule"] not in keep]
+        if sp["prio"] == "rs_recent":   # 合図の日の前の60取引日に終わった合図（株の損益）の平均を、AIとそれ以外で比べる
+            ex_ = {}
+            for t in trs:
+                if t.get("ghost") or t["out"] not in di:
+                    continue
+                a_ = ex_.setdefault(t["out"], [0.0, 0, 0.0, 0])
+                r_ = t["path"][t["out"]] - 1
+                if t["ai"]:
+                    a_[0] += r_; a_[1] += 1
+                else:
+                    a_[2] += r_; a_[3] += 1
+            cum, acc = [], [0.0, 0, 0.0, 0]
+            for d in days:
+                x_ = ex_.get(d)
+                if x_:
+                    acc = [acc[j] + x_[j] for j in range(4)]
+                cum.append(list(acc))
+            def good_(sd):
+                k = di.get(sd)
+                if k is None or k < 61:
+                    return True
+                hi_, lo_ = cum[k - 1], cum[k - 61]
+                n_a, n_o = hi_[1] - lo_[1], hi_[3] - lo_[3]
+                if n_a < 5 or n_o < 5:
+                    return True
+                return (hi_[0] - lo_[0]) / n_a > (hi_[2] - lo_[2]) / n_o
+            gd_ = {}
+            trs = [{**t, "ai_good": gd_.setdefault(t["sd"], good_(t["sd"]))} for t in trs]
         trs = [{**t, "prio": PR[sp["prio"]](t)} for t in trs]
         if sp["outside"]:   # テーマの外の候補は、同じ日の監視銘柄の候補の後（毎朝の theme_scan.py と同じ）
             trs = [{**t, "prio": (1 if t["x"] == "out" else 0,) + (t["prio"] if isinstance(t["prio"], tuple) else (t["prio"],))} for t in trs]
