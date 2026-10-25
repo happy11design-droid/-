@@ -49,7 +49,7 @@ def buy_usd():
 NDX_URL = "https://api.nasdaq.com/api/quote/list-type/nasdaq100"
 OUT_MAX = 5   # 監視外の注目銘柄（ニュースを調べる）はRSの高い順にこの件数まで
 V2_TOP = 10   # 新高値V2を当てる銘柄: 監視銘柄のうちその日のRSが上位この数まで
-B_MAX = 2   # パターンB（予約注文の候補）は各ルールでこの件数まで（2026-10-25 ユーザー決定で5→2。買えるのは空き枠の数までのため）
+B_MAX = 2   # パターンB（条件の成立が目前）は各ルールでこの件数まで。2026-10-25 ユーザー決定で予約の注文はやめ、節6-3の参考の表示だけ（5→2）
 CAND_SPARE = 2   # 候補の表は「空き枠の数＋この件数（予備）」まで。残りは著者・ニュース調査に回さない（2026-10-25 ユーザー決定。
                  # 予備は、著者が【様子見】を出したときや予約が約定しなかったときのため）
 CRASH_MAX = 4   # 同時保有の上限（2026-09-29 に7→4）。急落の底の候補（市場全体の急落の日は20件を超えることがある）はRSの高い順にこの件数まで
@@ -651,7 +651,7 @@ def main():
             w("")
 
     # ---- 候補 ----
-    w("## 6. 候補（採用したルールの条件が成立＝A、成立が目前＝B）\n")
+    w("## 6. 候補（採用したルールの条件が成立＝A。予約（B）は2026-10-25から注文せず、節6-3に参考の表示だけ）\n")
     w(f"建玉の目安: 同時保有{SLOTS}銘柄まで、1銘柄に資金の{100 / SLOTS:.0f}%（資金÷{SLOTS}）、損切りは買値の{STOP * 100:.0f}%下（ユーザー決定 2026-09-29）。\n")
     cands = []
     spare_out = []   # 枠外で表に出さない候補（下の「候補は空き枠の数＋予備まで」）
@@ -772,6 +772,14 @@ def main():
     cands = [x for x in cands if x["sym"] not in held_syms]
     if held_skip:
         w(f"保有中のため候補から外した銘柄（合図は出ている）: {'、'.join(held_skip)}\n")
+    # 2026-10-25 ユーザー決定: 予約（パターンB）は注文しない。節6-3に参考の表示だけ（著者・ニュース調査に回さない）。
+    # 毎朝のツールと同じ条件・値段で予約の約定をバックテストに入れると、年率が下がったため（後知恵なし 35.7%→30.7〜34.2%、87銘柄 45.6%→34.2〜42.6%。
+    # `バックテスト結果/点検_2026-10-25/点検_2026-10-25_候補の数とバックテスト.md` の 4-3）
+    ref_b = []
+    for x in sorted((x for x in cands if x["pat"] == "B" and not x["outside"]), key=lambda x: -(x["rs"] or 0)):
+        if sum(1 for y in ref_b if y["kind"] == x["kind"]) < B_MAX:
+            ref_b.append(x)
+    cands = [x for x in cands if x["pat"] != "B"]
     if not cands:
         w("本日は該当なし（著者への送信は不要）。\n")
     else:
@@ -832,7 +840,7 @@ def main():
             if re.fullmatch(r"\d{4}-\d{2}-\d{2}", v):
                 n = (dt.date.fromisoformat(v) - dt.date.fromisoformat(day)).days
                 eds[k_] = f"{v}（{n}日後）" + ("**決算が近い**" if 0 <= n <= 14 else "")
-        w("パターン: A＝最新の足で採用ルールの条件が成立（翌日の寄り付きで成行）、B＝条件の成立が目前（引け後に予約注文を置く）。\n")
+        w("パターン: A＝最新の足で採用ルールの条件が成立（翌日の寄り付きで成行）。条件の成立が目前の銘柄（B）は、予約の注文をやめたので節6-3に参考として出す（2026-10-25 ユーザー決定）。\n")
         st_ = rule_stats()
         def perf(x):
             r = st_.get(rule_key(x["kind"]) or "")
@@ -884,12 +892,28 @@ def main():
             rs_ = "取得不可" if x["rs"] is None else f"{x['rs']:.0f}"
             w(f"| {x['sym']} | {x['group']} | {x['pat']} | {x['kind']} | {x['close']:.2f} | {pct(x['chg'])} | {rs_} | {x['why']} |")
         w("")
+    if ref_b:
+        w("\n## 6-3. 参考: 条件の成立が目前の銘柄（予約は注文しない・著者には送らない）\n")
+        w("2026-10-25 ユーザー決定: 予約（逆指値・指値）の注文はやめ、参考の表示だけにする。毎朝のツールと同じ条件・値段で予約の約定をバックテストに入れると、"
+          "どの形も年率が下がった（後知恵なし 35.7%→30.7〜34.2%、87銘柄 45.6%→34.2〜42.6%。`バックテスト結果/点検_2026-10-25/`）。"
+          f"引けで条件がそろえば、翌朝の節6に買いの候補（A）として出る。各ルールでRSの高い順に{B_MAX}件まで。\n")
+        w("| 参考の銘柄 | グループ | 種類 | 終値 | 前日比 | RS | 当てはまった条件 | 条件がそろう目安の価格（注文はしない） |")
+        w("|---|---|---|---|---|---|---|---|")
+        for x in ref_b:
+            m_ = re.search(r"(逆指値買い|指値買い) ([0-9.]+)", x["order"])
+            lv_ = (f"{m_.group(2)}（{'この値を上回って引け、ほかの条件もそろうと' if m_.group(1) == '逆指値買い' else 'この値より下で引けると'}翌朝の買いの候補（A）。目安）"
+                   if m_ else "—")
+            rs_ = "取得不可" if x["rs"] is None else f"{x['rs']:.0f}"
+            w(f"| {x['sym']} | {x['group']} | {x['kind'].replace('予約: ', '')} | {x['close']:.2f} | {pct(x['chg'])} | {rs_} | {x['why']} | {lv_} |")
+        w("")
     text = "\n".join(L) + "\n"
     today_pat = {}
     for x in cands:
         today_pat.setdefault(x["sym"], []).append(f"{x['pat']}（{x['kind']}）")
     for x in spare_out:
         today_pat.setdefault(x["sym"], []).append(f"{x['pat']}（{x['kind']}。枠外のため表には出していない）")
+    for x in ref_b:
+        today_pat.setdefault(x["sym"], []).append(f"B（{x['kind']}。参考の表示だけで、予約は注文しない。節6-3）")
     text = re.sub(r"\{\{今日:([A-Z.]+)\}\}", lambda m: ("今日の条件で改めて判定: 節6の候補 " + "・".join(today_pat[m.group(1)]))
                   if m.group(1) in today_pat else "今日の条件では候補なし（新しいエントリーの条件がそろうまで待つ）", text)
     os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
@@ -899,6 +923,7 @@ def main():
     meta = {x["sym"]: {"hot": x.get("hot"), "rsi14": x.get("rsi14"), "s50": x.get("s50"), "rs": x.get("rs"),
                        "s2_skip": bool(s2.get("on")) and x["kind"].startswith(("順張り", "予約: ミネルヴィニ", "予約: 新高値"))} for x in cands}
     meta["_s2"] = s2
+    meta["_ref_b"] = [{"sym": x["sym"], "kind": x["kind"], "close": x["close"], "rs": x["rs"]} for x in ref_b]   # 参考の表示だけの予約（B）の候補（record.json に残す）
     meta["_omitted"] = [{"sym": x["sym"], "kind": x["kind"], "pattern": x["pat"], "close": x["close"], "rs": x["rs"]} for x in spare_out]   # 枠外で表に出さなかった候補（record.json に残す）
     json.dump(meta,
               open(os.path.join(os.path.dirname(os.path.abspath(a.out)), "cands_meta.json"), "w", encoding="utf-8"), ensure_ascii=False)
