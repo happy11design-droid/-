@@ -339,6 +339,114 @@ def prep_more(s):
         s["wsig"][nm] = arr
 
 
+def resv_trades(data, members, ctx, end, idx, b3_exit, rec, b_max=2):
+    """毎朝のツールの予約（パターンB）が約定した売買（2026-10-25 ユーザーの指示「予約の約定を入れたバックテスト」）。条件と注文の値段は theme_scan.py と同じ:
+      押し目: 引けで %b が0.05以上0.2未満・21日II%>0 → 翌日に、その日のバンドで %b=0.05 になる価格の指値。安値が届けば min(始値, 指値) で買う。手じまいは押し目と同じ（b3_exit）
+      ミネルヴィニ: ベースの高値（ピボット）の−5%以内で引け（ベース15日以上・調整幅35%以内・トレンドテンプレート）→ 翌日にピボットの逆指値（上限+3%）。
+        寄り付きが+3%を超えたら買わない。高値が届けば max(始値, ピボット)。本の「上抜けの日の出来高2倍」は見ない（毎朝のツールと同じ）
+      新高値V2: RS上位10（監視銘柄）・RS≧90・トレンドテンプレート・上げ下げの出来高比≧1.3 で、直前20日の最高値（終値）と直前2年の最高値（高値）の高い方の−3%以内で引け
+        → 翌日にその値の逆指値。高値が届けば max(始値, その値)
+      順張りの手じまいは、終値が50日線を割った翌日の寄り付き（損切り15%・半分売り・かぶせ線は opt の計算がほかの売買と同じく当てる）。
+    毎朝のツールと同じく、各ルールで合図の日ごとにRSの高い順で b_max 件まで（2026-10-25〜 B_MAX=2）。x="resv" を付ける"""
+    import theme_scan as ts_
+    okr, ok10 = ctx["ok_rot"], ctx["ok10"]
+    tt = cb.bt.trend_template
+    cand = {}
+    for sym, s_ in data.items():
+        o, h, l, c = s_["o"], s_["h"], s_["l"], s_["c"]
+        n = len(c)
+        sp = members.get(sym, [])
+        for i in range(200, n - 1):
+            d = s_["date"][i]
+            if d < cb.START or d > end:
+                continue
+            j = i + 1
+            rk = s_["rs"][i] or 0
+            pb, ii = s_["pctb"][i], s_["ii21"][i]
+            if pb is not None and ii is not None and ii > 0 and 0.05 <= pb < 0.2 and okr(s_, i, sp):
+                lvl = s_["bb_dn"][i] + 0.05 * (s_["bb_up"][i] - s_["bb_dn"][i])
+                if l[j] <= lvl:
+                    px = min(o[j], lvl)
+                    x = b3_exit({"sym": sym, "in": s_["date"][j], "px": px})
+                    if x:
+                        cand.setdefault((d, "B"), []).append((rk, rec(sym, j, x[0], px, x[1], "B")))
+            kh = s_["piv_i"][i]
+            if kh is not None and i - kh >= 15 and okr(s_, i, sp) and tt(s_, i):
+                piv = h[kh]
+                depth = (piv - min(l[kh:i + 1])) / piv
+                if depth <= 0.35 and piv * 0.95 <= c[i] <= piv and o[j] <= piv * 1.03 and h[j] >= piv:
+                    x = trend_exit(s_, j)
+                    if x:
+                        cand.setdefault((d, "M"), []).append((rk, rec(sym, j, x[0], max(o[j], piv), x[1], "M")))
+            if ok10(s_, i, sp):
+                h20, h2y, uv = s_["hi20c"][i], ts_.hi2y(s_, i), s_["udvr"][i]
+                if h20 and h2y and uv and uv >= 1.3 and rk >= 90 and tt(s_, i):
+                    trig = max(h20, h2y)
+                    if trig * 0.97 <= c[i] < trig and h[j] >= trig:
+                        x = trend_exit(s_, j)
+                        if x:
+                            cand.setdefault((d, "V"), []).append((rk, rec(sym, j, x[0], max(o[j], trig), x[1], "V")))
+    out = []
+    for k, v in cand.items():
+        for rk, t in sorted(v, key=lambda z: -z[0])[:b_max]:
+            out.append({**t, "x": "resv"})
+    print("予約の約定: " + "、".join(f"{r_} {sum(1 for t in out if t['rule'] == r_)}" for r_ in "BMV"), file=sys.stderr)
+    return out
+
+
+def trend_exit(s_, j, max_hold=500):
+    """順張りの手じまい: 買った日の引けから、終値が50日線を割った翌日の寄り付き（gen_trades の below50 と同じ）。データの最終日は直した数え方なら最終日の終値"""
+    c, n = s_["c"], len(s_["c"])
+    if j >= n - 1:
+        return None
+    for k in range(j, n):
+        if k + 1 >= n:
+            return (k, c[k]) if bl.KEEP_OPEN else None
+        if (s_["ma50"][k] is not None and c[k] < s_["ma50"][k]) or k - j >= max_hold:
+            return k + 1, s_["o"][k + 1]
+    return None
+
+
+def add_extra87(syms, ctx, cache):
+    """--watch87 のとき、S&P500 の構成銘柄でない監視銘柄（と上場から260取引日に満たない銘柄）の株価も読む（2026-10-25 の点検で見つけた不備の修正。
+    以前は backtest_lib.load_universe が S&P500 の構成銘柄しか読まず、「87銘柄」の計算は実際は80銘柄だった）。
+    指標は backtest_combo2.setup と同じ手順で作る。RS は、その日の S&P500 の構成銘柄の中での百分位（毎朝の theme_scan.py と同じ。この銘柄は他の銘柄のRSに影響しない）。
+    構成期間は全期間とする（--watch87 の銘柄選びは構成銘柄かどうかを問わない）。業種は theme_scan.load_industries（毎朝のツールと同じ）"""
+    import bisect
+    import theme_scan as ts_
+    data, members, ind = ctx["data"], ctx["members"], ctx["ind"]
+    by_day = {}
+    for sym, s_ in data.items():
+        for i, d in enumerate(s_["date"]):
+            r = s_["rs_raw"][i]
+            if r is not None and bl.is_member(members[sym], d):
+                by_day.setdefault(d, []).append(r)
+    for v in by_day.values():
+        v.sort()
+    inds = ts_.load_industries()
+    added = []
+    for sym in syms:
+        d = bl.load_prices(cache, sym)
+        if not d or len(d["c"]) < 60:
+            print(f"監視銘柄 {sym}: 株価なし・短すぎるため入れない", file=sys.stderr)
+            continue
+        cb.c2.prep(d)
+        cb.bmo.prep(d, cb.f2.SPX)
+        cb.f2.prep(d)
+        for n in (5, 50):
+            d[f"ma{n}"] = d.get(f"ma{n}") or sma(d["c"], n)
+        d["sym"] = sym
+        for i, dd in enumerate(d["date"]):
+            r = d["rs_raw"][i]
+            if r is not None and dd in by_day and len(by_day[dd]) > 50:
+                d["rs"][i] = 99 * bisect.bisect_left(by_day[dd], r) / (len(by_day[dd]) - 1)
+        data[sym] = d
+        members[sym] = [("0000-01-01", "9999-12-31")]
+        ind[sym] = inds.get(sym)
+        added.append(f"{sym}（{len(d['c'])}日）")
+    print("S&P500 でない・新しい監視銘柄を加えた: " + "、".join(added), file=sys.stderr)
+
+
 def main():
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -359,7 +467,10 @@ def main():
     if a.watch87:   # 今のテーマ監視銘柄（87銘柄）だけにルールを当てる（2026-10-14 ユーザーの指示。後知恵あり）
         import re as re_
         md = open(os.path.join(os.path.dirname(OUTDIR.rstrip("/")), "テーマ監視銘柄.md"), encoding="utf-8").read()
-        W87 = {m.group(1) for m in re_.finditer(r"(?m)^\| ([A-Z][A-Z0-9.\-]*) \|", md) if m.group(1) != "ティッカー"} & set(data)
+        W87 = {m.group(1) for m in re_.finditer(r"(?m)^\| ([A-Z][A-Z0-9.\-]*) \|", md) if m.group(1) != "ティッカー"}
+        if os.environ.get("BT_NO_EXTRA87") != "1":   # 2026-10-25 の点検: S&P500 でない監視銘柄（ALAB・ARM・ASML・CRWV・NBIS・SHOP）と上場1年未満の Q が抜けていた
+            add_extra87(sorted(W87 - set(data)), ctx, a.cache)
+        W87 &= set(data)
         print(f"テーマ監視銘柄 {len(W87)} 銘柄（データあり）", file=sys.stderr)
         liq = lambda s_, i: s_["vol50"][i] is not None and s_["c"][i] >= 5 and s_["vol50"][i] >= 250_000
         rank10 = {}
@@ -464,6 +575,8 @@ def main():
         base += [{**t, "x": "out"} for t in outs_]
         print(f"テーマの外: 対象の日 {len(elig_)}日・1日平均 {sum(len(v) for v in elig_.values()) / max(1, len(elig_)):.1f}銘柄、売買 "
               + "、".join(f"{r_} {sum(1 for t in outs_ if t['rule'] == r_)}" for r_ in "BCMV"), file=sys.stderr)
+    if os.environ.get("OPT_RESV") == "1":   # 予約（パターンB）の約定（2026-10-25 ユーザーの指示。opt の形 resv のときだけ使う）
+        base += resv_trades(data, members, ctx, end, idx, b3_exit, rec)
     XTRA = {x for x in os.environ.get("OPT_EXTRA", "").split(",") if x}   # 見送った候補の確かめ直し（2026-10-17）で足す買いの合図。opt の形で rules に入れたときだけ使う
     if XTRA:
         import json as _json
@@ -2492,7 +2605,7 @@ def opt_stage(base, data, sim, days, ind, cache, part):
           "rs_aiind": lambda t: (0 if t["ai"] and (ind_rank(t["sym"], t["sd"]) or 1.0) <= 0.2 else 1, -t["rs"]),
           "rs_recent": lambda t: (0 if t["ai"] and t.get("ai_good") else 1, -t["rs"])}
     # 形: 名前 → 決まり（変えない項目は今のルール）
-    BASE = {"rules": ("B", "C", "M", "V"), "prio": "slope", "streak": None, "slots": 4, "cap": 2, "etf": "reg", "stop": STOP, "rel8": False, "swap": None, "xsell": None, "s2": False, "close_stop": False, "hotwait": False, "c10": False, "kx": None, "kb": None, "bsect": False, "indtop": None, "tstop": None, "pstop": None, "m30": False, "c15": False, "lim2": False, "hadd": None, "ichi": False, "outside": False, "abn": None, "gem": None}
+    BASE = {"rules": ("B", "C", "M", "V"), "prio": "slope", "streak": None, "slots": 4, "cap": 2, "etf": "reg", "stop": STOP, "rel8": False, "swap": None, "xsell": None, "s2": False, "close_stop": False, "hotwait": False, "c10": False, "kx": None, "kb": None, "bsect": False, "indtop": None, "tstop": None, "pstop": None, "m30": False, "c15": False, "lim2": False, "hadd": None, "ichi": False, "outside": False, "abn": None, "gem": None, "resv": None}
     V1 = {"今のルール（傾きの小さい順）": {},
           "買う順番: RSの高い順": {"prio": "rs"},
           "買う順番: RSの高い順（AI半導体を先にしない）": {"prio": "rs_noai"},
@@ -2590,6 +2703,9 @@ def opt_stage(base, data, sim, days, ind, cache, part):
     V1["買う順番: RSを10刻みで高い順、同じ刻みの中は60日の高値からの下落率が大きい順"] = {"prio": "rsb10_dh60"}
     V1["買う順番: RSを10刻みで高い順、同じ刻みの中は52週の高値からの下落率が大きい順"] = {"prio": "rsb10_dh252"}
     V1["買う順番: RSを20刻みで高い順、同じ刻みの中は60日の高値からの下落率が大きい順"] = {"prio": "rsb20_dh60"}
+    V1["予約（B）も買う（押し目・ミネルヴィニ・新高値V2。OPT_RESV=1）"] = {"resv": ("B", "M", "V")}
+    V1["予約（B）は押し目だけ買う（OPT_RESV=1）"] = {"resv": ("B",)}
+    V1["予約（B）は順張り（ミネルヴィニ・新高値V2）だけ買う（OPT_RESV=1）"] = {"resv": ("M", "V")}
     V1["買う順番: 20日の高値からの下落率が大きい順"] = {"prio": "dh20"}
     V1["買う順番: 60日の高値からの下落率が大きい順"] = {"prio": "dh60"}
     V1["買う順番: 52週の高値からの下落率が大きい順"] = {"prio": "dh252"}
@@ -2612,7 +2728,8 @@ def opt_stage(base, data, sim, days, ind, cache, part):
         sp = {**BASE, **spec}
         trs = [t for t in stock_trades(sp["stop"], sp["rel8"], sp["xsell"], sp["close_stop"], sp["hotwait"], sp["c10"], sp["kx"], sp["tstop"], sp["pstop"], sp["m30"],
                                        sp["lim2"], sp["hadd"], sp["gem"])
-               if t["rule"] in sp["rules"] and (not t["x"] or (t["x"] == "c15" and sp["c15"]) or (t["x"] == "out" and sp["outside"]))]
+               if t["rule"] in sp["rules"] and (not t["x"] or (t["x"] == "c15" and sp["c15"]) or (t["x"] == "out" and sp["outside"])
+                                                 or (t["x"] == "resv" and sp["resv"] and t["rule"] in sp["resv"]))]
         if sp["ichi"]:   # 順張りは、合図の日に一目の転換線＞基準線のときだけ買う（--stage filter）
             trs = [t for t in trs if t["ichi"]]
         if sp["kb"]:   # 信用の悪化の日（合図の日の引けで判定）は新しい買いを止める
@@ -2658,6 +2775,8 @@ def opt_stage(base, data, sim, days, ind, cache, part):
             gd_ = {}
             trs = [{**t, "ai_good": gd_.setdefault(t["sd"], good_(t["sd"]))} for t in trs]
         trs = [{**t, "prio": PR[sp["prio"]](t)} for t in trs]
+        if sp["resv"]:   # 予約（B）の約定は、同じ日の成行（A、寄り付き）の後（毎朝の theme_scan.py の買う順番と同じ）
+            trs = [{**t, "prio": (1 if t["x"] == "resv" else 0,) + (t["prio"] if isinstance(t["prio"], tuple) else (t["prio"],))} for t in trs]
         if sp["outside"]:   # テーマの外の候補は、同じ日の監視銘柄の候補の後（毎朝の theme_scan.py と同じ）
             trs = [{**t, "prio": (1 if t["x"] == "out" else 0,) + (t["prio"] if isinstance(t["prio"], tuple) else (t["prio"],))} for t in trs]
         return lev(trs, sp["etf"]), sp
@@ -3034,7 +3153,7 @@ def parity_stage(base, data, days, recdir, fns, members):
         d = r["trade_date"]
         if d not in di:
             continue
-        live = {(c["sym"], KIND(c["kind"])) for c in r["candidates"] if c.get("pattern") == "A"}
+        live = {(c["sym"], KIND(c["kind"])) for c in r["candidates"] + r.get("omitted", []) if c.get("pattern") == "A"}   # omitted: 枠外で表に出さなかった候補（2026-10-25〜）
         held = {h["sym"] for h in r.get("holdings", [])}
         b_ = set()   # バックテストの合図の関数と銘柄選びの条件を、その日の引けで直接当てた結果（売買の数え方の影響を受けない）
         for sym, s_ in data.items():
