@@ -49,7 +49,9 @@ def buy_usd():
 NDX_URL = "https://api.nasdaq.com/api/quote/list-type/nasdaq100"
 OUT_MAX = 5   # 監視外の注目銘柄（ニュースを調べる）はRSの高い順にこの件数まで
 V2_TOP = 10   # 新高値V2を当てる銘柄: 監視銘柄のうちその日のRSが上位この数まで
-B_MAX = 5   # パターンB（予約注文の候補）は各ルールでこの件数まで
+B_MAX = 2   # パターンB（予約注文の候補）は各ルールでこの件数まで（2026-10-25 ユーザー決定で5→2。買えるのは空き枠の数までのため）
+CAND_SPARE = 2   # 候補の表は「空き枠の数＋この件数（予備）」まで。残りは著者・ニュース調査に回さない（2026-10-25 ユーザー決定。
+                 # 予備は、著者が【様子見】を出したときや予約が約定しなかったときのため）
 CRASH_MAX = 4   # 同時保有の上限（2026-09-29 に7→4）。急落の底の候補（市場全体の急落の日は20件を超えることがある）はRSの高い順にこの件数まで
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
 
@@ -553,6 +555,7 @@ def main():
 
     # ---- 保有銘柄 ----
     hold = load_holdings()
+    exit_n = 0   # 今日ルールの売りが成立した保有（翌日の寄り付きで売る・損切りに届いた）の数。その分の枠は空く（theme_summary の空き枠と同じ数え方）
     w("## 5. 保有銘柄の手じまい条件（`新分析ツール/保有銘柄.md`）\n")
     if not hold:
         w("保有銘柄なし（または一覧が空）\n")
@@ -607,6 +610,8 @@ def main():
             stop = h["price"] * (1 - STOP)
             if c <= stop:
                 ex = "**損切り価格を下回った** " + ex
+            if ex.startswith(("成立", "**成立", "**損切り価格を下回った")):
+                exit_n += 1
             w(f"| {h['sym']} | {h['rule']} | {h['date']} | {h['price']:.2f} | {c:.2f} | {pct(c / h['price'] - 1)} | {stop:.2f} | {ex} | {bear_candles(d, h['date'])} | {earnings_date(h['sym'])} |")
         w("")
         w("- 出来高2倍の大陰線: 実体（始値−終値）が前日までのATR(14)の1.5倍以上、終値がその日の値幅の下25%以内、出来高が前日までの50日平均の2倍以上の日。"
@@ -649,6 +654,7 @@ def main():
     w("## 6. 候補（採用したルールの条件が成立＝A、成立が目前＝B）\n")
     w(f"建玉の目安: 同時保有{SLOTS}銘柄まで、1銘柄に資金の{100 / SLOTS:.0f}%（資金÷{SLOTS}）、損切りは買値の{STOP * 100:.0f}%下（ユーザー決定 2026-09-29）。\n")
     cands = []
+    spare_out = []   # 枠外で表に出さない候補（下の「候補は空き枠の数＋予備まで」）
     refs = []     # 参考の表示だけの合図（ワインスタイン10週）
     # 新高値V2は、監視銘柄のうちその日のRSが上位10銘柄だけに当てる（後知恵なしの検証で、絞らないと効かなかった。2026-09-27 ユーザー決定）
     rs_sorted = sorted(((d["rs"][-1] or 0), s) for s, d in data.items())[::-1]
@@ -815,6 +821,11 @@ def main():
             if g and x["sym"] not in cnt.setdefault(g, []):
                 cnt[g].append(x["sym"])
         cands = kept
+        # 候補は「空き枠の数＋予備 CAND_SPARE 件」まで（2026-10-25 ユーザー決定。買えるのは同時保有の上限までのため。
+        # 残りは表に出さず、著者・ニュース調査にも回さない。並びは買う順番（監視銘柄→テーマの外、A→B、RSの高い順）のまま）
+        free_buy = max(0, SLOTS - len(load_holdings()) + exit_n)
+        lim_ = free_buy + CAND_SPARE
+        spare_out, cands = cands[lim_:], cands[:lim_]
         with ThreadPoolExecutor(4) as ex:
             eds = dict(zip([x["sym"] for x in cands], ex.map(earnings_date, [x["sym"] for x in cands])))
         for k_, v in eds.items():
@@ -851,6 +862,9 @@ def main():
               + "、".join(f"{x['sym']}（{x['pat']}・{x['kind'].split('（')[0]}。{g}: {'・'.join(c)}）" for x, g, c in capped))
         if dropped:
             w(f"\n- パターンBは各ルールでRSの高い順に{B_MAX}件まで、急落の底・新高値のAは{CRASH_MAX}件（同時保有の上限）までとし、{dropped}件を省いた。")
+        w(f"\n- 候補の数: 空き枠{free_buy}（同時保有{SLOTS}銘柄まで。保有{len(load_holdings())}、うち今日ルールの売りが成立{exit_n}）＋予備{CAND_SPARE}件まで表に出した（2026-10-25 ユーザー決定）。"
+          + (f"ほかの{len(spare_out)}件は枠に入らないので、著者の判定とニュース調査に回さない: "
+             + "、".join(f"{x['sym']}（{x['pat']}・{x['kind'].split('（')[0].split(': ')[-1]}、RS {x['rs'] or 0:.0f}）" for x in spare_out) if spare_out else "省いた候補はない。"))
         w(f"\n- テーマの外の候補（グループが「テーマの外」）: 監視銘柄の候補で枠が埋まらないときに使う（監視銘柄の候補を先に買う）。"
           f"S&P500の今の構成銘柄のうち監視銘柄でない銘柄から、RS≧90・30週線が上向きで終値がその上・業種の3カ月の強さが上位20%の{len(outside)}銘柄を調べ、"
           f"空き枠{free}つ分まで出した" + (f"（ほかに{out_dropped}件を省いた）" if out_dropped else "") +
@@ -874,6 +888,8 @@ def main():
     today_pat = {}
     for x in cands:
         today_pat.setdefault(x["sym"], []).append(f"{x['pat']}（{x['kind']}）")
+    for x in spare_out:
+        today_pat.setdefault(x["sym"], []).append(f"{x['pat']}（{x['kind']}。枠外のため表には出していない）")
     text = re.sub(r"\{\{今日:([A-Z.]+)\}\}", lambda m: ("今日の条件で改めて判定: 節6の候補 " + "・".join(today_pat[m.group(1)]))
                   if m.group(1) in today_pat else "今日の条件では候補なし（新しいエントリーの条件がそろうまで待つ）", text)
     os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
@@ -883,6 +899,7 @@ def main():
     meta = {x["sym"]: {"hot": x.get("hot"), "rsi14": x.get("rsi14"), "s50": x.get("s50"), "rs": x.get("rs"),
                        "s2_skip": bool(s2.get("on")) and x["kind"].startswith(("順張り", "予約: ミネルヴィニ", "予約: 新高値"))} for x in cands}
     meta["_s2"] = s2
+    meta["_omitted"] = [{"sym": x["sym"], "kind": x["kind"], "pattern": x["pat"], "close": x["close"], "rs": x["rs"]} for x in spare_out]   # 枠外で表に出さなかった候補（record.json に残す）
     json.dump(meta,
               open(os.path.join(os.path.dirname(os.path.abspath(a.out)), "cands_meta.json"), "w", encoding="utf-8"), ensure_ascii=False)
     print(text)
