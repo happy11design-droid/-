@@ -347,7 +347,7 @@ def main():
     r.add_argument("--etf", default=None, help="etf2x: 2倍ETFにする銘柄（カンマ区切り）。省略すると backtest_2x.HAS_2X")
     r.add_argument("--drag", default=None, help="etf2x: 2倍ETFの目減り（年率）。数値なら全部同じ、'measured' なら 新分析ツール/2倍ETFの対応表.json の実測（ないものは0.12）")
     r.add_argument("--tag", default="", help="etf2x: 結果のファイル名と見出しに付ける名前（例: ムームー証券）")
-    r.add_argument("--stage", default="all", choices=("sell", "combo", "half", "filter", "rule", "stats", "dd", "robust", "earn", "realized", "etf2x", "etfrule", "weinstein", "rsi", "pivot", "exits", "pullback", "recover", "prio", "slope", "slope2", "slope3", "swap", "premium", "hot", "hotyear", "ideas", "theme", "halfadd", "replay", "stopcheck", "actual", "stopfreq", "themedrop", "crashstops", "ddsize", "shock", "parity", "audit", "opt1", "opt2", "all"))
+    r.add_argument("--stage", default="all", choices=("sell", "combo", "half", "filter", "rule", "stats", "dd", "robust", "earn", "realized", "etf2x", "etfrule", "weinstein", "rsi", "pivot", "exits", "pullback", "recover", "prio", "slope", "slope2", "slope3", "swap", "premium", "hot", "hotyear", "ideas", "theme", "halfadd", "replay", "stopcheck", "actual", "stopfreq", "themedrop", "crashstops", "ddsize", "shock", "parity", "audit", "opt1", "opt2", "sigcount", "all"))
     r.add_argument("--keep-open", action="store_true", help="データの最終日までに売りが来ていない売買も最終日の終値で数える（2026-10-16 の点検。以前は数えなかった）")
     r.add_argument("--overlap", action="store_true", help="同じ銘柄の売買を持っている間の合図も数える（2026-10-16 の点検。以前は数えなかった）")
     r.add_argument("--recdir", default=None, help="parity: 毎朝の record.json を置いたディレクトリ")
@@ -865,6 +865,8 @@ def main():
         return opt_stage(base, data, sim, days, ind, a.cache, int(a.stage[-1]))
     if a.stage == "audit":
         return audit_stage(base, data, sim, days, ind, a.cache, "fixed" if (a.keep_open and a.overlap) else "old")
+    if a.stage == "sigcount":
+        return sigcount_stage(base, data, days, a.watch87)
     if a.stage == "parity":
         fns = {"V": (ctx["v2o"], ctx["ok10"]), "C": (ctx["CR"](10), ctx["ok_rot"]), "M": (bm2.E_base(2.0), ctx["ok_rot"]), "B": (bs.O_method3, ctx["ok_rot"])}
         return parity_stage(base, data, days, a.recdir, fns, members)
@@ -2890,6 +2892,48 @@ def audit_stage(base, data, sim, days, ind, cache, flags):
     w("\n- この結果はルールの条件どおりに機械的に計算したもので、Claudeによる個別銘柄の売買判断ではない。")
     open(OUTDIR + "点検_採用した決まりの確かめ直し" + os.environ.get("OUT_SUFFIX", "") + ".md", "w", encoding="utf-8").write("\n".join(L) + "\n")
     print("書き出し", file=sys.stderr)
+
+
+def sigcount_stage(base, data, days, watch87):
+    """1日に出る買いの合図（パターンA）の数の分布（2026-10-25 ユーザーの質問「こんなに候補が上がる予定でしたか」）。
+    合図の日＝買う日の前の取引日。同じ銘柄・同じルールは1つと数える（毎朝のスキャンの件数の上限・同じ業種の上限・保有中の除外の前）"""
+    di = {d: k for k, d in enumerate(days)}
+    per = {}
+    for b in base:
+        if b.get("x"):
+            continue
+        k = di.get(data[b["sym"]]["date"][b["i0"]])
+        if k:
+            per.setdefault(days[k - 1], set()).add((b["sym"], b["rule"]))
+    sd = [d for d in days[:-1] if d >= "2015-01-02"]
+    def row(lab, ds):
+        n = [len(per.get(d, ())) for d in ds]
+        if not n:
+            return ""
+        z, s14, s5, s10 = (sum(1 for x in n if f(x)) / len(n) for f in (lambda x: x == 0, lambda x: 1 <= x <= 4, lambda x: x >= 5, lambda x: x >= 10))
+        srt = sorted(n)
+        return f"| {lab} | {len(n)} | {z:.0%} | {s14:.0%} | {s5:.0%} | {s10:.0%} | {sum(n) / len(n):.1f} | {srt[len(n) // 2]} | {max(n)} |"
+    nm = "今の87銘柄（後知恵あり）" if watch87 else "後知恵なしの監視銘柄"
+    L = [f"---\ntype: backtest\ntitle: 1日の買いの合図の数（{nm}）\ncreated: {dt.date.today()}\nscript: tools/backtest_retest.py --stage sigcount{' --watch87' if watch87 else ''}\n---\n",
+         f"# 1日に出る買いの合図（パターンA）の数（{nm}）\n",
+         "4つのルール（押し目・急落の底・ミネルヴィニ・新高値V2）の合図の日ごとの数。同じ銘柄・同じルールは1つ。毎朝のスキャンの件数の上限・同じ業種2銘柄まで・保有中の除外をする前の数。予約（パターンB）は入っていない。\n",
+         "| 期間 | 取引日 | 合図0件の日 | 1〜4件 | 5件以上 | 10件以上 | 1日平均 | 中央値 | 最大 |", "|---|---|---|---|---|---|---|---|---|",
+         row("2015年〜全部", sd)]
+    for y in sorted({d[:4] for d in sd}):
+        L.append(row(y, [d for d in sd if d[:4] == y]))
+    for lab, lo, hi in (("2026年9月", "2026-09-01", "2026-09-30"), ("2026年10月", "2026-10-01", "2026-10-31")):
+        L.append(row(lab, [d for d in sd if lo <= d <= hi]))
+    L.append("\n## 2026-09-21 以降の日ごと\n")
+    L.append("| 合図の日 | 数 | 合図 |")
+    L.append("|---|---|---|")
+    RN = {"B": "押し目", "C": "急落の底", "M": "ミネルヴィニ", "V": "新高値V2"}
+    for d in [d for d in days if d >= "2026-09-21"]:
+        x = sorted(per.get(d, ()))
+        L.append(f"| {d} | {len(x)} | {'、'.join(f'{s}（{RN.get(r, r)}）' for s, r in x)} |")
+    L.append("\n- この結果はルールの条件どおりに機械的に計算したもので、Claudeによる個別銘柄の売買判断ではない。")
+    out = OUTDIR + f"1日の買いの合図の数{'_87銘柄' if watch87 else ''}.md"
+    open(out, "w", encoding="utf-8").write("\n".join(x for x in L if x is not None) + "\n")
+    print(out)
 
 
 def parity_stage(base, data, days, recdir, fns, members):
