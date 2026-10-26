@@ -749,6 +749,24 @@ def main():
                     return sc is None or cu is None or sc < cu
                 return False
             base += from_gen(G(E_cl, X_cl, ctx["ok_rot"], STOP), "K")
+        if "D" in XTRA:   # ちょる子氏の「材料のない急落を買う」（2026-10-26）: 売買代金の大きい監視銘柄が前日比−3%以上、S&P500は−1%より小さい下げ、
+            # 決算の日・その前の日でない（材料なしの代わり）→ 翌日の寄り付きで買い、終値が20日線（ボリンジャーの中央線）以上になった翌日の寄り付きで売る、20取引日まで
+            import earnings_history as _eh
+            ed_ = {k: {x[0] for x in v} for k, v in _eh.load_earnings(a.cache).items()}
+            gs_ = _lp(a.cache, "^GSPC")
+            spr_ = {gs_["date"][k]: gs_["c"][k] / gs_["c"][k - 1] - 1 for k in range(1, len(gs_["c"]))}
+            def E_drop(i, s):
+                c = s["c"]
+                if i < 60 or s["vol50"][i] is None or c[i] / c[i - 1] - 1 > -0.03 or spr_.get(s["date"][i], 0.0) <= -0.01:
+                    return None
+                if s["vol50"][i] * c[i] < 3e8:   # 1日の売買代金（50日平均の出来高×終値）3億ドル以上＝大型株の代わり
+                    return None
+                es = ed_.get(s["sym"], ())
+                if s["date"][i] in es or s["date"][i - 1] in es:
+                    return None
+                return -(s["rs"][i] or 0)
+            X_mid = lambda j, s, k, px: s["bb_mid"][j] is not None and s["c"][j] >= s["bb_mid"][j]
+            base += from_gen(G(E_drop, X_mid, ctx["ok_rot"], STOP, 20), "D")
         if "P" in XTRA:   # ペトラリア氏の買い方（2026-10-25）。手じまいは順張りと同じ（50日線割れ・損切り15%・かぶせ線・半分売り）
             base += from_gen(G(E_pet, ctx["below50"], ctx["ok_rot"], STOP), "P")
         if "Q" in XTRA:   # ペトラリア氏の下降トレンドラインの上抜け（2026-10-25）
@@ -2313,6 +2331,14 @@ def opt_stage(base, data, sim, days, ind, cache, part):
     for k_, v_ in MAC.items():
         KD[k_] = v_
         KN[k_] = MACN[k_]
+    KD["NOT_ETFUP"] = {d for d in days if d not in up}   # S&P500（SPY）が100日線で「上昇」でない日（案1で2倍ETFを使わない日）
+    KN["NOT_ETFUP"] = "S&P500（SPY）が20週線（100日線）で上昇の局面でない日"
+    _gvx = bl.load_prices(cache, "^VIX")
+    VIXC, _lv = {}, None
+    _vm = dict(zip(_gvx["date"], _gvx["c"]))
+    for d in days:
+        _lv = _vm.get(d, _lv)
+        VIXC[d] = _lv
     def k_until(k):
         """判定の日から、HYG/IEI の終値が10日線を上回る日（判定の日でない）まで（その日を含まない）の日の集合"""
         out, on = set(), False
@@ -2586,8 +2612,28 @@ def opt_stage(base, data, sim, days, ind, cache, part):
         path[s["date"][i1]] = cash + sh * xp * (1 - COST)
         return {**b, "i1": i1, "xp": xp}, path
 
-    def stock_trades(stop, rel8=False, xsell=None, close_stop=False, hotwait=False, c10=False, kx=None, tstop=None, pstop=None, m30=False, lim2=False, hadd=None, gem=None, stg=None, rr=None):
-        key_ = (stop, rel8, xsell, close_stop, hotwait, c10, kx, tstop, pstop, m30, lim2, hadd, gem, stg, rr)
+    def mid_exit(b, s):
+        """押し目の利益確定をボリンジャーの中央線（20日線）にする（2026-10-26、ちょる子氏の「利確の第1目標は25日線（中央線）」）。
+        買った日の夜から、前の日の中央線に売りの指値。届かずに終値が中央線以上なら翌日の寄り付き。損切り15%（日中）・最長は今の押し目と同じ"""
+        o, h, l, c, n = s["o"], s["h"], s["l"], s["c"], len(s["c"])
+        i0, px = b["i0"], b["px"]
+        floor, pend = px * (1 - STOP), False
+        for j in range(i0, n):
+            if pend:
+                return j, o[j]
+            if l[j] <= floor:
+                return j, min(o[j] if j > i0 else px, floor)
+            if j > i0 and s["bb_mid"][j - 1] is not None and h[j] >= s["bb_mid"][j - 1]:
+                return j, max(o[j], s["bb_mid"][j - 1])
+            if j + 1 >= n:
+                return (j, c[j]) if bl.KEEP_OPEN else None
+            if j - i0 >= bs.MAX_HOLD or (s["bb_mid"][j] is not None and c[j] >= s["bb_mid"][j]):
+                pend = True
+        return None
+
+    def stock_trades(stop, rel8=False, xsell=None, close_stop=False, hotwait=False, c10=False, kx=None, tstop=None, pstop=None, m30=False, lim2=False, hadd=None, gem=None, stg=None, rr=None,
+                     bmid=False, c20=False):
+        key_ = (stop, rel8, xsell, close_stop, hotwait, c10, kx, tstop, pstop, m30, lim2, hadd, gem, stg, rr, bmid, c20)
         if key_ in cache_tr:
             return cache_tr[key_]
         out = []
@@ -2595,7 +2641,21 @@ def opt_stage(base, data, sim, days, ind, cache, part):
         for b in base:
             s = data[b["sym"]]
             g_ = None
-            if rr and b["rule"] in rr[1]:   # リスクリワードで売る（rr_trade）
+            if bmid and b["rule"] == "B":   # 押し目の利益確定を中央線に（mid_exit）
+                x_ = mid_exit(b, s)
+                if not x_:
+                    continue
+                b = {**b, "i1": x_[0], "xp": x_[1]}
+            if c20 and b["rule"] == "C":   # 急落の底の手じまいを、終値が20日線を上回った翌日の寄り付きにする（今は5日線）。損切りは下の共通の処理
+                for j in range(b["i0"], len(s["c"]) - 1):
+                    if (j >= 19 and s["c"][j] > sum(s["c"][j - 19:j + 1]) / 20) or j - b["i0"] >= 60:   # 今の急落の底と同じく最長60取引日
+                        b = {**b, "i1": j + 1, "xp": s["o"][j + 1]}
+                        break
+                else:
+                    if bl.KEEP_OPEN:
+                        b = {**b, "i1": len(s["c"]) - 1, "xp": s["c"][-1]}
+            sdx_ = days[di[s["date"][b["i0"]]] - 1] if di.get(s["date"][b["i0"]]) else s["date"][b["i0"]]
+            if rr and b["rule"] in rr[1] and (len(rr) < 3 or sdx_ in KD[rr[2]]):   # リスクリワードで売る（rr_trade）。rr[2] があれば、その局面の日の合図だけ
                 g_ = rr_trade(b, s, rr[0])
                 if not g_:
                     continue
@@ -2844,7 +2904,7 @@ def opt_stage(base, data, sim, days, ind, cache, part):
           "trend_rs": lambda t: (0 if t["ai"] else 1, 0 if t["rule"] in ("M", "V") else 1, -t["rs"]),
           "rev_rs": lambda t: (0 if t["ai"] else 1, 0 if t["rule"] in ("B", "C") else 1, -t["rs"]),
           "slope_big": lambda t: (0 if t["ai"] else 1, -t["s50"]),
-          "rs_low": lambda t: (1 if t["rule"] in ("E", "G", "U", "K") else 0, 0 if t["ai"] else 1, -t["rs"]),   # 足した合図は空き枠だけ（同じ日の4つのルールの後）
+          "rs_low": lambda t: (1 if t["rule"] in ("E", "G", "U", "K", "D") else 0, 0 if t["ai"] else 1, -t["rs"]),   # 足した合図は空き枠だけ（同じ日の4つのルールの後）
           "v2cbm": lambda t: (0 if t["ai"] else 1, {"V": 0, "C": 1, "B": 2, "M": 3}.get(t["rule"], 4), -t["rs"]),
           "v2cbm_noai": lambda t: ({"V": 0, "C": 1, "B": 2, "M": 3}.get(t["rule"], 4), -t["rs"]),
           "reg": lambda t: (0 if t["ai"] else 1, -t["reg"]),
@@ -2872,7 +2932,7 @@ def opt_stage(base, data, sim, days, ind, cache, part):
           "rs_aiind": lambda t: (0 if t["ai"] and (ind_rank(t["sym"], t["sd"]) or 1.0) <= 0.2 else 1, -t["rs"]),
           "rs_recent": lambda t: (0 if t["ai"] and t.get("ai_good") else 1, -t["rs"])}
     # 形: 名前 → 決まり（変えない項目は今のルール）
-    BASE = {"rules": ("B", "C", "M", "V"), "prio": "slope", "streak": None, "slots": 4, "cap": 2, "etf": "reg", "stop": STOP, "rel8": False, "swap": None, "xsell": None, "s2": False, "close_stop": False, "hotwait": False, "c10": False, "kx": None, "kb": None, "bsect": False, "indtop": None, "tstop": None, "pstop": None, "m30": False, "c15": False, "lim2": False, "hadd": None, "ichi": False, "outside": False, "abn": None, "gem": None, "resv": None, "stg": None, "rr": None}
+    BASE = {"rules": ("B", "C", "M", "V"), "prio": "slope", "streak": None, "slots": 4, "cap": 2, "etf": "reg", "stop": STOP, "rel8": False, "swap": None, "xsell": None, "s2": False, "close_stop": False, "hotwait": False, "c10": False, "kx": None, "kb": None, "bsect": False, "indtop": None, "tstop": None, "pstop": None, "m30": False, "c15": False, "lim2": False, "hadd": None, "ichi": False, "outside": False, "abn": None, "gem": None, "resv": None, "stg": None, "rr": None, "bmid": False, "c20": False, "vixrev": None}
     V1 = {"今のルール（傾きの小さい順）": {},
           "買う順番: RSの高い順": {"prio": "rs"},
           "買う順番: RSの高い順（AI半導体を先にしない）": {"prio": "rs_noai"},
@@ -2989,6 +3049,20 @@ def opt_stage(base, data, sim, days, ind, cache, part):
     V1["物価の伸びが再加速し雇用が弱いの日は2倍ETFを使わない（元の株で買う）"] = {"etf": "reg_not_M_stag"}
     V1["物価の伸びが再加速し雇用が弱いの日はAI半導体を先に買わない"] = {"prio": "rs_not_M_stag"}
     V1["物価の伸びが再加速し雇用が弱いの日は新しい買いを止める"] = {"kb": ("M_stag", "all")}
+    V1["押し目の利益確定を中央線（20日線）の指値にする（ちょる子氏）"] = {"bmid": True}
+    V1["急落の底は終値が20日線を上回ったら売る（ちょる子氏の中央線）"] = {"c20": True}
+    V1["逆張り（押し目・急落の底）はVIXが20以上の日だけ買う"] = {"vixrev": (20, ("B", "C"))}
+    V1["逆張り（押し目・急落の底）はVIXが25以上の日だけ買う"] = {"vixrev": (25, ("B", "C"))}
+    V1["逆張り（押し目・急落の底）はVIXが30以上の日だけ買う"] = {"vixrev": (30, ("B", "C"))}
+    V1["急落の底だけVIXが25以上の日だけ買う"] = {"vixrev": (25, ("C",))}
+    V1["急落の底だけVIXが30以上の日だけ買う"] = {"vixrev": (30, ("C",))}
+    V1["全部のルールをVIXが25以上の日だけ買う（0か100か）"] = {"vixrev": (25, ("B", "C", "M", "V"))}
+    V1["材料のない−3%の急落を買い中央線で売るルールを足す（OPT_EXTRA=D）"] = {"rules": ("B", "C", "M", "V", "D")}
+    V1["材料のない−3%の急落を空き枠で買う（OPT_EXTRA=D）"] = {"rules": ("B", "C", "M", "V", "D"), "prio": "rs_low"}
+    V1["S&P500が150日線で横ばいの日の順張りだけペトラリア式（損切り4%・+6%で半分・残りは20日線割れ）"] = {"rr": ((0.04, 0.06, 0.5, ('ma20',)), ("M", "V"), "S_reg5_side")}
+    V1["S&P500が150日線で横ばいの日の順張りだけペトラリア式（損切り8%・+12%で半分・残りは20日線割れ）"] = {"rr": ((0.08, 0.12, 0.5, ('ma20',)), ("M", "V"), "S_reg5_side")}
+    V1["S&P500が100日線で上昇でない日の順張りだけペトラリア式（損切り4%・+6%で半分・残りは20日線割れ）"] = {"rr": ((0.04, 0.06, 0.5, ('ma20',)), ("M", "V"), "NOT_ETFUP")}
+    V1["S&P500が100日線で上昇でない日の順張りだけペトラリア式（損切り8%・+12%で半分・残りは20日線割れ）"] = {"rr": ((0.08, 0.12, 0.5, ('ma20',)), ("M", "V"), "NOT_ETFUP")}
     V1["ペトラリア氏の買い方を5つ目のルールに足す（OPT_EXTRA=P）"] = {"rules": ("B", "C", "M", "V", "P")}
     V1["ペトラリア氏の下降トレンドラインの上抜けを5つ目のルールに足す（OPT_EXTRA=Q）"] = {"rules": ("B", "C", "M", "V", "Q")}
     V1["順張りを損切り7%・+20%で全部売る（ミネルヴィニの本）"] = {"rr": ((0.07, 0.2, 1.0, None), ("M", "V", "P", "Q"))}
@@ -3023,9 +3097,12 @@ def opt_stage(base, data, sim, days, ind, cache, part):
     def make(spec):
         sp = {**BASE, **spec}
         trs = [t for t in stock_trades(sp["stop"], sp["rel8"], sp["xsell"], sp["close_stop"], sp["hotwait"], sp["c10"], sp["kx"], sp["tstop"], sp["pstop"], sp["m30"],
-                                       sp["lim2"], sp["hadd"], sp["gem"], sp["stg"], sp["rr"])
+                                       sp["lim2"], sp["hadd"], sp["gem"], sp["stg"], sp["rr"], sp["bmid"], sp["c20"])
                if t["rule"] in sp["rules"] and (not t["x"] or (t["x"] == "c15" and sp["c15"]) or (t["x"] == "out" and sp["outside"])
                                                  or (t["x"] == "resv" and sp["resv"] and t["rule"] in sp["resv"]))]
+        if sp["vixrev"]:   # 逆張りは市場の恐怖が大きい日だけ買う（2026-10-26、ちょる子氏の Fear & Greed 20未満の代わりにVIX）: 合図の日のVIXの終値が thr 以上の日だけ
+            thr_, rr_ = sp["vixrev"]
+            trs = [t for t in trs if t["rule"] not in rr_ or (VIXC.get(t["sd"]) or 0) >= thr_]
         if sp["ichi"]:   # 順張りは、合図の日に一目の転換線＞基準線のときだけ買う（--stage filter）
             trs = [t for t in trs if t["ichi"]]
         if sp["kb"]:   # 信用の悪化の日（合図の日の引けで判定）は新しい買いを止める
