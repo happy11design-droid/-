@@ -368,3 +368,19 @@
 - 10/26 24/7 Wall St. | 3 Catalysts That Could Ignite AXTI Stock on Oct. 29 (And 1 Huge Risk)
 - 10/26 24/7 Wall St. | Lumentum Jumps 8% as StoneX Starts Coverage With $1,200 Target; Applied Optoelectronics and Coherent Climb 6%
 - 10/26 GuruFocus.com | Lumentum and Coherent Stocks Jump 3% as StoneX Unveils Bold Price Targets
+
+
+# 補完: 保有の著者の判定（2026-10-28 夜にユーザーの指示で追加）
+
+10/27朝のRoutineでは保有の判定が【未判定】だったため、10/26の引けまでのデータだけで、保有銘柄をボリンジャーに送り直した回答。ニュース調査なし。SNDKはルール外の保有のため著者には送っていない。
+
+## AMD
+1. **投資判断**: 【保有継続】（早期手じまいの理由なし）
+2. **止める理由の確認**:
+   - 本が禁じる形・状況｜なし｜危険な反転形等なし（第14・20章）
+   - 避けるべき時期（決算など）｜なし｜決算前の手じまい規定なし（マニュアルに規定なし）
+   - 悪材料｜判定不能｜ニュース調査なし
+3. **現状パターンと価格**:
+   - 保有中: `売りの予約注文: 指値 672.83（現在値比 +26.6%）`
+4. **注意点**: 11/3決算前だが本のルールに従い上部バンド等の手じまい条件を継続監視。
+
