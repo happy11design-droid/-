@@ -1,0 +1,101 @@
+{
+ "trade_date": "2026-10-28",
+ "run_date": "2026-10-29",
+ "theme_stage": "【ステージ2】（テーマ指数の30週線上昇・線より上。第2章）[1, 2]",
+ "candidates": [
+  {
+   "sym": "FFIV",
+   "kind": "逆張り: 急落の底（担当: コナーズ）",
+   "pattern": "A",
+   "close": 365.53,
+   "limit": null,
+   "stop_buy": null,
+   "limit_buy": null,
+   "verdict": "買い",
+   "author": "コナーズ",
+   "hot": false,
+   "rsi14": 26.975031393603018,
+   "s50": 0.0502779823719397,
+   "rs": 63.9334637964775,
+   "s2_skip": false
+  },
+  {
+   "sym": "HUBB",
+   "kind": "逆張り: ボリンジャー メソッドIII",
+   "pattern": "A",
+   "close": 437.33,
+   "limit": null,
+   "stop_buy": null,
+   "limit_buy": null,
+   "verdict": "買い",
+   "author": "ボリンジャー",
+   "hot": false,
+   "rsi14": 37.33196016010415,
+   "s50": -0.024259573224696296,
+   "rs": 17.63013698630137,
+   "s2_skip": false
+  },
+  {
+   "sym": "VLO",
+   "kind": "逆張り: ボリンジャー メソッドIII",
+   "pattern": "A",
+   "close": 388.48,
+   "limit": null,
+   "stop_buy": null,
+   "limit_buy": null,
+   "verdict": "買い",
+   "author": "ボリンジャー",
+   "hot": false,
+   "rsi14": 39.34066555689145,
+   "s50": 0.1274558442125313,
+   "rs": 96.48140900195695,
+   "s2_skip": false
+  }
+ ],
+ "holdings": [
+  {
+   "sym": "SNDK",
+   "rule": "ルール外（ユーザーの判断。この日はどのルールの合図もなし）",
+   "buy_date": "2026-10-21",
+   "buy_price": 1371.3,
+   "verdict": "未判定",
+   "author": ""
+  },
+  {
+   "sym": "AMD",
+   "rule": "ボリンジャーIII",
+   "buy_date": "2026-10-21",
+   "buy_price": 549.97,
+   "verdict": "保有継続",
+   "author": "ボリンジャー"
+  }
+ ],
+ "s2": {
+  "on": true,
+  "label": "あり（S2）",
+  "close": 11684.0,
+  "hi60": 13217.8203125,
+  "drop": -0.11604184927899774
+ },
+ "omitted": [],
+ "ref_b": [
+  {
+   "sym": "ADI",
+   "kind": "予約: ミネルヴィニ（ピボットの手前）",
+   "close": 428.2699890136719,
+   "rs": 90.47553816046967
+  },
+  {
+   "sym": "JCI",
+   "kind": "予約: ミネルヴィニ（ピボットの手前）",
+   "close": 157.35000610351562,
+   "rs": 83.50097847358121
+  },
+  {
+   "sym": "TT",
+   "kind": "予約: ボリンジャー メソッドIII（%bが0.05未満に近い）",
+   "close": 448.4700012207031,
+   "rs": 47.07827788649706
+  }
+ ]
+}
