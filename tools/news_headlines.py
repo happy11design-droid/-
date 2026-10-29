@@ -11,9 +11,13 @@ Yahooファイナンスの銘柄ごとの見出しを、日付・媒体名付き
 使い方:
   tools/news_headlines.py daily <movers.json> <出力.md>
       毎朝のテーマ監視（tools/theme_daily.sh prepare が呼ぶ。movers.json は tools/theme_scan.py が書く）。
-      その取引日の市場全体・半導体・信用（社債）・「〇〇ショック」の呼び名・引け後（時間外）の動きに加え、
-      1週間で−5%以下のグループごとに下げの大きい3銘柄と、1日で−7%以下の銘柄（合わせて最大12）、
-      1週間で+5%以上のグループごとに上げの大きい3銘柄と、1日で+7%以上の銘柄（合わせて最大6。2026-10-21〜）の直近1週間の見出し。
+      その取引日の市場全体・半導体・信用（社債）・「〇〇ショック」の呼び名・引け後（時間外）の動き・買収と合併に加え、
+      銘柄ごとの直近1週間の見出し。調べる銘柄は次の順（2026-10-29〜）:
+        ① 保有銘柄（新分析ツール/保有銘柄.md）　② 今日の候補（同じフォルダの cands_meta.json）
+        ③ 時間外（引け後）に±5%以上動いた監視銘柄（Yahooの引け後の値段。afterhours.json にも書く）
+        ④ 引けまでに大きく動いた銘柄: 1週間で−5%以下のグループごとに下げの大きい3銘柄・1日で−7%以下、
+           1週間で+5%以上のグループごとに上げの大きい3銘柄・1日で+7%以上
+        ①〜③は必ず調べ、④は合計が12銘柄になるまで（下げを先に約2/3、上げを約1/3）。
   tools/news_headlines.py day <YYYY-MM-DD> [--tickers A,B] [--per N]
   tools/news_headlines.py range <開始 YYYY-MM-DD> <終了 YYYY-MM-DD> [--tickers A,B] [--per N]
       質問を受けたとき（CLAUDE.md「相場の急な下げについて質問されたとき」）。取引日（平日）ごとに市場全体などの見出しと、
@@ -24,6 +28,7 @@ import datetime as dt
 import email.utils
 import html
 import json
+import os
 import re
 import subprocess
 import sys
@@ -44,9 +49,15 @@ MARKET = [
     ("信用（社債・借金）", "AI debt OR bonds OR credit spreads OR CDS", EN),
     ("「〇〇ショック」の呼び名（日本語）", "ショック 株", JA),
     # 引け後の決算で時間外に動いた銘柄（2026-10-20 のSpaceX・Super Microの決算でAI半導体が時間外に上げた。2026-10-21 ユーザーの指示）
-    ("引け後・時間外の動き（英語）", '"after hours" OR "after the bell" OR "extended trading" stocks', EN),
-    ("引け後・時間外の動き（日本語）", "時間外 決算 株", JA),
+    ("引け後・時間外の動き（英語）", '"after hours" OR "after the bell" OR "extended trading" stocks', EN, 8),
+    ("引け後・時間外の動き（日本語）", "時間外 決算 株", JA, 8),
+    # 買収・合併（2026-10-28 のマーベルによるルメンタム買収の報道（引け後）を、毎朝の記録が拾えなかった。2026-10-29 ユーザーの指示）
+    ("買収・合併（英語）", "acquisition OR acquire OR merger OR takeover chip OR semiconductor OR AI OR optical", EN, 8),
 ]
+AH_MIN = 0.05      # 時間外にこれ以上動いた監視銘柄は必ず見出しを調べる（2026-10-29。87銘柄で1日平均1銘柄、多い日でも9銘柄）
+AH_SHOW = 0.03     # 時間外の値動きの表に出す下限
+TOTAL = 12         # 銘柄ごとの見出しを調べる数の目安（①〜③は上限を超えても全部）
+HOLDINGS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "新分析ツール", "保有銘柄.md")
 # 銘柄のページ・予想・役員の株式の受け取りなど、原因の確認に使えない見出し
 NOISE = re.compile(r"Forecast & Analyst|Price History|price, news, quote|Stock Price, News|Average Price Target|withheld for taxes|"
                    r"units vest|Real-Time Signals|Outperforming Other|Should You Buy\?|Better Buy|株価・株式情報", re.I)
@@ -133,7 +144,7 @@ class Out:
 
 
 def market_sections(o, day, per, pool):
-    futs = [(h, q, pool.submit(google, q, lang, day, day, per)) for h, q, lang in MARKET]
+    futs = [(m[0], m[1], pool.submit(google, m[1], m[2], day, day, m[3] if len(m) > 3 else per)) for m in MARKET]
     for h, q, f in futs:
         o.section(h, q, f.result())
 
@@ -157,6 +168,37 @@ def ticker_sections(o, tickers, start, end, per, pool, info=None, use_yahoo=True
 
 def pct(x):
     return "—" if x is None else f"{x * 100:+.1f}%"
+
+
+def after_hours(sym, day):
+    """day の引け（16:00 ET の前の最後の5分足）から、引け後（16:00〜20:00 ET）の最後の値までの騰落率。(騰落率, 引け, 時間外の値, 時刻) か None"""
+    t = curl(f"https://query1.finance.yahoo.com/v8/finance/chart/{urllib.parse.quote(sym)}?interval=5m&range=5d&includePrePost=true")
+    try:
+        r = json.loads(t)["chart"]["result"][0]
+        q = r["indicators"]["quote"][0]
+    except Exception:
+        return None
+    reg, post = None, None
+    for ts, c in zip(r.get("timestamp", []), q.get("close", [])):
+        if not c:
+            continue
+        x = dt.datetime.fromtimestamp(ts, ET)
+        if x.date() != day:
+            continue
+        if (9, 30) <= (x.hour, x.minute) < (16, 0):
+            reg = c
+        elif x.hour >= 16:
+            post = (c, x.strftime("%H:%M"))
+    if not reg or not post:
+        return None
+    return post[0] / reg - 1, reg, post[0], post[1]
+
+
+def holdings_list():
+    try:
+        return [m.group(1) for m in (re.match(r"^\| ([A-Z][A-Z.]*) \| \d{4}-\d{2}-\d{2}", x) for x in open(HOLDINGS, encoding="utf-8")) if m]
+    except OSError:
+        return []
 
 
 def cmd_daily(a):
@@ -185,27 +227,69 @@ def cmd_daily(a):
         out += [x["sym"] for x in one if x["sym"] not in out]
         return out[:cap], grp
 
+    must, ah = [], {}
     if mv:
-        picks, weak = choose(-1, 12)
-        ups, strong = choose(+1, 6)
-        ups = [x for x in ups if x not in picks]
-        for x in mv["stocks"]:
-            info[x["sym"]] = f"{x['group']}、前日比 {pct(x['d1'])}、1週 {pct(x['w1'])}"
-        o.L.append("- 調べた銘柄の選び方: 1週の騰落率（中央値）が−5%以下のグループごとに下げの大きい3銘柄＋1日で−7%以下の銘柄（最大12）と、"
-                   "+5%以上のグループごとに上げの大きい3銘柄＋1日で+7%以上の銘柄（最大6）。")
+        hold = holdings_list()
+        cm = os.path.join(os.path.dirname(os.path.abspath(a.movers)), "cands_meta.json")
+        try:
+            cand = [k for k in json.load(open(cm, encoding="utf-8")) if re.fullmatch(r"[A-Z][A-Z.]*", k)]   # _s2 などの付記は除く
+        except Exception:
+            cand = []
+        watch = [x["sym"] for x in mv["stocks"]]
+        allsyms = list(dict.fromkeys(hold + cand + watch))
+        with ThreadPoolExecutor(8) as p8:
+            for s_, r_ in zip(allsyms, p8.map(lambda s_: after_hours(s_, day), allsyms)):
+                if r_:
+                    ah[s_] = {"pct": round(r_[0], 4), "close": r_[1], "post": r_[2], "time": r_[3]}
+        json.dump(ah, open(os.path.join(os.path.dirname(os.path.abspath(a.out)), "afterhours.json"), "w", encoding="utf-8"), ensure_ascii=False)
+        big = sorted((s_ for s_, v in ah.items() if abs(v["pct"]) >= AH_MIN), key=lambda s_: -abs(ah[s_]["pct"]))
+        must = list(dict.fromkeys(hold + cand + big))
+        down, weak = choose(-1, 12)
+        up_, strong = choose(+1, 6)
+        room = max(0, TOTAL - len(must))
+        nd = min(len(down), -(-room * 2 // 3))
+        picks = [x for x in down if x not in must][:nd]
+        ups = [x for x in up_ if x not in must and x not in picks][:max(0, room - len(picks))]
+        if len(picks) + len(ups) < room:
+            picks += [x for x in down if x not in must and x not in picks][:room - len(picks) - len(ups)]
+        grp = {x["sym"]: x for x in mv["stocks"]}
+        for s_ in allsyms:
+            x = grp.get(s_, {})
+            role = "保有" if s_ in hold else "候補" if s_ in cand else ""
+            parts_ = [p_ for p_ in (role, x.get("group"), f"前日比 {pct(x.get('d1'))}" if x else "", f"1週 {pct(x.get('w1'))}" if x else "",
+                                    f"時間外 {pct(ah[s_]['pct'])}" if s_ in ah else "") if p_]
+            info[s_] = "、".join(parts_)
+        o.L.append(f"- 調べた銘柄の選び方: ①保有 ②今日の候補 ③時間外に±{AH_MIN * 100:.0f}%以上動いた監視銘柄 は全部、"
+                   f"④引けまでに大きく動いた銘柄（1週で±5%のグループの上位3・1日で±7%）は合計{TOTAL}銘柄まで。")
         o.L.append("- 1週で−5%以下のグループ: " + ("、".join(f"{g}（{pct(v['w1'])}）" for g, v in weak) if weak else "なし"))
         o.L.append("- 1週で+5%以上のグループ: " + ("、".join(f"{g}（{pct(v['w1'])}）" for g, v in strong) if strong else "なし"))
+        rows_ = sorted((s_ for s_, v in ah.items() if abs(v["pct"]) >= AH_SHOW or s_ in hold or s_ in cand), key=lambda s_: -abs(ah[s_]["pct"]))
+        o.L.append(f"\n## 0. 時間外（引け後）の値動き（{day} の引けから、Yahoo。±{AH_SHOW * 100:.0f}%以上の監視銘柄と、保有・候補は全部）\n")
+        o.L.append("| 銘柄 | 区分 | 引け | 時間外 | 騰落率 |")
+        o.L.append("|---|---|---|---|---|")
+        for s_ in rows_:
+            v = ah[s_]
+            mark = "**" if abs(v["pct"]) >= AH_MIN else ""
+            o.L.append(f"| {s_} | {'保有' if s_ in hold else '候補' if s_ in cand else '監視'} | {v['close']:.2f} | {v['post']:.2f}（{v['time']} ET） | {mark}{pct(v['pct'])}{mark} |")
+        if not rows_:
+            o.L.append("| （なし） | | | | |")
+        miss = [s_ for s_ in hold + cand if s_ not in ah]
+        if miss:
+            o.L.append(f"- 時間外の値段を取れなかった保有・候補: {'、'.join(miss)}")
     with ThreadPoolExecutor(6) as pool:
         o.L.append(f"\n## 1. 市場全体（{day}）")
         market_sections(o, day, a.per, pool)
+        if must:
+            o.L.append(f"\n## 2. 保有・候補・時間外で大きく動いた銘柄（{day - dt.timedelta(days=6)}〜{day} の見出し）")
+            ticker_sections(o, must, day - dt.timedelta(days=6), day, 4, pool, info)
         if picks:
-            o.L.append(f"\n## 2. 大きく下げた銘柄（{day - dt.timedelta(days=6)}〜{day} の見出し）")
+            o.L.append(f"\n## 3. 引けまでに大きく下げた銘柄（{day - dt.timedelta(days=6)}〜{day} の見出し）")
             ticker_sections(o, picks, day - dt.timedelta(days=6), day, 4, pool, info)
         if ups:
-            o.L.append(f"\n## 3. 大きく上げた銘柄（{day - dt.timedelta(days=6)}〜{day} の見出し）")
+            o.L.append(f"\n## 4. 引けまでに大きく上げた銘柄（{day - dt.timedelta(days=6)}〜{day} の見出し）")
             ticker_sections(o, ups, day - dt.timedelta(days=6), day, 4, pool, info)
     open(a.out, "w", encoding="utf-8").write("\n".join(o.L) + "\n")
-    print(f"headlines: {a.out}（下げ: {' '.join(picks) or 'なし'}／上げ: {' '.join(ups) or 'なし'}）")
+    print(f"headlines: {a.out}（保有・候補・時間外: {' '.join(must) or 'なし'}／下げ: {' '.join(picks) or 'なし'}／上げ: {' '.join(ups) or 'なし'}）")
 
 
 def cmd_range(a, start, end):
