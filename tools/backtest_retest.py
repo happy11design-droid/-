@@ -2904,6 +2904,9 @@ def opt_stage(base, data, sim, days, ind, cache, part):
           "trend_rs": lambda t: (0 if t["ai"] else 1, 0 if t["rule"] in ("M", "V") else 1, -t["rs"]),
           "rev_rs": lambda t: (0 if t["ai"] else 1, 0 if t["rule"] in ("B", "C") else 1, -t["rs"]),
           "slope_big": lambda t: (0 if t["ai"] else 1, -t["s50"]),
+          # 2026-10-29: 同じ日・同じ銘柄に押し目（B）と急落の底（C）の両方の合図が出たとき、どちらで買うか（今までは乱数の同点解消）。RSの高い順は今のルールと同じ
+          "rs_dupC": lambda t: (0 if t["ai"] else 1, -t["rs"], 0 if t["rule"] == "C" else 1),
+          "rs_dupB": lambda t: (0 if t["ai"] else 1, -t["rs"], 0 if t["rule"] == "B" else 1),
           "rs_low": lambda t: (1 if t["rule"] in ("E", "G", "U", "K", "D") else 0, 0 if t["ai"] else 1, -t["rs"]),   # 足した合図は空き枠だけ（同じ日の4つのルールの後）
           "v2cbm": lambda t: (0 if t["ai"] else 1, {"V": 0, "C": 1, "B": 2, "M": 3}.get(t["rule"], 4), -t["rs"]),
           "v2cbm_noai": lambda t: ({"V": 0, "C": 1, "B": 2, "M": 3}.get(t["rule"], 4), -t["rs"]),
@@ -2935,6 +2938,8 @@ def opt_stage(base, data, sim, days, ind, cache, part):
     BASE = {"rules": ("B", "C", "M", "V"), "prio": "slope", "streak": None, "slots": 4, "cap": 2, "etf": "reg", "stop": STOP, "rel8": False, "swap": None, "xsell": None, "s2": False, "close_stop": False, "hotwait": False, "c10": False, "kx": None, "kb": None, "bsect": False, "indtop": None, "tstop": None, "pstop": None, "m30": False, "c15": False, "lim2": False, "hadd": None, "ichi": False, "outside": False, "abn": None, "gem": None, "resv": None, "stg": None, "rr": None, "bmid": False, "c20": False, "vixrev": None}
     V1 = {"今のルール（傾きの小さい順）": {},
           "買う順番: RSの高い順": {"prio": "rs"},
+          "買う順番: RSの高い順、同じ銘柄の2ルールは急落の底で買う": {"prio": "rs_dupC"},
+          "買う順番: RSの高い順、同じ銘柄の2ルールは押し目で買う": {"prio": "rs_dupB"},
           "買う順番: RSの高い順（AI半導体を先にしない）": {"prio": "rs_noai"},
           "買う順番: RSの高い順（SOX÷S&P500が150日線より上の日だけAIを先に）": {"prio": "rs_soxrel"},
           "買う順番: RSの高い順（業種の3カ月の強さが上位20%のAIだけ先に）": {"prio": "rs_aiind"},
@@ -3187,6 +3192,30 @@ def opt_stage(base, data, sim, days, ind, cache, part):
     w("| 形 | 組 | 年率 | 含み損込みの最大下落率 | 2015〜2021年 | 2022年〜 | 直近3年 |" + (f" 2026年9月〜（{days[-1][5:].replace('-', '/')}まで） |" if SEP else "") + " 判定 |")
     w("|---|---|---|---|---|---|---|" + ("---|" if SEP else "") + "---|")
     res = {}
+    if os.environ.get("OPT_DUPSTATS") == "1":   # 2026-10-29: 同じ日・同じ銘柄に複数のルールの合図が出た売買の数と、ルールごとの成績
+        trs_d, _ = make({"prio": "rs"})
+        grp = {}
+        for t in trs_d:
+            if not t.get("ghost"):
+                grp.setdefault((t["sym"], t["in"]), []).append(t)
+        dup = {k: v for k, v in grp.items() if len({x["rule"] for x in v}) > 1}
+        ret = lambda x: x["path"].get(x["out"], 1.0) - 1
+        w("\n## 同じ日・同じ銘柄に複数のルールの合図が出た売買\n")
+        w(f"買う日と銘柄が同じ売買（ルールが違うもの）: {len(dup)}組（全部の買う日×銘柄 {len(grp)} 組のうち {len(dup) / max(1, len(grp)) * 100:.1f}%）。")
+        combo = {}
+        for v in dup.values():
+            k = "＋".join(sorted({x["rule"] for x in v}))
+            combo[k] = combo.get(k, 0) + 1
+        w("ルールの組み合わせ（B=押し目、C=急落の底、M=ミネルヴィニ、V=新高値V2）: " + "、".join(f"{k} {n}組" for k, n in sorted(combo.items(), key=lambda z: -z[1])) + "\n")
+        w("| 期間 | 組の数 | ルール | 件数 | 勝率 | 1回平均 | 1回の中央値 |")
+        w("|---|---|---|---|---|---|---|")
+        for lab, lo, hi in (("2015年〜全部", "0000", "9999"), ("2015〜2021年", "0000", cb.IS_END), ("2022年〜", cb.OOS_START, "9999")):
+            ks = [k for k in dup if lo <= k[1] <= hi]
+            for rl in ("B", "C"):
+                xs = [ret(x) for k in ks for x in dup[k] if x["rule"] == rl]
+                if xs:
+                    w(f"| {lab} | {len(ks)} | {rl} | {len(xs)} | {sum(1 for x in xs if x > 0) / len(xs) * 100:.0f}% | {sum(xs) / len(xs) * 100:+.2f}% | {med(xs) * 100:+.2f}% |")
+        w("")
     for nm, spec in forms:
         trs, sp = make(spec)
         for s0 in (5000, 7300):
