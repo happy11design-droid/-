@@ -179,8 +179,12 @@ def cmd_review(a):
 
     trades = load_trades()
     rows = []
+    import splits as sp_
     for r in recs:
         for c in r["candidates"]:
+            f_ = sp_.factor(c["sym"], r["trade_date"])
+            if f_ != 1:   # 記録の日の後に株式分割があれば、注文の値段を今の株価の基準に直す（2026-10-30）
+                c = {**c, **{k: c[k] / f_ for k in ("limit", "stop_buy", "limit_buy") if isinstance(c.get(k), (int, float))}}
             s = data.get(c["sym"])
             if not s or r["trade_date"] not in s["date"]:
                 rows.append({**c, "date": r["trade_date"], "status": "株価なし"})
@@ -262,7 +266,10 @@ def cmd_review(a):
 
 
 def load_real(path):
-    """保有銘柄.md・売買記録.md の表から [{sym, buy_date, buy, shares, rule, sell_date, sell}] を返す（保有中は sell_date=None）"""
+    """保有銘柄.md・売買記録.md の表から [{sym, buy_date, buy, shares, rule, sell_date, sell}] を返す（保有中は sell_date=None）。
+    2026-10-30: 株式分割の後もYahooの株価（分割に合わせて調整される）と比べられるように、買値・売値・株数を今の株価の基準に直す
+    （その日より後の分割の倍率で値段を割り、株数を掛ける。損益の金額は変わらない）。記録どおりの値は buy_raw・sell_raw"""
+    import splits as sp_
     out = []
     if not os.path.exists(path):
         return out
@@ -271,16 +278,20 @@ def load_real(path):
         if len(c) < 5 or not re.match(r"^[A-Z][A-Z.]*$", c[0]) or not re.match(r"^\d{4}-\d{2}-\d{2}$", c[1]):
             continue
         try:
-            t = {"sym": c[0], "buy_date": c[1], "buy": float(c[2]), "shares": float(c[3]), "rule": c[4], "sell_date": None, "sell": None, "lev": 1}
+            fb = sp_.factor(c[0], c[1])
+            t = {"sym": c[0], "buy_date": c[1], "buy": float(c[2]) / fb, "buy_raw": float(c[2]), "shares": float(c[3]) * fb, "rule": c[4],
+                 "sell_date": None, "sell": None, "lev": 1}
             m = re.search(r"2倍ETF ([A-Z]+) ([0-9.]+)株 ([0-9.]+)", line)
             if m:   # 2倍ETFで買った: 払った金額を元の株の2倍の値動きで近似する（目減りは含まない。2026-10-05）
                 t["lev"] = 2
                 t["shares"] = 2 * float(m.group(2)) * float(m.group(3)) / t["buy"]
             if len(c) >= 7 and re.match(r"^\d{4}-\d{2}-\d{2}$", c[5]) and c[6]:
-                t["sell_date"], t["sell"] = c[5], float(c[6])
+                t["sell_date"], t["sell_raw"] = c[5], float(c[6])
+                t["sell"] = t["sell_raw"] / sp_.factor(c[0], c[5])
                 e = re.search(r"ETFの売値 ([0-9.]+)", line)
                 if m and e and t["sell"] != t["buy"]:   # ETFの実際の売値があれば、損益が実際のETFの損益と同じになる株数に直す（2026-10-15）
-                    t["shares"] = float(m.group(2)) * (float(e.group(1)) - float(m.group(3))) / (t["sell"] - t["buy"])
+                    fe = sp_.factor(m.group(1), c[1], c[5])   # 持っている間にETF自体が分割していれば、株数は fe 倍になっている
+                    t["shares"] = float(m.group(2)) * (fe * float(e.group(1)) - float(m.group(3))) / (t["sell"] - t["buy"])
         except ValueError:
             continue
         out.append(t)
@@ -407,15 +418,18 @@ def slippage(hist_dir):
         o = bar(t["sym"], t["buy_date"])
         if o is None:
             continue
-        cand = None
+        cand, cdate = None, None
         for r in recs:
             if r.get("trade_date", "") < t["buy_date"]:
                 for c in r.get("candidates", []):
                     if c.get("sym") == t["sym"]:
-                        cand = c
+                        cand, cdate = c, r.get("trade_date", "")
         exp, how = o, "寄り付き"
         if cand and cand.get("pattern") == "B":
+            import splits as sp_
+            f_ = sp_.factor(t["sym"], cdate)   # 予約の値段は記録の日の基準。株価（今の基準）とそろえる（株式分割。2026-10-30）
             sb, lb = num(cand.get("stop_buy")), num(cand.get("limit_buy"))
+            sb, lb = (sb / f_ if sb else sb), (lb / f_ if lb else lb)
             if sb:
                 exp, how = max(o, sb), f"逆指値 {sb:.2f}"
             elif lb:

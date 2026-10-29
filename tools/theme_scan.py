@@ -110,21 +110,25 @@ def load_holdings(path=os.path.join(os.path.dirname(os.path.abspath(__file__)), 
     out = []
     if not os.path.exists(path):
         return out
+    import splits as sp_
     for line in open(path, encoding="utf-8"):
         m = re.match(r"^\| ([A-Z][A-Z.]*) \| (\d{4}-\d{2}-\d{2}) \| ([0-9.]+) \| ([0-9.]*) \| ([^|]*)\|", line)
         if m:
-            out.append({"sym": m.group(1), "date": m.group(2), "price": float(m.group(3)), "rule": m.group(5).strip()})
+            # 買った日の後に株式分割があれば、買値を今の株価の基準（Yahooの株価は分割に合わせて調整される）に直す（2026-10-30 SNDK 1→8）
+            raw, f = float(m.group(3)), sp_.factor(m.group(1), m.group(2))
+            out.append({"sym": m.group(1), "date": m.group(2), "price": raw / f, "price_raw": raw, "split": f, "rule": m.group(5).strip()})
     return out
 
 
 def load_trades(path=os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "新分析ツール", "売買記録.md")):
     """売買記録.md（売った銘柄）と保有銘柄.md（保有中）から、実際に買った記録 [{sym, date, price}] を返す"""
+    import splits as sp_
     out = [{"sym": h["sym"], "date": h["date"], "price": h["price"]} for h in load_holdings()]
     if os.path.exists(path):
         for line in open(path, encoding="utf-8"):
             m = re.match(r"^\| ([A-Z][A-Z.]*) \| (\d{4}-\d{2}-\d{2}) \| ([0-9.]+) \|", line)
-            if m:
-                out.append({"sym": m.group(1), "date": m.group(2), "price": float(m.group(3))})
+            if m:   # 買値は今の株価の基準に直す（株式分割。2026-10-30）
+                out.append({"sym": m.group(1), "date": m.group(2), "price": sp_.adjust(m.group(1), float(m.group(3)), m.group(2))})
     return out
 
 
@@ -612,7 +616,8 @@ def main():
                 ex = "**損切り価格を下回った** " + ex
             if ex.startswith(("成立", "**成立", "**損切り価格を下回った")):
                 exit_n += 1
-            w(f"| {h['sym']} | {h['rule']} | {h['date']} | {h['price']:.2f} | {c:.2f} | {pct(c / h['price'] - 1)} | {stop:.2f} | {ex} | {bear_candles(d, h['date'])} | {earnings_date(h['sym'])} |")
+            px_ = f"{h['price']:.2f}" + (f"（株式分割 1→{h['split']:g} に合わせて直した値。記録は {h['price_raw']:.2f}）" if h.get("split", 1) != 1 else "")
+            w(f"| {h['sym']} | {h['rule']} | {h['date']} | {px_} | {c:.2f} | {pct(c / h['price'] - 1)} | {stop:.2f} | {ex} | {bear_candles(d, h['date'])} | {earnings_date(h['sym'])} |")
         w("")
         w("- 出来高2倍の大陰線: 実体（始値−終値）が前日までのATR(14)の1.5倍以上、終値がその日の値幅の下25%以内、出来高が前日までの50日平均の2倍以上の日。"
           "**押し目（ボリンジャーIII）・急落の底の保有では売りのルール**: 出たら翌日の寄り付きで全部売り、空いた枠で次の合図を買う（2026-10-02 ユーザー決定。"
@@ -639,6 +644,9 @@ def main():
             for c in res:
                 d = data.get(c["sym"])
                 p = c.get("stop_buy") or c.get("limit_buy")
+                if p:   # 前日の予約の値段を、今の株価の基準に直す（その後に株式分割があった場合。2026-10-30）
+                    import splits as sp_
+                    p = sp_.adjust(c["sym"], p, prev.get("trade_date", "9999"))
                 rec = [b for b in bought if b["sym"] == c["sym"] and b["date"] > prev.get("trade_date", "")]
                 if d:
                     hi, lo = d["h"][-1], d["l"][-1]
