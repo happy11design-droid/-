@@ -81,10 +81,20 @@ def main():
                 + (f"（SOXが直近60取引日の最高値から {s2['drop'] * 100:+.1f}%）" if s2.get("drop") is not None else "")
                 + "。S2の日の順張りの候補には「S2なら見送る形」と付ける（売買のルールは変えない。記録してから採用を決める。2026-10-14）", ""]
     hv = {h["sym"]: h for h in rec.get("holdings", [])}
+    try:   # 時間外（引け後）の騰落率（tools/news_headlines.py daily が書く。2026-10-29 ユーザーの指示）
+        ah = json.load(open(os.path.join(D, "afterhours.json"), encoding="utf-8"))
+    except (OSError, ValueError):
+        ah = {}
+    def ahs(sym):   # ±5%以上は太字
+        v = ah.get(sym)
+        if not v:
+            return "—"
+        t = f"{v['pct'] * 100:+.1f}%"
+        return f"**{t}**" if abs(v["pct"]) >= 0.05 else t
     rows = table_rows(scan, "## 5. 保有銘柄")
     out += ["## 保有銘柄", ""]
     if rows:
-        out += ["| 銘柄 | ルール | 損益 | ルールの判定 | ルールの判定の理由 | 著者の判定 |", "|---|---|---|---|---|---|"]
+        out += ["| 銘柄 | ルール | 損益 | 時間外 | ルールの判定 | ルールの判定の理由 | 著者の判定 |", "|---|---|---|---|---|---|---|"]
         for r in rows:
             sym = r.get("銘柄", "")
             rv, why = hold_rule(r)
@@ -92,7 +102,7 @@ def main():
             av = f"【{h['verdict']}】（{h.get('author', '')}）" if h.get("verdict") else "回答なし"
             if h.get("verdict") and h["verdict"] != "保有継続" and rv == "保有継続":
                 av = "**" + av + "**"
-            out.append(f"| {sym} | {r.get('ルール', '')} | {r.get('損益', '')} | {rv} | {why} | {av} |")
+            out.append(f"| {sym} | {r.get('ルール', '')} | {r.get('損益', '')} | {ahs(sym)} | {rv} | {why} | {av} |")
     else:
         out.append("保有銘柄なし")
     out += ["", "## 候補の判定（並びは上の「買う順番」の表と同じ）", ""]
@@ -116,7 +126,7 @@ def main():
         out += [f"- 並びは上の「買う順番」の表と同じ（RSの高い順。勝率の高い順ではない）。注文の値段・株数・逆指値は上の表を見る。"
                 f"勝率・1回平均は、そのルールの過去の成績（後知恵なしの監視銘柄・2015年〜の全部の合図）。",
                 f"- 空き枠: {free}（同時保有{SLOTS}銘柄まで。保有{len(held)}、うちルールの売り{exits}）。著者が【様子見】の候補を見送るかはユーザーが決める。", "",
-                "| 順 | 銘柄 | ルール | 過去の勝率 | 過去の1回平均 | RS | ルールの判定 | 著者の判定 |", "|---|---|---|---|---|---|---|---|"]
+                "| 順 | 銘柄 | ルール | 過去の勝率 | 過去の1回平均 | RS | 時間外 | ルールの判定 | 著者の判定 |", "|---|---|---|---|---|---|---|---|---|"]
         for k, c in enumerate(cands, 1):
             r = rows6.get(c["sym"], {})
             m = re.search(r"勝率(\d+)%・1回平均([+\-]?[\d.]+%)", r.get("ルールの過去の成績", ""))
@@ -134,9 +144,12 @@ def main():
             rs_ = rs_of(c)
             s50 = f"{rs_:.0f}" if rs_ is not None else "—"
             n = f"{k}" + ("" if k <= free else "（枠外）")
-            out.append(f"| {n} | {c['sym']}{'（' + NAMES[c['sym']] + '）' if NAMES.get(c['sym']) else ''} | {c.get('kind', '')} | {wr} | {avg} | {s50} | {rv} | {av} |")
+            out.append(f"| {n} | {c['sym']}{'（' + NAMES[c['sym']] + '）' if NAMES.get(c['sym']) else ''} | {c.get('kind', '')} | {wr} | {avg} | {s50} | {ahs(c['sym'])} | {rv} | {av} |")
     else:
         out.append("候補なし")
+    if ah:
+        out += ["", "- 時間外: 前の取引日の引けから、引け後（米国東部時間16〜20時）の最後の値までの騰落率（Yahoo。±5%以上は太字）。"
+                "寄り付きの値段は、表の注文の目安（前日の終値で計算）から大きくずれることがある。原因の見出しは「ニュースの見出し」の節。"]
     print("\n".join(out))
 
 

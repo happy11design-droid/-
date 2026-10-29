@@ -54,7 +54,10 @@ if [[ "$CMD" == prepare ]]; then
   python3 "$ROOT/tools/theme_scan.py" "$D/scan.md" "${PREV[@]}" > /dev/null
   # ニュースの見出し（市場全体・半導体・信用・「〇〇ショック」と、1週で大きく下げたグループの銘柄。どの銘柄を調べるかはプログラムが決める）
   python3 "$ROOT/tools/news_headlines.py" daily "$D/movers.json" "$D/headlines.md" || echo "ニュースの見出しを取得できませんでした" >&2
-  { tickers "## 4."; tickers "## 4-2."; tickers "## 5."; tickers "## 6."; } | sort -u > "$D/news_targets.txt"
+  { tickers "## 4."; tickers "## 4-2."; tickers "## 5."; tickers "## 6."
+    # 時間外（引け後）に±5%以上動いた監視銘柄も調べる（news_headlines.py が afterhours.json に書く。2026-10-29 ユーザーの指示）
+    python3 -c 'import json,sys; [print(k) for k,v in json.load(open(sys.argv[1])).items() if abs(v["pct"])>=0.05]' "$D/afterhours.json" 2>/dev/null || true
+  } | sort -u > "$D/news_targets.txt"
   { tickers "## 5."; tickers "## 6."; } | sort -u > "$D/data_targets.txt"
   while read -r t; do
     python3 "$ROOT/tools/market_data.py" ticker "$t" "$D" > /dev/null 2>&1 || echo "$t の数値データを取得できませんでした" >&2
@@ -63,7 +66,7 @@ if [[ "$CMD" == prepare ]]; then
   done < "$D/data_targets.txt"
   echo "scan: $D/scan.md"
   [[ -s "$D/headlines.md" ]] && echo "headlines: $D/headlines.md（ニュースのサブエージェントに最初に読ませる）"
-  echo "ニュースを調べる銘柄（急騰・急落・監視外の注目・保有・候補）: $(tr '\n' ' ' < "$D/news_targets.txt")"
+  echo "ニュースを調べる銘柄（急騰・急落・監視外の注目・保有・候補・時間外で±5%以上）: $(tr '\n' ' ' < "$D/news_targets.txt")"
   echo "候補・保有銘柄: $(tr '\n' ' ' < "$D/data_targets.txt")"
   exit 0
 fi
