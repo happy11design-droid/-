@@ -2906,6 +2906,8 @@ def opt_stage(base, data, sim, days, ind, cache, part):
           "slope_big": lambda t: (0 if t["ai"] else 1, -t["s50"]),
           # 2026-10-29: 同じ日・同じ銘柄に押し目（B）と急落の底（C）の両方の合図が出たとき、どちらで買うか（今までは乱数の同点解消）。RSの高い順は今のルールと同じ
           "rs_dupC": lambda t: (0 if t["ai"] else 1, -t["rs"], 0 if t["rule"] == "C" else 1),
+          "rs_dupM": lambda t: (0 if t["ai"] else 1, -t["rs"], 0 if t["rule"] == "M" else 1),
+          "rs_dupV": lambda t: (0 if t["ai"] else 1, -t["rs"], 0 if t["rule"] == "V" else 1),
           "rs_dupB": lambda t: (0 if t["ai"] else 1, -t["rs"], 0 if t["rule"] == "B" else 1),
           "rs_low": lambda t: (1 if t["rule"] in ("E", "G", "U", "K", "D") else 0, 0 if t["ai"] else 1, -t["rs"]),   # 足した合図は空き枠だけ（同じ日の4つのルールの後）
           "v2cbm": lambda t: (0 if t["ai"] else 1, {"V": 0, "C": 1, "B": 2, "M": 3}.get(t["rule"], 4), -t["rs"]),
@@ -2940,6 +2942,8 @@ def opt_stage(base, data, sim, days, ind, cache, part):
           "買う順番: RSの高い順": {"prio": "rs"},
           "買う順番: RSの高い順、同じ銘柄の2ルールは急落の底で買う": {"prio": "rs_dupC"},
           "買う順番: RSの高い順、同じ銘柄の2ルールは押し目で買う": {"prio": "rs_dupB"},
+          "買う順番: RSの高い順、同じ銘柄の2ルールはミネルヴィニで買う": {"prio": "rs_dupM"},
+          "買う順番: RSの高い順、同じ銘柄の2ルールは新高値V2で買う": {"prio": "rs_dupV"},
           "買う順番: RSの高い順（AI半導体を先にしない）": {"prio": "rs_noai"},
           "買う順番: RSの高い順（SOX÷S&P500が150日線より上の日だけAIを先に）": {"prio": "rs_soxrel"},
           "買う順番: RSの高い順（業種の3カ月の強さが上位20%のAIだけ先に）": {"prio": "rs_aiind"},
@@ -3209,12 +3213,13 @@ def opt_stage(base, data, sim, days, ind, cache, part):
         w("ルールの組み合わせ（B=押し目、C=急落の底、M=ミネルヴィニ、V=新高値V2）: " + "、".join(f"{k} {n}組" for k, n in sorted(combo.items(), key=lambda z: -z[1])) + "\n")
         w("| 期間 | 組の数 | ルール | 件数 | 勝率 | 1回平均 | 1回の中央値 |")
         w("|---|---|---|---|---|---|---|")
-        for lab, lo, hi in (("2015年〜全部", "0000", "9999"), ("2015〜2021年", "0000", cb.IS_END), ("2022年〜", cb.OOS_START, "9999")):
-            ks = [k for k in dup if lo <= k[1] <= hi]
-            for rl in ("B", "C"):
-                xs = [ret(x) for k in ks for x in dup[k] if x["rule"] == rl]
-                if xs:
-                    w(f"| {lab} | {len(ks)} | {rl} | {len(xs)} | {sum(1 for x in xs if x > 0) / len(xs) * 100:.0f}% | {sum(xs) / len(xs) * 100:+.2f}% | {med(xs) * 100:+.2f}% |")
+        for cb_ in ("B＋C", "M＋V"):
+            for lab, lo, hi in (("2015年〜全部", "0000", "9999"), ("2015〜2021年", "0000", cb.IS_END), ("2022年〜", cb.OOS_START, "9999")):
+                ks = [k for k, v in dup.items() if lo <= k[1] <= hi and "＋".join(sorted({x["rule"] for x in v})) == cb_]
+                for rl in cb_.split("＋"):
+                    xs = [ret(x) for k in ks for x in dup[k] if x["rule"] == rl]
+                    if xs:
+                        w(f"| {lab}（{cb_}） | {len(ks)} | {rl} | {len(xs)} | {sum(1 for x in xs if x > 0) / len(xs) * 100:.0f}% | {sum(xs) / len(xs) * 100:+.2f}% | {med(xs) * 100:+.2f}% |")
         w("")
     for nm, spec in forms:
         trs, sp = make(spec)
