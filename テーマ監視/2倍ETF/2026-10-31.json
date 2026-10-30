@@ -1,0 +1,181 @@
+{
+ "NVDA": {
+  "etf": "NVDU",
+  "drag": -0.0987,
+  "dollar_volume": 36975253
+ },
+ "AVGO": {
+  "etf": "AVL",
+  "drag": -0.1019,
+  "dollar_volume": 41798853
+ },
+ "MU": {
+  "etf": "MUU",
+  "drag": -0.1319,
+  "dollar_volume": 801690477
+ },
+ "AMD": {
+  "etf": "AMUU",
+  "drag": -0.1021,
+  "dollar_volume": 11466887
+ },
+ "INTC": {
+  "etf": "LINT",
+  "drag": -0.1017,
+  "dollar_volume": 13321411
+ },
+ "ARM": {
+  "etf": "ARMG",
+  "drag": -0.1378,
+  "dollar_volume": 20802794
+ },
+ "MRVL": {
+  "etf": "MRVU",
+  "drag": -0.1033,
+  "dollar_volume": 20059253
+ },
+ "SMCI": {
+  "etf": "SMCL",
+  "drag": -0.2201,
+  "dollar_volume": 12393526
+ },
+ "DELL": {
+  "etf": "DLLL",
+  "drag": -0.0808,
+  "dollar_volume": 53720676
+ },
+ "AAPL": {
+  "etf": "AAPU",
+  "drag": -0.0882,
+  "dollar_volume": 50601544
+ },
+ "GOOGL": {
+  "etf": "GGLL",
+  "drag": -0.0942,
+  "dollar_volume": 143076672
+ },
+ "MSFT": {
+  "etf": "MSFL",
+  "drag": -0.0903,
+  "dollar_volume": 6977178
+ },
+ "META": {
+  "etf": "FBL",
+  "drag": -0.0943,
+  "dollar_volume": 25401340
+ },
+ "AMZN": {
+  "etf": "AMZU",
+  "drag": -0.0999,
+  "dollar_volume": 70656054
+ },
+ "ORCL": {
+  "etf": "ORCU",
+  "drag": -0.1136,
+  "dollar_volume": 40581885
+ },
+ "PLTR": {
+  "etf": "PTIR",
+  "drag": -0.0923,
+  "dollar_volume": 64808736
+ },
+ "NBIS": {
+  "etf": "NBIL",
+  "drag": -0.118,
+  "dollar_volume": 105521123
+ },
+ "CRWV": {
+  "etf": "CWVX",
+  "drag": -0.1184,
+  "dollar_volume": 23330890
+ },
+ "TSLA": {
+  "etf": "TSLR",
+  "drag": -0.103,
+  "dollar_volume": 21590566
+ },
+ "APP": {
+  "etf": "APPX",
+  "drag": -0.1023,
+  "dollar_volume": 18145322
+ },
+ "CRWD": {
+  "etf": "CRWL",
+  "drag": -0.1846,
+  "dollar_volume": 13300068
+ },
+ "PANW": {
+  "etf": "PALU",
+  "drag": -0.1023,
+  "dollar_volume": 6532676
+ },
+ "RDDT": {
+  "etf": "RDTL",
+  "drag": -0.1836,
+  "dollar_volume": 9427216
+ },
+ "TSM": {
+  "etf": "TSMX",
+  "drag": -0.1066,
+  "dollar_volume": 39662699
+ },
+ "COIN": {
+  "etf": "CONL",
+  "drag": -0.1648,
+  "dollar_volume": 115962376
+ },
+ "MSTR": {
+  "etf": "MSTU",
+  "drag": -0.2715,
+  "dollar_volume": 216461311
+ },
+ "SNDK": {
+  "etf": "SNDU",
+  "drag": -0.2237,
+  "dollar_volume": 119257664
+ },
+ "NOW": {
+  "etf": "NOWL",
+  "drag": -0.1664,
+  "dollar_volume": 47998023
+ },
+ "CRM": {
+  "etf": "CRMG",
+  "drag": -0.1312,
+  "dollar_volume": 15591334
+ },
+ "LITE": {
+  "etf": "LITX",
+  "drag": -0.1294,
+  "dollar_volume": 95561100
+ },
+ "ADBE": {
+  "etf": "ADBG",
+  "drag": -0.1297,
+  "dollar_volume": 11336513
+ },
+ "HOOD": {
+  "etf": "ROBN",
+  "drag": -0.161,
+  "dollar_volume": 23327426
+ },
+ "NFLX": {
+  "etf": "NFXL",
+  "drag": -0.1048,
+  "dollar_volume": 21990094
+ },
+ "WDC": {
+  "etf": "WDCX",
+  "drag": -0.106,
+  "dollar_volume": 38623342
+ },
+ "HPE": {
+  "etf": "HPEL",
+  "drag": -0.1651,
+  "dollar_volume": 5105370
+ },
+ "_meta": {
+  "updated": "2026-10-30",
+  "max_drag": 0.15
+ }
+}
