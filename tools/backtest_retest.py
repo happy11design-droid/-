@@ -2249,6 +2249,31 @@ def opt_stage(base, data, sim, days, ind, cache, part):
     HAS = {s for s, d in drag.items() if d < 0.15}
     up, prev = etf_up_days(cache)
     up_sox = etf_up_days(cache, "^SOX")[0]   # 2026-10-23: テーマだけが崩れた今回（S&P500は上昇の局面）も2倍ETFで買っていた
+    # 2026-10-31: 毎朝のツールの「早めの警告」（S3: AI関連の業種のS&P500構成銘柄のうち50日線より上が40%未満、かつその等金額平均が50日線より下。
+    # themedrop_stage と同じ。後知恵なし）か「テーマ全体の急落」（S2: SOXが直近60取引日の最高値から−10%以上）の日。合図の日の引けで判定
+    from backtest_lib import load_prices as _lp2, load_members as _lm2, is_member as _im2
+    _sxp = _lp2(cache, "^SOX")
+    WARN = {_sxp["date"][i] for i in range(60, len(_sxp["c"])) if _sxp["c"][i] / max(_sxp["c"][i - 59:i + 1]) - 1 <= -0.10}
+    _mem2 = _lm2(cache)
+    _ais = [s_ for s_ in data if ind.get(s_) in AI and s_ in _mem2]
+    _pos2 = {s_: {d: k for k, d in enumerate(data[s_]["date"])} for s_ in _ais}
+    _iv = []
+    for d in days:
+        n_up = n_all = 0
+        rets_ = []
+        for s_ in _ais:
+            k = _pos2[s_].get(d)
+            if k is None or k < 50 or not _im2(_mem2[s_], d):
+                continue
+            c_ = data[s_]["c"]
+            n_all += 1
+            n_up += c_[k] > sum(c_[k - 49:k + 1]) / 50
+            rets_.append(c_[k] / c_[k - 1] - 1)
+        _iv.append((_iv[-1] if _iv else 1.0) * (1 + (sum(rets_) / len(rets_) if rets_ else 0.0)))
+        if len(_iv) >= 50 and n_all >= 10 and n_up / n_all < 0.40 and _iv[-1] < sum(_iv[-50:]) / 50:
+            WARN.add(d)
+    print(f"早めの警告・S2の日: 2015年〜の {sum(1 for d in days if d >= '2015-01-01' and d in WARN) / max(1, sum(1 for d in days if d >= '2015-01-01')):.0%}、"
+          f"2026-10: {' '.join(d[5:] for d in days if d >= '2026-10-01' and d in WARN)}", file=sys.stderr)
     # 2026-10-25: AIを先に買うのを切り替える合図 (a) SOX÷SPY（終値の比）がその150日線より上の日
     from backtest_lib import load_prices as _lp
     _sx, _sp = _lp(cache, "^SOX"), _lp(cache, "SPY")
@@ -2935,7 +2960,9 @@ def opt_stage(base, data, sim, days, ind, cache, part):
           "rs_not_M_cpi": lambda t: (0 if t["ai"] and t["sd"] not in KD["M_cpi"] else 1, -t["rs"]),
           "rs_not_M_stag": lambda t: (0 if t["ai"] and t["sd"] not in KD["M_stag"] else 1, -t["rs"]),
           "rs_aiind": lambda t: (0 if t["ai"] and (ind_rank(t["sym"], t["sd"]) or 1.0) <= 0.2 else 1, -t["rs"]),
-          "rs_recent": lambda t: (0 if t["ai"] and t.get("ai_good") else 1, -t["rs"])}
+          "rs_recent": lambda t: (0 if t["ai"] and t.get("ai_good") else 1, -t["rs"]),
+          # 2026-10-31: 早めの警告・S2の日は、AI以外を先に買う（ふだんはAIを先に）
+          "rs_warn_out": lambda t: (0 if (t["ai"] if t["sd"] not in WARN else not t["ai"]) else 1, -t["rs"])}
     # 形: 名前 → 決まり（変えない項目は今のルール）
     BASE = {"rules": ("B", "C", "M", "V"), "prio": "slope", "streak": None, "slots": 4, "cap": 2, "etf": "reg", "stop": STOP, "rel8": False, "swap": None, "xsell": None, "s2": False, "close_stop": False, "hotwait": False, "c10": False, "kx": None, "kb": None, "bsect": False, "indtop": None, "tstop": None, "pstop": None, "m30": False, "c15": False, "lim2": False, "hadd": None, "ichi": False, "outside": False, "abn": None, "gem": None, "resv": None, "stg": None, "rr": None, "bmid": False, "c20": False, "vixrev": None}
     V1 = {"今のルール（傾きの小さい順）": {},
@@ -2948,6 +2975,8 @@ def opt_stage(base, data, sim, days, ind, cache, part):
           "買う順番: RSの高い順（SOX÷S&P500が150日線より上の日だけAIを先に）": {"prio": "rs_soxrel"},
           "買う順番: RSの高い順（業種の3カ月の強さが上位20%のAIだけ先に）": {"prio": "rs_aiind"},
           "買う順番: RSの高い順（直近60取引日に終わった合図の成績がAIの方が良い日だけAIを先に）": {"prio": "rs_recent"},
+          "買う順番: RSの高い順（早めの警告・S2の日はAI以外を先に）": {"prio": "rs_warn_out"},
+          "テーマの外を、早めの警告・S2の日だけ先に買う": {"outfirst_warn": True},
           "買う順番: 続けての合図より初日の合図を先に、その中はRSの高い順": {"prio": "first_rs"},
           "買う順番: 順張りを先に、その中はRSの高い順": {"prio": "trend_rs"},
           "買う順番: 逆張りを先に、その中はRSの高い順": {"prio": "rev_rs"},
@@ -3160,7 +3189,10 @@ def opt_stage(base, data, sim, days, ind, cache, part):
         if sp["resv"]:   # 予約（B）の約定は、同じ日の成行（A、寄り付き）の後（毎朝の theme_scan.py の買う順番と同じ）
             trs = [{**t, "prio": (1 if t["x"] == "resv" else 0,) + (t["prio"] if isinstance(t["prio"], tuple) else (t["prio"],))} for t in trs]
         if sp["outside"]:   # テーマの外の候補は、同じ日の監視銘柄の候補の後（毎朝の theme_scan.py と同じ）
-            trs = [{**t, "prio": (1 if t["x"] == "out" else 0,) + (t["prio"] if isinstance(t["prio"], tuple) else (t["prio"],))} for t in trs]
+            if sp.get("outfirst_warn"):   # 2026-10-31: 早めの警告・S2の日だけ、テーマの外の候補を先に
+                trs = [{**t, "prio": (0 if (t["x"] == "out") == (t["sd"] in WARN) else 1,) + (t["prio"] if isinstance(t["prio"], tuple) else (t["prio"],))} for t in trs]
+            else:
+                trs = [{**t, "prio": (1 if t["x"] == "out" else 0,) + (t["prio"] if isinstance(t["prio"], tuple) else (t["prio"],))} for t in trs]
         return lev(trs, sp["etf"]), sp
 
     last3 = (dt.date.fromisoformat(days[-1]) - dt.timedelta(days=365 * 3)).isoformat()
