@@ -1,0 +1,170 @@
+{
+ "trade_date": "2026-10-30",
+ "run_date": "2026-10-31",
+ "theme_stage": "【ステージ1またはステージ3】",
+ "candidates": [
+  {
+   "sym": "DELL",
+   "kind": "逆張り: 急落の底（担当: コナーズ）",
+   "pattern": "A",
+   "close": 424.3,
+   "limit": null,
+   "stop_buy": null,
+   "limit_buy": null,
+   "verdict": "買い",
+   "author": "コナーズ",
+   "hot": false,
+   "rsi14": 35.73639619093994,
+   "s50": 0.05123914160590215,
+   "rs": 98.61328125,
+   "s2_skip": false
+  },
+  {
+   "sym": "MRVL",
+   "kind": "逆張り: 急落の底（担当: コナーズ）",
+   "pattern": "A",
+   "close": 196.4,
+   "limit": null,
+   "stop_buy": null,
+   "limit_buy": null,
+   "verdict": "買い",
+   "author": "コナーズ",
+   "hot": false,
+   "rsi14": 33.9724556128692,
+   "s50": 0.07013811637590184,
+   "rs": 96.6796875,
+   "s2_skip": false
+  },
+  {
+   "sym": "DDOG",
+   "kind": "逆張り: 急落の底（担当: コナーズ）",
+   "pattern": "A",
+   "close": 235.27,
+   "limit": null,
+   "stop_buy": null,
+   "limit_buy": null,
+   "verdict": "買い",
+   "author": "コナーズ",
+   "hot": false,
+   "rsi14": 38.706290421015616,
+   "s50": 0.026992730688254474,
+   "rs": 93.005859375,
+   "s2_skip": false
+  },
+  {
+   "sym": "NTAP",
+   "kind": "逆張り: ボリンジャー メソッドIII",
+   "pattern": "A",
+   "close": 199.18,
+   "limit": null,
+   "stop_buy": null,
+   "limit_buy": null,
+   "verdict": "買い",
+   "author": "ボリンジャー",
+   "hot": false,
+   "rsi14": 40.6638248708058,
+   "s50": 0.06761181412831285,
+   "rs": 96.29296875,
+   "s2_skip": false
+  },
+  {
+   "sym": "FTNT",
+   "kind": "逆張り: ボリンジャー メソッドIII",
+   "pattern": "A",
+   "close": 136.08,
+   "limit": null,
+   "stop_buy": null,
+   "limit_buy": null,
+   "verdict": "様子見",
+   "author": "ボリンジャー",
+   "hot": false,
+   "rsi14": 26.629713390004426,
+   "s50": 0.04704545586610975,
+   "rs": 90.10546875,
+   "s2_skip": false
+  }
+ ],
+ "holdings": [
+  {
+   "sym": "SNDK",
+   "rule": "ルール外（ユーザーの判断。この日はどのルールの合図もなし）",
+   "buy_date": "2026-10-21",
+   "buy_price": 1371.3,
+   "verdict": "未判定",
+   "author": ""
+  },
+  {
+   "sym": "AMD",
+   "rule": "ボリンジャーIII",
+   "buy_date": "2026-10-21",
+   "buy_price": 549.97,
+   "verdict": "保有継続",
+   "author": "ボリンジャー"
+  }
+ ],
+ "s2": {
+  "on": true,
+  "label": "あり（S2）",
+  "close": 10688.7998046875,
+  "hi60": 13217.8203125,
+  "drop": -0.1913341570713306
+ },
+ "omitted": [
+  {
+   "sym": "SHOP",
+   "kind": "逆張り: ボリンジャー メソッドIII",
+   "pattern": "A",
+   "close": 157.49000549316406,
+   "rs": 80.05078125
+  },
+  {
+   "sym": "AMZN",
+   "kind": "逆張り: ボリンジャー メソッドIII",
+   "pattern": "A",
+   "close": 240.35000610351562,
+   "rs": 19.529296875
+  },
+  {
+   "sym": "TT",
+   "kind": "逆張り: ボリンジャー メソッドIII",
+   "pattern": "A",
+   "close": 410.0,
+   "rs": 17.015625
+  },
+  {
+   "sym": "HUBB",
+   "kind": "逆張り: ボリンジャー メソッドIII",
+   "pattern": "A",
+   "close": 422.44000244140625,
+   "rs": 13.53515625
+  },
+  {
+   "sym": "CARR",
+   "kind": "逆張り: ボリンジャー メソッドIII",
+   "pattern": "A",
+   "close": 53.630001068115234,
+   "rs": 11.98828125
+  },
+  {
+   "sym": "LLY",
+   "kind": "順張り: 新高値（V2、担当: ミネルヴィニ）",
+   "pattern": "A",
+   "close": 1417.5400390625,
+   "rs": 94.939453125
+  }
+ ],
+ "ref_b": [
+  {
+   "sym": "MSFT",
+   "kind": "予約: ボリンジャー メソッドIII（%bが0.05未満に近い）",
+   "close": 521.9099731445312,
+   "rs": 67.095703125
+  },
+  {
+   "sym": "ANET",
+   "kind": "予約: ボリンジャー メソッドIII（%bが0.05未満に近い）",
+   "close": 168.86000061035156,
+   "rs": 36.544921875
+  }
+ ]
+}
