@@ -26,7 +26,7 @@
 | 2 | MRVL（マーベル・テクノロジー） | 逆張り: 急落の底（担当: コナーズ） | 65% | +2.1% | 97 | +0.8% | 買い（翌日の寄り付き） | 【買い】（コナーズ） |
 | 3 | NTAP（ネットアップ） | 逆張り: ボリンジャー メソッドIII | 68% | +1.5% | 96 | -0.4% | 買い（翌日の寄り付き） | 【買い】（ボリンジャー） |
 | 4（枠外） | DDOG（データドッグ） | 逆張り: 急落の底（担当: コナーズ） | 65% | +2.1% | 93 | +0.2% | 買い（翌日の寄り付き） | 【買い】（コナーズ） |
-| 5（枠外） | FTNT（フォーティネット） | 逆張り: ボリンジャー メソッドIII | 68% | +1.5% | 90 | +0.3% | 買い（翌日の寄り付き） | 【様子見】（ボリンジャー） |
+| 5（枠外） | FTNT（フォーティネット） | 逆張り: ボリンジャー メソッドIII | 68% | +1.5% | 90 | +0.3% | 買い（翌日の寄り付き） | 【買い】（ボリンジャー） |
 
 - 時間外: 前の取引日の引けから、引け後（米国東部時間16〜20時）の最後の値までの騰落率（Yahoo。±5%以上は太字）。寄り付きの値段は、表の注文の目安（前日の終値で計算）から大きくずれることがある。原因の見出しは「ニュースの見出し」の節。
 
@@ -34,104 +34,96 @@
 
 ## 0_テーマの局面_ワインスタイン
 
-1. **テーマ全体の局面**: 【ステージ1またはステージ3】
-30週移動平均線が「横ばい」であり、上昇トレンドの停止（天井形成）か底練りを示しているため（第2章）。
-
+1. **テーマ全体の局面**: 【ステージ1またはステージ3】（30週線が横ばいのため、第2章）
 2. **グループごとの局面**:
-- 半導体｜ステージ1または3｜30週線横ばい（第2章）
-- 半導体製造装置・材料・設計ソフト・計測｜ステージ1または3｜30週線横ばい（第2章）
-- AIサーバー・ストレージ・メモリ・端末｜ステージ2｜30週線上昇かつ線の上（第2章）
-- 光・通信・ネットワーク｜ステージ1または3｜30週線横ばい（第2章）
-- データセンターの電力・冷却・部品・受託製造・建設｜ステージ1または3｜30週線横ばい（第2章）
-- AIプラットフォーム・クラウド｜ステージ1または3｜30週線横ばい（第2章）
-- AIソフト・セキュリティ・ITサービス｜ステージ2｜30週線上昇かつ線の上（第2章）
-
-3. **転換の兆し**: 天井（ステージ3）の兆しあり。30週線の横ばい化（第2章）と、S&P500に対する相対的強さ（RS）の悪化（50日平均下＝市場より弱い）がわたしの本の警告基準に該当する（第4章）。（※「割合40%未満」や「S2急落」等の数値ルールはマニュアルに規定なし）
-
-4. **テーマの外**: なし（ヒートマップのデータ省略のため判定不能）
+- 半導体｜ステージ1または3｜30週線が横ばい（第2章）
+- 半導体製造装置・材料・設計ソフト・計測｜ステージ1または3｜30週線が横ばい（第2章）
+- AIサーバー・ストレージ・メモリ・端末｜ステージ2｜30週線が上昇（第2章）
+- 光・通信・ネットワーク｜ステージ1または3｜30週線が横ばい（第2章）
+- データセンターの電力・冷却・部品・受託製造・建設｜ステージ1または3｜30週線が横ばい（第2章）
+- AIプラットフォーム・クラウド｜ステージ1または3｜30週線が横ばい（第2章）
+- AIソフト・セキュリティ・ITサービス｜ステージ2｜30週線が上昇（第2章）
+3. **転換の兆し**: 出ている。30週線の横ばい推移、指数が移動平均線を下回り、対S&P500の相対的強さ（RS）が劣後する状態は天井（ステージ3）の兆しに当たる（第2章、第4章）。※提示された「50日線」や「割合40%未満」等の数値条件はマニュアルに規定なし。
+4. **テーマの外**: なし
 
 （全体の版が空の応答だったため、1〜2節だけの短い版で送り直した回答。ヒートマップ・急騰急落・ニュースは渡していない）
 
 ## 1_コナーズ_prompt_1
 
-## DELL（DELL）
+## DELL
 1. **投資判断**: 【買い】
 2. **止める理由の確認**:
-   - 本が禁じる形・状況｜なし｜株価は200日線の上側にあり急落後の買いに合致（第3章・第4章）
-   - 避けるべき時期（決算など）｜なし｜マニュアルに規定なし
-   - 悪材料｜なし｜悪材料による急落パニックこそ買い場（第2章・第3章）
+   - 本が禁じる形・状況｜なし｜200日線の上側かつ急落後のため（第3章・第4章）
+   - 避けるべき時期（決算など）｜なし｜決算回避の規定なし。禁止の月初3〜8日でもない（第11章）
+   - 悪材料｜なし｜悪報道による急落こそ買いの好機（第2章・第3章・第8章）
 3. **現状パターンと価格**:
    - 現状パターン: A（直近5日高値比-15.5%、RSI(2)=7.8で買い条件成立）
    - 本日の発注: 翌日の寄り付きで成行
-4. **注意点**: 終値が5日移動平均線を上回った翌営業日の寄り付きで手じまう（第12章）。
-
----
-💡 DELLの買付・手じまいルールについて、さらに詳細なバックテストデータや他のマーケットタイミング戦略との組み合わせを確認したい場合はお知らせください。
+4. **注意点**: 特になし
 
 ## 1_コナーズ_prompt_2
 
 ## MRVL
-1. **投資判断**: 【買い】
+1. **投資判断**: 【買い】（止める理由なし）
 2. **止める理由の確認**:
-   - 本が禁じる形・状況｜なし｜株価は200日線の上側（第4章, 判定用ルールブック）
-   - 避けるべき時期（決算など）｜なし｜次回決算まで32日（マニュアルに規定なし）
-   - 悪材料｜なし｜悪材料による急落・パニックは買い機会（第2章, 第3章, 第8章）
+   - 本が禁じる形・状況｜なし｜株価は200日線（183.19）の上側に位置（第4章）
+   - 避けるべき時期（決算など）｜なし｜次回決算32日後（マニュアルに規定なし）
+   - 悪材料｜なし｜悲観的なニュースや悪材料での急落買いを推奨（第2章・第8章）
 3. **現状パターンと価格**:
-   - 現状パターン: A（急落・RSI(2)8.9で条件成立）
+   - 現状パターン: A（急落の底・条件成立）
    - 本日の発注: 翌日の寄り付きで成行
 4. **注意点**: 特になし
 
 ## 1_コナーズ_prompt_3
 
 ## DDOG
-1. **投資判断**: 【買い】
+1. **投資判断**: 【買い】（注文を止める理由なし）
 2. **止める理由の確認**:
-   - 本が禁じる形・状況｜なし｜株価は200日線上推移（第4章）。急落・パニック買い（第3章・第9章）に合致。
-   - 避けるべき時期（決算など）｜なし｜決算発表前を理由とする買い見送り規定なし（マニュアルに規定なし）。
-   - 悪材料｜なし｜悪ニュースや下落は平均回帰の買いエッジであり見送り理由としない（第2章・第8章）。
+   - 本が禁じる形・状況｜なし｜200日線上側で急落を買う形（第4章、判定用ルールブック5節）
+   - 避けるべき時期（決算など）｜なし｜決算直前の見送り規定なし（判定用ルールブック12節）
+   - 悪材料｜なし｜悪材料下のパニック急落は買いのエッジ（第2・3・8章、10/30ニュース）
 3. **現状パターンと価格**:
-   - 現状パターン: A（5日高値比-16.2%、RSI(2)=3.2で条件成立）
+   - 現状パターン: A（最新足で条件成立）
    - 本日の発注: 翌日の寄り付きで成行
-4. **注意点**: 特になし
+4. **注意点**: 11/04に決算発表を控えているため跨ぎのボラティリティに注意
 
 ## 1_ボリンジャー_prompt_1
 
 ## AMD
-1. **投資判断**: 【保有継続】（ルールより早く手じまう理由なし）
+1. **投資判断**: 【保有継続】
 2. **止める理由の確認**:
-   - 本が禁じる形・状況｜なし｜下部バンド内側で損切り未到達（第20章）
-   - 避けるべき時期（決算など）｜なし｜決算前の手じまい規定なし（マニュアルに規定なし）
-   - 悪材料｜なし｜10/30急落は競合要因で自社悪材料なし（10/30）
+   - 本が禁じる形・状況｜なし｜第5章p.1441、第17章p.1557（一律損切り否定、下部バンド未達）
+   - 避けるべき時期（決算など）｜なし｜マニュアルに規定なし（第15章p.1540）
+   - 悪材料｜なし｜マニュアルに規定なし（23_用語集p.1632）
 3. **現状パターンと価格**:
-   - 現状パターン: C（10/21買付・保有中）
-   - 保有中: `売りの予約注文: 〈指値売り〉658.39（現在値比 +30.4%）`
-4. **注意点**: 損切り価格（467.47）の逆指値と上部バンド指値（658.39）の設定を維持すること。
+   - 保有中: `売りの予約注文: 指値 658.39（現在値比 +30.4%）`
+4. **注意点**: 大陰線での下落だが一律損切りは否定（第5章p.1441）。設定した損切り価格（467.47）と指値ルールを遵守。
 
 ## 1_ボリンジャー_prompt_2
 
 ## NTAP
-1. **投資判断**: 【買い】
+1. **投資判断**: 【買い】（ルール成立・見送り理由なし）
 2. **止める理由の確認**:
-   - 本が禁じる形・状況｜なし｜%b<0.05かつ21日II%>0の買条件を充足（第20章）
-   - 避けるべき時期（決算など）｜なし｜次回決算は32日後（買収・決算回避日数は規定なし、第4章）
-   - 悪材料｜なし｜個別銘柄の悪材料なし（第15章）
+   - 本が禁じる形・状況｜なし｜第20章, 判定用ルールブック
+   - 避けるべき時期（決算など）｜なし｜マニュアルに規定なし（決算まで32日）
+   - 悪材料｜判定不能｜ニュース省略のため（判定用ルールブック）
 3. **現状パターンと価格**:
-   - `現状パターン: A（メソッドIII条件成立）`
-   - `本日の発注: 翌日の寄り付きで成行`
-4. **注意点**: 直近安値付近にストップ（損切り）を置きリスクを限定すること（第20章）。
+   - 現状パターン: A（%b=0.010、21日II%=+0.016でメソッドIII成立）
+   - 本日の発注: 翌日の寄り付きで成行
+4. **注意点**: 直近安値付近に損切りストップを設定しリスクを限定する（第20章）。
 
 ## 1_ボリンジャー_prompt_3
 
 ## FTNT
-1. **投資判断**: 【様子見】（価格ギャップによる指標歪みのため）
+1. **投資判断**: 【買い】
 2. **止める理由の確認**:
-   - 本が禁じる形・状況｜あり｜価格ギャップで指標が歪む不適用環境（第22章 p.1605）
-   - 避けるべき時期（決算など）｜なし｜決算は10/28に通過済み
-   - 悪材料｜なし｜決算予想超えで悪材料なし（10/29–30）
+   - 本が禁じる形・状況｜なし｜メソッドIIIの条件を満たし否定条件なし（第20章）
+   - 避けるべき時期（決算など）｜なし｜マニュアルに規定なし（決算は通過済み）
+   - 悪材料｜なし｜マニュアルに規定なし
 3. **現状パターンと価格**:
-   - 現状パターン: A（%b=-0.175, 21日II%=+0.071が成立）
+   - 現状パターン: A（%b=-0.175, 21日II%=+0.071で成立）
    - 本日の発注: 翌日の寄り付きで成行
-4. **注意点**: 価格ギャップ直後のため指標の歪みに注意。
+4. **注意点**: 特になし
 
 # スキャン（数値と事実）
 
@@ -340,50 +332,69 @@
 
 # ニュース（サブエージェントの調査）
 
-# ニュース調査（2026-10-30の引け時点、調査日 2026-10-31）
-出典は headlines.md の見出し（媒体・日付）。Web検索は使っていない（見出しにない数字・内容は書いていない）。
+# ニュース調査（2026-10-30の引け時点。調査日 2026-11-02 JST）
+確認方法: 主に headlines.md の見出し。見出しで分からない監視外銘柄とDDOG決算日のみ検索。
 
 ## テーマ全体の下げの原因
-- 該当日（ナスダック100 −3%超で6月以来の下落率、1週で−5%以下のグループあり）。見出しで確認。
-- きっかけ: インテルの10-12月期の見通しが弱く（PC向けの低迷・供給の制約・現金の流出）、10/30に約−29%で過去最悪級の下げ（CNBC・Reuters・Bloomberg 10/29〜30）。アマゾンは売上・利益が予想に届かず、AI投資で現金の流れが悪化（Motley Fool・Investing.com 10/30）。アルファベットも10/28に売上・利益が予想未達。
-- 広がった先: 半導体（AMD・QCOM・ARM 約−10%〜−13%、IBD「Chip Stocks Plunge After Intel's Q4 Warning」10/30）、PC・サーバー（DELL −11%、HP −9%: 24/7 Wall St. 10/30）、光通信（Coherent −13%、Lumentum・Marvell −10%: 24/7 Wall St. 10/30）、メモリ（Sandisk −9%、WDC −8%、Seagate −7%、Micron −6%: 24/7 Wall St. 10/30）、ソフト（ServiceNow・Fortinet・Reddit が決算で急落）。
-- 信用: 「AI Debt Drives Wedge Between Corporate Bonds and Credit Hedges」（Bloomberg 10/30）、「AI Sell-Off Spreads Beyond Tech as Credit Risks Rise」（Action Forex 10/31）。テック企業のCDSの上昇が報じられている。
-- 経済指標・金利: 7-9月期GDP +3.4%（予想超え）、9月のPCE物価は加速（コア3.1%）、失業保険申請は57年ぶりの低水準、7-9月期の雇用コスト指数 +0.8%（予想どおり）（Reuters・CNBC・WSJ 10/29〜30）。FRBは10/28に据え置き。
-- 呼び名: 「コアウィーブ・ショック」が続く（マネーフォワード 10/31「コアウィーブショックは氷山の一角」）、「インテル決算ショック」（moomoo 10/30）。
-- 市場全体: ナスダック −747ポイント（Kiplinger 10/30）、ダウ −572ドル（OANDA 10/30）、Wall Streetは6月以来の大幅安（CBC 10/30）。ナスダック100は10月で2025年以来最悪の月（Business Insider 10/30）。
+- 当たる日（監視銘柄3銘柄以上が−5%以下、S2あり、早めの警告あり）。headlines.md の見出しで5観点を確認。
+- きっかけ: 10/29 引け後の Intel 決算（PC不振で弱い売上見通し、10/30 −28.6%、1974年以来最悪の日。Bloomberg/Yahoo Finance 10/30）と Amazon 決算（休暇期の見通しが予想未達、時間外−7%。Investing.com/株探 10/30）。「AIの現金流出（cash burn）懸念」でハイテク売り（Reuters 10/30）。
+- 広がった先: Dell・HPQ（PC低迷・メモリ不足、24/7 Wall St. 10/30）、Sandisk（好決算でも−9%時間外、Kioxiaが警告、Yahoo Finance/24/7 Wall St. 10/30）、光学（AAOI−15%、COHR−13%、LITE・MRVL−10%、24/7 Wall St. 10/30）、Datadog−12%、Reddit−29%（GoogleのAI検索でトラフィック減、CNBC/Reuters 10/30）。
+- 市場全体: Nasdaq 100が3%超下落し10月は2025年以来最悪の月、時価総額約1兆ドル消失、NY Times「6月以来最悪の日」（Business Insider/NBC/NYT 10/30）。Nasdaq 100は一時調整局面入り（24/7 Wall St. 10/31）。S&P500は下落するが下げは小さい。VIX・ハイイールド債の数値は見出しでは確認できず（取得不可）。
+- 信用: 「AI債務」関連の見出しあり（Bloomberg 10/30「AI Debt Drives Wedge Between Corporate Bonds and Credit Hedges」、WSJ経由 10/31 ヘッジ需要、Barclays 10/31 AI CDS取引）。個別の格下げ・社債急落の見出しは今回なし。
+- 呼び名: 日本の報道は10月の下げを「コアウィーブ・ショック」と呼ぶ（日経 10/30、東洋経済 10/30、マネーフォワード 10/31）。10/30の下げ自体はIntel・Amazon決算が直接の材料。
+- 経済指標・金利: 「エネルギー価格インフレと賃金リスク」で先物下落（Yahoo Finance 10/30）、金利上昇懸念で不動産株急落（野村證券 10/30）。個別の指標名・数値は見出しでは不明。
+- 大手決算: Nvidia・Salesforce決算通過後（野村證券 10/30）。TSMC・ASMLの当日材料は見出しになし。
 
 ## 引け後・時間外の材料
-- 保有・候補はどれも時間外で±1%以内（SNDK +0.7%、AMD +0.6%、MRVL +0.8%、NTAP −0.4%、FTNT +0.3%、DDOG +0.2%、DELL +0.1%）。時間外に±5%以上動いた監視銘柄はなし。
+- MRVL: 時間外 +0.8%。材料の新規見出しなし。10/28以降、Lumentum買収報道で下落（Barron's/Motley Fool 10/29）。10/31時点でも後期協議の報道（Yahoo Finance）。
+- SNDK: 時間外 +0.7%（引け後）。10/29引け後の決算後は−9%（株探 10/30）。
+- 保有・候補の±5%超の時間外はなし（AMD +0.6%、NTAP −0.4%、FTNT +0.3%、DDOG +0.2%、DELL +0.1%）。
+- 10/30引け後のその他: Okta がS&P500採用決定で急伸（Yahoo Finance 10/30）。Intel時間外−1.5%。10/31の先物はNasdaq −3.45%、メモリ株は逆行（BigGo 10/31）。
 
 ## SNDK（保有）
-- 10/29引け後: 1Qの決算は予想を上回り見通しを引き上げ、1→8の株式分割（11/20から）を発表（Yahoo Finance 10/29）。
-- 10/30: 好決算でも −9〜−13.5%。「投資家が決算の質を疑問視」（TradingPedia 10/30）、「キオクシアがNAND価格の急騰に警告」（Yahoo Finance 10/30）。
-- 悪材料: 確認できず（決算は予想超え。下げは決算後の売りとメモリ株全体の下げ）
+- 10/29引け後決算: Q1予想上振れ・ガイダンス引き上げ・8対1の株式分割発表（Yahoo Finance 10/30）。
+- 10/30 −13.5%: 決算の質への疑問（TradingPedia 10/30）、Kioxiaが NAND価格急騰に警告（Yahoo Finance 10/30）。WDC−8%、STX−7%、MU−6%も同時に下落（24/7 Wall St. 10/30）。
+- 決算: 直近（10/29発表）EPS Beat、ガイダンス 上回る（見出し）。売上は見出しで未確認。
+- 悪材料: あり（Kioxiaの警告、決算の質への疑問）。
 
 ## AMD（保有）
-- 10/30: −10.9%（日中−13%）。インテルの決算で見えた2つの問題（MarketWatch 10/30）、ハイテク株の売りの一部（Seeking Alpha 10/30）。
-- 悪材料: 確認できず（AMD自身の材料ではなく、インテルの見通しと業界全体の下げ）
+- 10/30 −10.9〜−13%: Intel決算の「2つの大きな問題」で下落（MarketWatch/Seeking Alpha 10/30）。Intelは10月に−45%で史上最悪の月（24/7 Wall St. 10/31）。
+- 次回決算は11/3（scan.md）。決算前に利益確定すべきかとの記事（Motley Fool 10/31）。
+- 悪材料: あり（Intel警告の波及。AMD固有の悪材料は確認できず）。
 
 ## DELL（候補）
-- 10/29〜30: インテルがPC市場の長引く低迷を示したことで急落（Yahoo Finance 10/29）、10/30 −11%（インテルのPC低迷とメモリ不足の警告がハードウェア株に波及: 24/7 Wall St. 10/30）。
-- 悪材料: 確認できず（DELL自身の発表ではなく業界の材料）
+- 10/29〜10/30: Intelの長引くPC低迷の警告でDELL・HPQが急落（Yahoo Finance 10/29）。メモリ不足も重荷、Dell−11%、HP−9%、HPE・Super Micro−7%（24/7 Wall St. 10/30）。
+- 悪材料: あり（業界全体の需要・メモリ不足懸念。Dell固有は確認できず）。
 
 ## MRVL（候補）
-- 10/29: ルメンタムの大型買収の交渉の報道で −12〜−13%（市場は買収を嫌気: Barron's・Yahoo Finance 10/29）。
-- 10/30: 光通信株とともに −8〜−10%（大手クラウドの設備投資の不安: 24/7 Wall St. 10/30）。
-- 悪材料: あり（ルメンタム買収の交渉の報道。会社の正式な発表は見出しでは確認できず）
+- 10/28〜10/29: LumentumをMarvellが買収する後期協議との報道で売り（Investing.com 10/28、Barron's 10/29「市場は買収案を嫌う」）。プレミアムは限定的との報道（GuruFocus 10/30）。
+- 10/30: ARM・QCOMと共に下落、MRVL−8〜10%（24/7 Wall St. 10/30）。
+- 悪材料: あり（大型買収報道による売り。公式発表は確認できず）。
 
 ## NTAP（候補）
-- 10/30: −8.8%。NetApp自身の原因の見出しは見つからなかった。同じ日にストレージ・メモリ株が下落（WDC −8%、Seagate −7%: 24/7 Wall St. 10/30）。
-- 悪材料: 確認できず
+- 10/30 −8.8%: 固有の原因の見出しは見つからなかった。IBDが「NetApp Gives Sell Signal」と報じ（IBD 10/30）、ストレージ・メモリ株全体の下げ（SNDK・WDC・STX）に連動。
+- 悪材料: 確認できず。
 
 ## DDOG（候補）
-- 10/30: −11.5%。MongoDB・Snowflakeなどとともにソフト株が下落（TradingView 10/30）、「Datadog Sinks 12%」（24/7 Wall St. 10/30）。10/29にWells Fargoは強気の評価を維持（AlphaStreet 10/29）。
-- 悪材料: 確認できず（DDOG自身の発表ではない）
+- 10/30 −11.5〜−12%: サイバー・ソフト株の下げ（CrowdStrike−4%、Palo Alto・Fortinet−3%。Binance 63億ドルのハッキング話題、24/7 Wall St. 10/30）。10/29にもWells Fargoが維持するも−5.5%（AlphaStreet 10/29）。
+- 次回決算: 11/4 寄り付き前、電話会議8:00 ET（Datadog公式発表 10/14、Finviz経由）。8月ガイダンスEPS 0.63〜0.65ドル（予想0.52）。
+- 悪材料: 確認できず（決算前のソフト株売りの波及）。
 
 ## FTNT（候補）
-- 10/28引け後の決算で、サービス売上の見通しが予想に届かず急落（Yahoo Finance 10/29）、「記録的な2日間の下げ」（Barron's 10/29）。10/30は −2.2%。
-- 悪材料: あり（10/28の決算でサービス売上の見通しが予想未達）
+- 10/28決算後に急落: サービス売上の見通しが予想未達（Yahoo Finance 10/29）、2日間の下げは過去最大級（Barron's 10/29）。10/30は −2.2%。
+- 悪材料: あり（サービス売上ガイダンス未達）。
+
+## 監視外の注目銘柄
+- APA・COP・TRGP（エネルギー）: 原油高が背景。Trumpがイランを再攻撃と発言した際にAPA +4.7%、COP +3.6%の報道（Stockopedia、日付不明）。ConocoPhillipsが原油高で上場来高値との報道（goldesel.de、日付不明）。10/30当日の個別材料は確認できず。TRGPは材料なし。10/30は Exxon 関連の言及あり（Barron's 10/30）。
+- LLY: 10/23頃から1週で約10%上昇し52週高値、Goldman Sachsが目標株価を1,413ドルに引き上げ（TIKR、日付は10/下旬）。Q3決算は10/29予定（検索結果）。10/30当日の値動きの原因は確認できず。
+- AMGN: 原因となる見出しは見つからなかった（製薬・ヘルスケア全般が上げ、業種表で Drug Manufacturers 1週+6.2%）。
+
+## 保有・候補以外のテーマ関連
+- RDDT −29.2%: 弱い見通し、GoogleのAI検索がトラフィックを圧迫（CNBC・Reuters 10/30）。
+- NOW: 10/28決算で売上見通しがAI懸念を再燃、翌日−18%台（Bloomberg 10/28、Yahoo Finance 10/29）。
+- COHR・LITE・ANET・CIEN: ハイパースケーラーの設備投資懸念で光学株が下落（24/7 Wall St. 10/30）。
+- 大手AI関連: BBC「AI支出が1兆ドルに迫る」(10/30)。TechCrunch「AI投資ブームにひび」(10/30)。Kioxia 2.2兆円の最高益でも株価下落（ANN 10/30）。
+- ミネルヴィニの候補・保有銘柄はなし。決算評価は対象外。
 
 # ニュースの見出し（プログラムが自動で取得）
 
@@ -409,81 +420,82 @@
 ### 市場全体（英語のまとめ記事）
 検索語: `stocks Wall Street close Nasdaq`
 - 10/30 Reuters | Wall Street closes sharply lower as AI cash burn fears spark tech selloff
-- 10/30 Kiplinger | Nasdaq Falls Another 747 Points as Intel Is Way Outside: Stock Market Today
-- 10/30 24/7 Wall St. | Stock Market Today: Nasdaq Futures Plunge 2% as Big Tech Sells Off
+- 10/30 NBC News | Tech stocks wipe out $1 trillion in value as concerns deepen about the AI boom
 - 10/30 CBS News | Nasdaq sheds more than 700 points as jittery investors pull back from tech stocks
-- 10/30 CBC | North American stocks sink, Wall Street suffers worst day since June amid tech sell-off
+- 10/30 The New York Times | Tech Stocks See Worst Day Since June, Pressuring Broader Market
+- 10/31 24/7 Wall St. | The Nasdaq 100 Briefly Fell Into a Correction as the AI Trade Cracks
 
 ### 市場全体（Stock Market Today）
 検索語: `"stock market today"`
 - 10/30 Business Insider | Nasdaq 100 plunges more than 3% to cap its worst month since 2025 after dismal tech earnings
-- 10/30 Beinsure | US Stock Market today: S&P 500, Nasdaq and Dow Jones forecast after AI selloff
-- 10/30 The Motley Fool | Stock Market Today, Oct. 30: Amazon Misses Revenue and Earnings Expectations
-- 10/31 Investor's Business Daily | Dow Jones Futures: Stock Market Sells Off As Apple, Palantir, Midterm Elections Loom; What To Do
+- 10/30 Yahoo Finance | US Stock Market Today: S&P 500 Futures Drop On Energy Inflation And Wage Risks
+- 10/30 Yahoo Finance | Stock Market Today: Nasdaq, S&P 500 Futures Slide as Amazon and Intel Plunge After Earnings
+- 10/30 Yahoo Finance | US Stock Futures Fall As AMZN, INTC Earnings Trigger Tech Sell-Off: NVDA, RDDT, RIVN, SFM In Focus
+- 10/31 Yahoo Finance | Why Intel (INTC) stock is trading lower today
 
 ### 市場全体（日本語のまとめ記事）
 検索語: `米国株式市場 OR NY株`
 - 10/30 Reuters | 米国株式市場＝急落、ナスダックは6月以来の下落率 ＡＩ投資に懸念 | ロイター
-- 10/30 Yahoo!ファイナンス | 米国株式市場は続落、ハイテク企業の低調な決算でAI巨大投資への警戒強まる／海外市場動向(フィスコ)
+- 10/30 野村證券 | エヌビディア、好決算でも時間外で株価下落 米国株式市場への影響と今後の注目点 野村證券・村山誠
+- 10/30 産経ニュース | NY株が4営業日ぶりに反落、132ドル安 AI関連銘柄の大きな売りが重荷
 - 10/30 ニューズウィーク日本版 | 米国株式市場＝急落、ナスダックは6月以来の下落率 ＡＩ投資に懸念
-- 10/30 OANDA証券 | ＮＹ株続落、５７２ドル安
-- 10/31 Moomoo | 昨夜、米国株式市場は大幅安となりました。保有していたNVDAのプットオプションは、一晩で22%の利益から含み損66.67%へと急落しました。ただし、心配はしていません。ボラティリティ（変動性）はオプション取引の一部ですから！
+- 10/31 株探 | 米国株式市場見通し：中間選挙後も当面は中東情勢の変化などリスク要因残る
 
 ### 半導体・AI株（英語）
 検索語: `chip stocks OR semiconductor stocks OR AI stocks`
-- 10/30 Investor's Business Daily | Chip Stocks Plunge After Intel’s Q4 Warning
 - 10/30 Yahoo Finance | 'Worrisome': Jim Cramer warns chip stocks have gone 'parabolic' — here are the defensive moves he's making now
+- 10/30 Investor's Business Daily | Chip Stocks Plunge After Intel’s Q4 Warning
 - 10/30 BBC | US tech stocks see sharp falls as AI spending nears $1tn
-- 10/30 Reuters | Intel on course for worst day ever, triggers global chip rout
+- 10/30 Bloomberg.com | Big Tech’s Deepening AI Funding Concerns Sink Asian Chip Stocks
 - 10/30 24/7 Wall St. | If AI Spending Slows in 2027, These Semiconductor Stocks Could Hold Up Best
 
 ### 信用（社債・借金）
 検索語: `AI debt OR bonds OR credit spreads OR CDS`
-- 10/30 Bloomberg | AI Debt Drives Wedge Between Corporate Bonds and Credit Hedges
-- 10/31 The Dark Side Of The Boom | The AI Credit Shock Is Spreading: The New Lines of Defence
+- 10/30 Bloomberg.com | AI Debt Drives Wedge Between Corporate Bonds and Credit Hedges
+- 10/31 Yahoo Finance UK | AI investors rush to hedge against potential tech market downturn - WSJ
+- 10/31 The Dark Side Of The Boom | The AI Credit Default Trade Has Arrived: Barclays Maps the Next Fault Lines in Wall Street's Financing Boom
+- 10/31 BigGo Finance | Wall Street's AI Trade Gets a Hedge: Put Options, CDS and Even Chip-Rental Derivatives
 - 10/31 Action Forex | AI Sell-Off Spreads Beyond Tech as Credit Risks Rise — Is a Deeper Market Correction Building?
-- 10/31 富途牛牛 | 2008 Redux! Understanding Wall Street’s Hottest Trade: AI CDS
-- 10/31 www.christophe-barraud.com | 10 AI Charts That Are Scaring Wall Street
 
 ### 「〇〇ショック」の呼び名（日本語）
 検索語: `ショック 株`
 - 10/30 日本経済新聞 | 際立つApple株の安定感 コアウィーブ・ショック後の「安全資産」に
+- 10/30 野村證券 | 金利上昇懸念で不動産株が急落 行き過ぎ感も、銀行株には追い風期待 野村證券ストラテジストが解説
 - 10/30 東洋経済オンライン | コアウィーブ･ショックに金利上昇…10月に大きく下げた日経平均株価の行方とアメリカ中間選挙後の焦点
 - 10/30 トウシル | ［動画］米中間選挙後の米国株市場 経験則（アノマリー）は今回も通用するか？
 - 10/31 マネーフォワード | コアウィーブショックは氷山の一角──AI相場が問われ始めた「お金の問題」
-- 10/31 Moomoo | ボラティリティの急騰と月末ショック：インプライド・ボラティリティとダマシのブレイクアウトへの対処法 📈🔥
 
 ### 引け後・時間外の動き（英語）
 検索語: `"after hours" OR "after the bell" OR "extended trading" stocks`
 - 10/30 Yahoo Finance | Okta jumps after-hours following tapped inclusion in the S&P 500
-- 10/30 BigGo Finance | US Stock Futures Fall Across the Board After Hours; Nasdaq Futures Plunge 3.45% as Memory Chip Stocks Buck the Trend
 - 10/30 Euronext Markets: Real-time Stock Market Data | live | Intel shares tumble after hours, hit by chip supply constraints, big cash burn
+- 10/30 Investing.com | Erste Group initiates Nasdaq stock with buy on extended trading
 - 10/30 Yahoo Finance | PGEN Stock Craters 27% After-Hours After Rival Inovio's Rare Disease Drug Receives FDA Approval
 - 10/30 BeInCrypto | Amazon's After-Hours Drop Leaves It Below Wall Street's Lowest Price Target
 - 10/30 Investing.com | Amazon shares drop as holiday forecast misses Wall Street targets
 - 10/30 Gotrade | Intel Plunges 21% on Weak PC Guidance, Chip Stocks Sell Off
+- 10/31 BigGo Finance | US Stock Futures Fall Across the Board After Hours; Nasdaq Futures Plunge 3.45% as Memory Chip Stocks Buck the Trend
 
 ### 引け後・時間外の動き（日本語）
 検索語: `時間外 決算 株`
+- 10/30 野村證券 | エヌビディア・セールスフォース決算通過 AI半導体市場へのインプリケーション 野村證券・村山誠
 - 10/30 株探 | サンディスク、好決算も時間外で９％安＝米国株個別
-- 10/30 Yahoo!ファイナンス | アマゾン、決算受け時間外で７％安＝米国株個別(株探ニュース)
-- 10/30 Yahoo!ニュース | インテル株が決算受け「29％急落」、AI投資への懸念でハイテク株売りが加速
 - 10/30 Yahoo!ファイナンス | サンディスク、好決算も時間外で９％安＝米国株個別(株探ニュース)
 - 10/30 Yahoo!ファイナンス | インテル、決算受け時間外で２５％安＝米国株個別(株探ニュース)
-- 10/30 BigGo ファイナンス | 米国株時間外取引で先物3指数そろって下落、ナスダック先物は3.45%急落、メモリー半導体株は逆行高
-- 10/30 BigGo ファイナンス | サンディスク、Q1売上高が予想超え 8対1の株式分割を発表も時間外株価は軟調
-- 10/30 BigGo ファイナンス | インテル決算見通しが大幅下方修正、時間外で25%急落 ナスダック100先物も2.4%急落しハイテク株売り圧力
+- 10/30 Yahoo!ファイナンス | アマゾン、決算受け時間外で７％安＝米国株個別(株探ニュース)
+- 10/30 Yahoo!ニュース | インテル株が決算受け「29％急落」、AI投資への懸念でハイテク株売りが加速
+- 10/30 Yahoo!ニュース | キオクシア2.2兆円最高益も株価大きく下落 専門家「市場の期待を満たすことが難しい」（テレビ朝日系（ANN））
 
 ### 買収・合併（英語）
 検索語: `acquisition OR acquire OR merger OR takeover chip OR semiconductor OR AI OR optical`
-- 10/30 Moomoo | Spider Digital Technology Ltd. and Starlink AI Acquisition Corp Announce Definitive Business Combination Agreement
-- 10/30 GuruFocus | Starlink AI Acquisition (OTAI) Announces Merger with Spider Digi
+- 10/30 The Verge | All the drama around AI’s takeover of mathematics
 - 10/30 FF News | Intuit to Acquire Sequence: Boosting AI-Native Revenue Management for Mid-Market Businesses
 - 10/30 Gadget Review | Nvidia’s $13 Billion AI Takeover Reportedly Has the Justice Department Asking Questions
-- 10/30 Infosecurity Magazine | Cybersecurity M&A Roundup: Proofpoint Agrees $6.3bn Varonis Acquisitio
-- 10/31 The Verge | All the drama around AI’s takeover of mathematics
+- 10/30 9to5Mac | Apple acquires Ascend․io, an agentic AI engineering startup
+- 10/30 Yahoo Finance | Salesforce to Acquire Defense Tech Firm Rune Technologies to Expand Military AI Logistics Capabilities
+- 10/31 Yahoo Finance | Lumentum Jumped on Reports Marvell Is in Late-Stage Talks to Acquire the Company. LITE Stock Is a Buy No Matter What.
 - 10/31 https://tech-insider.org/ | SpaceX-Tesla Merger: 50% Hurdle, Not a Chip Fab [2026]
-- 10/31 AOL.com | A SpaceX and Tesla Merger Will Only Be Successful If This One Thing Happens
+- 10/31 remio | Dark Matter House Numbers Acquisition Brings AI Agents Deeper Into Mortgage Workflows
 
 ## 2. 保有・候補・時間外で大きく動いた銘柄（2026-10-24〜2026-10-30 の見出し）
 
@@ -491,16 +503,16 @@
 
 #### Googleニュース
 検索語: `Sandisk stock (falls OR drops OR slides OR plunges OR sinks OR tumbles OR jumps OR soars OR why)`
-- 10/29 Yahoo Finance | Sandisk tops Q1 estimates and guides higher, sets 8-for-1 stock split
+- 10/30 Yahoo Finance | Sandisk tops Q1 estimates and guides higher, sets 8-for-1 stock split
 - 10/30 24/7 Wall St. | Sandisk Sinks 9% Despite Earnings Beat, Raised Guidance and 8-for-1 Split; Western Digital Tumbles 8%, Seagate Slides 7%, Micron Falls 6%
 - 10/30 TradingPedia | SanDisk Stock Falls as Investors Question Earnings Quality
 - 10/30 Yahoo Finance | SanDisk stock tumbles as Kioxia warns on NAND price surge
 
 #### Yahooファイナンス
 検索語: `SNDK`
-- 10/30 Barrons.com | Intel, Amazon, Nvidia, ExxonMobil, Sandisk, FedEx Freight, and More Stocks That Explain Today’s Market
-- 10/30 Barrons.com | Intel’s Plunge Today Makes It October’s Worst S&P 500 Stock. Accenture Is the Month’s Big Winner.
-- 10/30 Barrons.com | Nasdaq 100 Nears Correction Territory as AI Selloff Intensifies
+- 10/30 Investor's Business Daily | Stock Market Today: Nasdaq Slumps On Weak Intel Report; NetApp Gives Sell Signal
+- 10/31 Motley Fool | Sandisk Is Splitting Its Stock 8-for-1. History Says What Usually Happens to Stocks After a Split Announcement.
+- 10/31 Motley Fool | Sandisk: 3 Key Takeaways for Long-Term Investors
 
 ### AMD（Advanced Micro Devices, Inc.、保有、半導体、前日比 -10.9%、1週 -2.3%、時間外 +0.6%）
 
@@ -513,9 +525,9 @@
 
 #### Yahooファイナンス
 検索語: `AMD`
-- 10/30 24/7 Wall St. | Cathie Wood Shifts From AI Chips to Robinhood and Air Taxis in Latest ARK Trades
-- 10/30 Barrons.com | Big Homes, Big Loans
-- 10/30 Motley Fool | Intel Drags Down CPU Rivals. Is it a Buying Opportunity for AMD and Arm?
+- 10/31 24/7 Wall St. | Intel Is Down 45% in October, Its Worst Month Ever
+- 10/31 Barchart | What to Expect From AMD’s Q3 Earnings
+- 10/31 Motley Fool | Intel Has a Massive Warning for AMD Stock Investors. Is It Time to Book Profits Before Nov. 3?
 
 ### DELL（Dell Technologies Inc.、候補、AIサーバー・ストレージ・メモリ・端末、前日比 -10.8%、1週 -7.0%、時間外 +0.1%）
 
@@ -528,30 +540,31 @@
 
 #### Yahooファイナンス
 検索語: `DELL`
-- 10/30 24/7 Wall St. | Trump’s Commerce Department’s Intel Stake Fell By More Than $10 Billion In A Day As Stock Craters
+- 10/30 Barrons.com | Intel, Amazon, Nvidia, ExxonMobil, Sandisk, FedEx Freight, and More Stocks That Explain Today’s Market
+- 10/30 Barrons.com | Intel’s Earnings Disaster Spreads Across the Sector
 
 ### MRVL（Marvell Technology, Inc.、候補、半導体、前日比 -10.0%、1週 -14.1%、時間外 +0.8%）
 
 #### Googleニュース
 検索語: `Marvell stock (falls OR drops OR slides OR plunges OR sinks OR tumbles OR jumps OR soars OR why)`
 - 10/28 Investing.com | Why is Marvell Technology stock sliding today?
+- 10/29 Yahoo Finance | Why Is Marvell Technology Stock Falling 9.5% in Premarket Trading?
 - 10/29 Barron's | Marvell Stock Slides. Why the Market Hates the Idea of a Lumentum Buyout.
-- 10/29 Yahoo Finance | Marvell Sinks 12% as Investors Balk at Reported Lumentum Megadeal Talks
 - 10/29 The Motley Fool | Why Marvell Stock Is Down Today
 
 #### Yahooファイナンス
 検索語: `MRVL`
 - 10/30 24/7 Wall St. | 8 Months Ago, A Major Wall Street Bank Said Buy Marvell. It’s Up More Than 150%. Here’s Where We See the Stock Going
-- 10/30 24/7 Wall St. | Applied Optoelectronics Plunges 15%, Coherent Tumbles 13% as Hyperscaler Spending Fears Hit AI Optics Stocks; Lumentum and Marvell Sink 10%
-- 10/30 24/7 Wall St. | Broadcom Falls 5% Despite DA Davidson Upgrade on Anthropic and OpenAI IPO Hopes; Arm and Qualcomm Sink 10%, Marvell Drops 8%
+- 10/30 GuruFocus.com | Marvell-Lumentum Deal Reportedly Would Carry Limited Premium
+- 10/30 TheStreet | Marvell may buy its own laser supplier as investors pull back
 
 ### NTAP（NetApp, Inc.、候補、AIサーバー・ストレージ・メモリ・端末、前日比 -8.8%、1週 -7.6%、時間外 -0.4%）
 
 #### Googleニュース
 検索語: `NetApp stock (falls OR drops OR slides OR plunges OR sinks OR tumbles OR jumps OR soars OR why)`
 - 10/26 Yahoo Finance | NetApp (NTAP) stock is up, what you need to know
-- 10/26 24/7 Wall St. | Here Are Monday’s Top Wall Street Analyst Research Calls: Block, Boise Cascade, Equifax, FirstEnergy, Lockheed Martin, Lumentum Holdings, NetApp, Roper Technologies, Spotify, Technology, and More
 - 10/27 Trefis | Would You Have Held NetApp Stock All The Way Up?
+- 10/27 Forbes | NetApp
 - 10/29 Yahoo Finance | Investors Heavily Search NetApp, Inc. (NTAP): Here is What You Need to Know
 
 #### Yahooファイナンス
@@ -563,10 +576,10 @@
 
 #### Googleニュース
 検索語: `Datadog stock (falls OR drops OR slides OR plunges OR sinks OR tumbles OR jumps OR soars OR why)`
+- 10/26 Yahoo Finance | Datadog Set for 'Strong' Q3 Results, Oppenheimer Says
 - 10/27 Investing.com | Why is Datadog stock slipping today?
-- 10/29 ChartMill | Datadog (NASDAQ:DDOG) Meets Minervini Trend Template With High-Growth Momentum
 - 10/29 AlphaStreet | Why Datadog Is Dropping 5.5%: Wells Fargo Maintains Overweight
-- 10/30 TradingView | MongoDB, Datadog, Snowflake, Bandwidth, and DigitalOcean stocks trade down, what you need to know
+- 10/30 Benzinga | Datadog Inc (DDOG) Stock Price, Quote, News & History
 
 #### Yahooファイナンス
 検索語: `DDOG`
@@ -594,57 +607,59 @@
 
 #### Googleニュース
 検索語: `Reddit stock (falls OR drops OR slides OR plunges OR sinks OR tumbles OR jumps OR soars OR why)`
-- 10/29 Yahoo Finance | RDDT Stock Drops As Soft Q4 Revenue Guidance, Search Traffic Decline And Logged-In-Only Transition Weigh
 - 10/30 CNBC | Reddit stock plunges 29% after weak outlook, wrapping its worst day ever
-- 10/30 Barron's | Reddit’s Stock Sinks After Earnings. Here’s Why.
 - 10/30 Reuters | Reddit shares plunge as Google's AI search squeezes traffic
+- 10/30 Investor's Business Daily | Why Reddit Stock Is Tumbling Toward Its Worst Single Day Decline
+- 10/31 Yahoo Finance | Why Reddit (RDDT) stock is trading lower today
 
 #### Yahooファイナンス
 検索語: `RDDT`
-- 10/30 Benzinga | Day Trader Says Trading Is the Ultimate High-Income Skill. Once You Master It, You Can Live A Life You Always Wanted
-- 10/30 GuruFocus.com | Reddit Inc (RDDT) Q3 2026 Earnings Call Highlights: Revenue Surges 53% as $3 Billion Milestone ...
-- 10/30 Investing.com | Evercose ISI downgrades Reddit, says monetization may not offset traffic weakness
+- 10/31 Barchart | Reddit Sinks as Google's AI Shift Takes a Bite Out of Search Traffic. What's Next for RDDT Stock.
+- 10/31 Insider Monkey | 5 Best High Growth Stocks Outside Big Tech
+- 10/31 Simply Wall St. | 3 AI Infrastructure Stocks Retail Investors Are Watching After Google Search Shift
 
 ### NOW（ServiceNow, Inc.、AIソフト・セキュリティ・ITサービス、前日比 -4.1%、1週 -33.9%、時間外 +0.2%）
 
 #### Googleニュース
 検索語: `ServiceNow stock (falls OR drops OR slides OR plunges OR sinks OR tumbles OR jumps OR soars OR why)`
-- 10/28 Bloomberg | ServiceNow Falls After Quarterly Sales Outlook Revives AI Fears
-- 10/29 Yahoo Finance | Why ServiceNow (NOW) stock is nosediving
-- 10/29 MarketWatch | ServiceNow’s stock is on track for its worst day ever. Here’s what went wrong.
+- 10/28 Bloomberg.com | ServiceNow Falls After Quarterly Sales Outlook Revives AI Fears
+- 10/28 MarketWatch | ServiceNow’s stock slides as earnings miss overshadows a raised AI outlook
+- 10/29 Yahoo Finance | Why Is ServiceNow Stock Falling 18.7% in Premarket Trading?
 - 10/29 Investing.com | ServiceNow stock tumbles after earnings: Buy the dip or stay put?
 
 #### Yahooファイナンス
 検索語: `NOW`
 - 10/31 GuruFocus.com | InfoBeans Technologies Ltd (NSE:INFOBEAN) (Q2 2027) Earnings Call Highlights: 22% Constant ...
+- 10/31 Simply Wall St. | 3 AI Stocks With Earnings Growth Over 30%
+- 10/31 Simply Wall St. | 3 Cybersecurity Stocks Investors May Revisit After The Binance Hack
 
 ### INTC（Intel Corporation、半導体、前日比 -28.6%、1週 -24.4%、時間外 -1.5%）
 
 #### Googleニュース
 検索語: `Intel stock (falls OR drops OR slides OR plunges OR sinks OR tumbles OR jumps OR soars OR why)`
 - 10/29 CNBC | Intel stock plunges 21% as chipmaker blames PC slowdown for weak guidance
-- 10/29 Bloomberg | Intel Suffers Worst Stock Thrashing in Decades on Weak Forecast
 - 10/29 Financial Times | Intel shares fall 22% as weak sales outlook dents turnaround
-- 10/30 Yahoo Finance | Intel stock plunges nearly 30%, briefly on pace for its worst day since 1974
+- 10/30 Yahoo Finance | Intel stock plunges nearly 29%, its worst day since 1974
+- 10/30 Bloomberg | Intel Suffers Worst Stock Thrashing in Decades on Weak Forecast
 
 #### Yahooファイナンス
 検索語: `INTC`
-- 10/31 24/7 Wall St. | Intel Is Down 45% in October, Its Worst Month Ever
-- 10/31 Investor's Business Daily | EBay Leads Five Stocks Near Buy Points From Resilient Sectors
+- （新しい見出しなし）
 
 ### COHR（Coherent Corp.、光・通信・ネットワーク、前日比 -11.3%、1週 +0.5%、時間外 +1.1%）
 
 #### Googleニュース
 検索語: `Coherent stock (falls OR drops OR slides OR plunges OR sinks OR tumbles OR jumps OR soars OR why)`
 - 10/26 StreetInsider | Coherent stock jumps on new buy rating from StoneX and sector strength
-- 10/26 Investing.com | Why is Coherent stock surging today?
 - 10/29 Investing.com | Why is Coherent stock gaining today?
+- 10/30 24/7 Wall St. | Applied Optoelectronics Plunges 15%, Coherent Tumbles 13% as Hyperscaler Spending Fears Hit AI Optics Stocks; Lumentum and Marvell Sink 10%
+- 10/31 Yahoo Finance | Coherent Stock Fell 11% as Intel and Amazon Earnings Hit AI Hardware Stocks. Here’s Where the Stock Could Go
 
 #### Yahooファイナンス
 検索語: `COHR`
-- 10/29 24/7 Wall St. | Marvell Sinks 13%, Lumentum Jumps 6% on Reported Acquisition Talks; Coherent Holds Flat, Applied Optoelectronics Drops 3%
-- 10/29 GuruFocus.com | Marvell Stock Sinks While Lumentum Jumps on Report of Potential Takeover
 - 10/29 Investor's Business Daily | Lumentum Jumps, Fades On Marvell Buyout Report
+- 10/29 Simply Wall St. | Coherent (COHR) Stock May Be About Right As Analyst Interest Builds
+- 10/29 TIKR | AXT Soars 10% on $545 Million Tongmei Financing as Indium Phosphide Demand Is “Outpacing Supply”
 
 ### QCOM（QUALCOMM Incorporated、半導体、前日比 -11.1%、1週 -6.3%、時間外 +0.2%）
 
@@ -653,6 +668,7 @@
 - 10/26 Yahoo Finance | Qualcomm (QCOM) Laps the Stock Market: Here's Why
 - 10/30 Investing.com | Why is Qualcomm stock tumbling today?
 - 10/30 Seeking Alpha | QUALCOMM drops 12% as tech stocks fall (QCOM:NASDAQ)
+- 10/30 24/7 Wall St. | Broadcom Falls 5% Despite DA Davidson Upgrade on Anthropic and OpenAI IPO Hopes; Arm and Qualcomm Sink 10%, Marvell Drops 8%
 
 #### Yahooファイナンス
 検索語: `QCOM`
