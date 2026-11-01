@@ -2272,6 +2272,8 @@ def opt_stage(base, data, sim, days, ind, cache, part):
         _iv.append((_iv[-1] if _iv else 1.0) * (1 + (sum(rets_) / len(rets_) if rets_ else 0.0)))
         if len(_iv) >= 50 and n_all >= 10 and n_up / n_all < 0.40 and _iv[-1] < sum(_iv[-50:]) / 50:
             WARN.add(d)
+    _dd = {d: k for k, d in enumerate(days)}
+    WARN_BUY = {days[_dd[d] + 1] for d in WARN if d in _dd and _dd[d] + 1 < len(days)}   # 合図の日（前の取引日）が警告・S2で、翌日に買った日
     print(f"早めの警告・S2の日: 2015年〜の {sum(1 for d in days if d >= '2015-01-01' and d in WARN) / max(1, sum(1 for d in days if d >= '2015-01-01')):.0%}、"
           f"2026-10: {' '.join(d[5:] for d in days if d >= '2026-10-01' and d in WARN)}", file=sys.stderr)
     # 2026-10-25: AIを先に買うのを切り替える合図 (a) SOX÷SPY（終値の比）がその150日線より上の日
@@ -3195,6 +3197,39 @@ def opt_stage(base, data, sim, days, ind, cache, part):
                 trs = [{**t, "prio": (1 if t["x"] == "out" else 0,) + (t["prio"] if isinstance(t["prio"], tuple) else (t["prio"],))} for t in trs]
         return lev(trs, sp["etf"]), sp
 
+    if os.environ.get("OPT_TRADESTATS"):   # 2026-11-01 ユーザーの質問「今買っても損切りが続くのでは」: 警告・S2の日に買った売買の損切りの割合
+        nm_ = os.environ.get("OPT_REF", forms[-1][0])
+        trs, sp = make(dict(forms)[nm_])
+        i15 = "2015-01-01"
+        def stats(sel):
+            xs = [t for t in trs if not t.get("ghost") and t["in"] >= i15 and sel(t)]
+            if not xs:
+                return "なし"
+            rets = [t["path"][t["out"]] - 1 for t in xs]
+            st_ = sum(1 for t in xs if t.get("stopped")) / len(xs)
+            return f"{len(xs)}件、損切り {st_:.0%}、勝率 {sum(r > 0 for r in rets) / len(rets):.0%}、1回平均 {sum(rets) / len(rets):+.1%}"
+        print(f"== {nm_}（合図が出た全部の売買。2015年〜）", file=sys.stderr)
+        print("警告・S2の日に合図:", stats(lambda t: t["sd"] in WARN), file=sys.stderr)
+        print("それ以外の日に合図:", stats(lambda t: t["sd"] not in WARN), file=sys.stderr)
+        for rl in ("B", "C", "M", "V"):
+            print(f"  ルール{rl}: 警告・S2 {stats(lambda t: t['rule'] == rl and t['sd'] in WARN)} ／ それ以外 {stats(lambda t: t['rule'] == rl and t['sd'] not in WARN)}", file=sys.stderr)
+        a_w, a_n, c_w, c_n = [], [], [], []
+        for q in range(30):
+            lg = []
+            port(trs, 5000 + q, days[0], days[-1], sp["slots"], sp["cap"], sp["swap"], sp["abn"], log=lg)
+            ex = sorted([x for x in lg if x[0] != "eq" and x[0] >= i15 and x[1]], key=lambda x: x[0])
+            for x in ex:
+                (a_w if x[0] in WARN_BUY else a_n).append(x[2] == "stop")
+            for sx in (x for x in ex if x[2] == "stop"):
+                k = di.get(sx[1])
+                if k is None:
+                    continue
+                nxt = [y for y in ex if sx[1] < y[0] <= days[min(k + 20, len(days) - 1)]]
+                (c_w if sx[1] in WARN else c_n).extend(y[2] == "stop" for y in nxt)
+        pr = lambda v: f"{sum(v) / len(v):.0%}（{len(v)}件）" if v else "なし"
+        print(f"実際に買えた売買（30通りの合計）: 警告・S2の時期に買った売買の損切り {pr(a_w)} ／ それ以外 {pr(a_n)}", file=sys.stderr)
+        print(f"損切りの後20取引日以内に買った売買がまた損切り: 損切りが警告・S2の日 {pr(c_w)} ／ それ以外 {pr(c_n)}", file=sys.stderr)
+        return
     last3 = (dt.date.fromisoformat(days[-1]) - dt.timedelta(days=365 * 3)).isoformat()
     l3 = min(d for d in days if d >= last3)
     is_hi = max(d for d in days if d <= cb.IS_END)
