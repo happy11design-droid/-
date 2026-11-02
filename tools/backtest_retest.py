@@ -2273,6 +2273,12 @@ def opt_stage(base, data, sim, days, ind, cache, part):
         _iv.append((_iv[-1] if _iv else 1.0) * (1 + (sum(rets_) / len(rets_) if rets_ else 0.0)))
         if len(_iv) >= 50 and n_all >= 10 and n_up / n_all < 0.40 and _iv[-1] < sum(_iv[-50:]) / 50:
             WARN.add(d)
+    # 2026-11-02: テーマ（AI関連の業種のS&P500構成銘柄の等金額平均）の30週線（150日線）の局面。上昇＝線より上かつ線が20日前より上、下落＝線より下かつ下向き
+    THEME_REG = {}
+    for k in range(170, len(_iv)):
+        m_ = sum(_iv[k - 149:k + 1]) / 150
+        mp_ = sum(_iv[k - 169:k - 19]) / 150
+        THEME_REG[days[k]] = "上昇" if _iv[k] > m_ > mp_ else "下落" if _iv[k] < m_ < mp_ else "横ばい"
     _dd = {d: k for k, d in enumerate(days)}
     WARN_BUY = {days[_dd[d] + 1] for d in WARN if d in _dd and _dd[d] + 1 < len(days)}   # 合図の日（前の取引日）が警告・S2で、翌日に買った日
     print(f"早めの警告・S2の日: 2015年〜の {sum(1 for d in days if d >= '2015-01-01' and d in WARN) / max(1, sum(1 for d in days if d >= '2015-01-01')):.0%}、"
@@ -3250,6 +3256,12 @@ def opt_stage(base, data, sim, days, ind, cache, part):
             st_ = sum(1 for t in xs if t.get("stopped")) / len(xs)
             return f"{len(xs)}件、損切り {st_:.0%}、勝率 {sum(r > 0 for r in rets) / len(rets):.0%}、1回平均 {sum(rets) / len(rets):+.1%}"
         print(f"== {nm_}（合図が出た全部の売買。2015年〜）", file=sys.stderr)
+        print(f"テーマの局面（{days[-1]}）: {THEME_REG.get(days[-1])}。2015年〜の日の割合: "
+              + "、".join(f"{g} {sum(1 for d in days if d >= i15 and THEME_REG.get(d) == g) / max(1, sum(1 for d in days if d >= i15)):.0%}" for g in ("上昇", "横ばい", "下落")), file=sys.stderr)
+        for g in ("上昇", "横ばい", "下落"):
+            print(f"テーマが{g}の日に合図: {stats(lambda t: THEME_REG.get(t['sd']) == g)}", file=sys.stderr)
+            for rl in ("B", "C", "V"):
+                print(f"    ルール{rl}: {stats(lambda t: t['rule'] == rl and THEME_REG.get(t['sd']) == g)}", file=sys.stderr)
         print("警告・S2の日に合図:", stats(lambda t: t["sd"] in WARN), file=sys.stderr)
         print("それ以外の日に合図:", stats(lambda t: t["sd"] not in WARN), file=sys.stderr)
         for rl in ("B", "C", "M", "V"):
