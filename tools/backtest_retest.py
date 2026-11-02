@@ -2279,6 +2279,38 @@ def opt_stage(base, data, sim, days, ind, cache, part):
         m_ = sum(_iv[k - 149:k + 1]) / 150
         mp_ = sum(_iv[k - 169:k - 19]) / 150
         THEME_REG[days[k]] = "上昇" if _iv[k] > m_ > mp_ else "下落" if _iv[k] < m_ < mp_ else "横ばい"
+    # 2026-11-02 ユーザーの指示「明らかに下落局面で今エントリーしても下落するだけ。私の感覚との違いを数値化してバックテストして」
+    TH50, THTURN, SOXDN = set(), set(), set()
+    for k in range(60, len(_iv)):
+        m50_ = sum(_iv[k - 49:k + 1]) / 50
+        if _iv[k] < m50_:
+            TH50.add(days[k])
+            if _iv[k] < sum(_iv[k - 4:k + 1]) / 5:
+                THTURN.add(days[k])   # テーマが50日線より下で、まだ5日線も上回っていない（下げ止まっていない）
+    _sxc = dict(zip(_sxp["date"], _sxp["c"]))
+    _sxl = [_sxc.get(d) for d in days]
+    for k in range(70, len(days)):
+        if None in _sxl[k - 59:k + 1]:
+            continue
+        m_ = sum(_sxl[k - 49:k + 1]) / 50
+        mp_ = sum(_sxl[k - 59:k - 9]) / 50
+        if _sxl[k] < m_ and m_ < mp_:
+            SOXDN.add(days[k])
+    _spos = {}
+    def stock_dn(sym, d):   # その銘柄が合図の日に50日線より下で、50日線が10取引日前より下
+        s_ = data.get(sym)
+        if not s_:
+            return False
+        pos = _spos.setdefault(sym, {x: i for i, x in enumerate(s_["date"])})
+        k = pos.get(d)
+        if k is None or k < 60:
+            return False
+        c_ = s_["c"]
+        m_ = sum(c_[k - 49:k + 1]) / 50
+        return c_[k] < m_ and m_ < sum(c_[k - 59:k - 9]) / 50
+    SKIPSET = {"th50": TH50, "thturn": THTURN, "soxdn": SOXDN, "warn": WARN}
+    print("下げの局面の日（2015年〜）: " + "、".join(f"{k} {sum(1 for d in days if d >= '2015-01-01' and d in v) / max(1, sum(1 for d in days if d >= '2015-01-01')):.0%}"
+                                          for k, v in SKIPSET.items()), file=sys.stderr)
     _dd = {d: k for k, d in enumerate(days)}
     WARN_BUY = {days[_dd[d] + 1] for d in WARN if d in _dd and _dd[d] + 1 < len(days)}   # 合図の日（前の取引日）が警告・S2で、翌日に買った日
     print(f"早めの警告・S2の日: 2015年〜の {sum(1 for d in days if d >= '2015-01-01' and d in WARN) / max(1, sum(1 for d in days if d >= '2015-01-01')):.0%}、"
@@ -2886,6 +2918,8 @@ def opt_stage(base, data, sim, days, ind, cache, part):
             for t in sorted(by_in.get(d, []), key=lambda t: (t["prio"], rnd.random())):
                 if any(h["t"]["sym"] == t["sym"] for h in held):
                     continue
+                if t.get("maxheld") and len(held) + ghost_n >= t["maxheld"]:   # 下げの局面では保有をこの数まで（2026-11-02）
+                    continue
                 if t.get("ghost"):
                     if len(held) + ghost_n < slots and not (cap and sum(1 for h in held if ind.get(h["t"]["sym"]) == ind.get(t["sym"])) >= cap):
                         ghost_n += 1
@@ -2988,6 +3022,15 @@ def opt_stage(base, data, sim, days, ind, cache, part):
           "買う順番: RSの高い順（直近60取引日に終わった合図の成績がAIの方が良い日だけAIを先に）": {"prio": "rs_recent"},
           "買う順番: RSの高い順（早めの警告・S2の日はAI以外を先に）": {"prio": "rs_warn_out"},
           "テーマの外を、早めの警告・S2の日だけ先に買う": {"outfirst_warn": True},
+          "下げの局面では買わない①テーマ指数が50日線より下の日は全部のルールで買わない": {"skip": ("th50", "all")},
+          "下げの局面では買わない②テーマ指数が50日線より下の日は逆張りで買わない": {"skip": ("th50", "rev")},
+          "下げの局面では買わない③SOXが50日線より下で線が下向きの日は買わない": {"skip": ("soxdn", "all")},
+          "下げの局面では買わない④銘柄が50日線より下で線が下向きなら逆張りで買わない": {"skip": ("stock", "rev")},
+          "下げの局面では買わない⑤早めの警告かS2の日は買わない": {"skip": ("warn", "all")},
+          "下げの局面では買わない⑥テーマ指数が50日線より下なら5日線を上回るまで買わない": {"skip": ("thturn", "all")},
+          # 2026-11-02: 下げの局面では、買うのを空き枠の半分まで（保有2銘柄までになるように買う。1銘柄の金額は今と同じ資金の1/4）
+          "下げの局面では半分だけ買う⑦早めの警告かS2の日は保有2銘柄まで": {"half_in": "warn"},
+          "下げの局面では半分だけ買う⑧テーマ指数が50日線より下の日は保有2銘柄まで": {"half_in": "th50"},
           "買う順番: 続けての合図より初日の合図を先に、その中はRSの高い順": {"prio": "first_rs"},
           "買う順番: 順張りを先に、その中はRSの高い順": {"prio": "trend_rs"},
           "買う順番: 逆張りを先に、その中はRSの高い順": {"prio": "rev_rs"},
@@ -3196,6 +3239,15 @@ def opt_stage(base, data, sim, days, ind, cache, part):
                 return (hi_[0] - lo_[0]) / n_a > (hi_[2] - lo_[2]) / n_o
             gd_ = {}
             trs = [{**t, "ai_good": gd_.setdefault(t["sd"], good_(t["sd"]))} for t in trs]
+        if sp.get("skip"):   # 2026-11-02: 下げの局面では買わない（合図の日に判定）
+            k_, who_ = sp["skip"]
+            rr_ = ("B", "C") if who_ == "rev" else ("B", "C", "M", "V", "W")
+            if k_ == "stock":
+                trs = [t for t in trs if not (t["rule"] in rr_ and stock_dn(t["sym"], t["sd"]))]
+            else:
+                trs = [t for t in trs if not (t["rule"] in rr_ and t["sd"] in SKIPSET[k_])]
+        if sp.get("half_in"):   # 2026-11-02: 下げの局面の合図は、保有が2銘柄未満のときだけ買う（port の maxheld）
+            trs = [{**t, "maxheld": 2} if t["sd"] in SKIPSET[sp["half_in"]] else t for t in trs]
         trs = [{**t, "prio": PR[sp["prio"]](t)} for t in trs]
         if sp["resv"]:   # 予約（B）の約定は、同じ日の成行（A、寄り付き）の後（毎朝の theme_scan.py の買う順番と同じ）
             trs = [{**t, "prio": (1 if t["x"] == "resv" else 0,) + (t["prio"] if isinstance(t["prio"], tuple) else (t["prio"],))} for t in trs]
@@ -3262,6 +3314,16 @@ def opt_stage(base, data, sim, days, ind, cache, part):
             print(f"テーマが{g}の日に合図: {stats(lambda t: THEME_REG.get(t['sd']) == g)}", file=sys.stderr)
             for rl in ("B", "C", "V"):
                 print(f"    ルール{rl}: {stats(lambda t: t['rule'] == rl and THEME_REG.get(t['sd']) == g)}", file=sys.stderr)
+        def deeper(sel):   # 買った後10取引日のうちに、買値から−5%以上さらに下げた割合
+            xs = [t for t in trs if not t.get("ghost") and t["in"] >= i15 and sel(t)]
+            if not xs:
+                return "なし"
+            dn = sum(1 for t in xs if min(v for d, v in sorted(t["path"].items())[:10]) <= 0.95)
+            return f"{dn / len(xs):.0%}"
+        for lab_, sel_ in (("テーマ指数が50日線より下", lambda t: t["sd"] in TH50), ("SOXが50日線より下で下向き", lambda t: t["sd"] in SOXDN),
+                           ("銘柄が50日線より下で下向き（逆張り）", lambda t: t["rule"] in ("B", "C") and stock_dn(t["sym"], t["sd"])),
+                           ("テーマが50日線より下で5日線も下", lambda t: t["sd"] in THTURN)):
+            print(f"【{lab_}】の日の合図: {stats(sel_)}、10日以内にさらに−5%: {deeper(sel_)} ／ それ以外: {stats(lambda t: not sel_(t))}、さらに−5%: {deeper(lambda t: not sel_(t))}", file=sys.stderr)
         print("警告・S2の日に合図:", stats(lambda t: t["sd"] in WARN), file=sys.stderr)
         print("それ以外の日に合図:", stats(lambda t: t["sd"] not in WARN), file=sys.stderr)
         for rl in ("B", "C", "M", "V"):
