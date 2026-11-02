@@ -78,11 +78,31 @@ def cmd_fetch(a):
     open(mpath, "w").write(txt)
     members = load_members(a.cache)
     syms = sorted(members) + ["SPY", "QQQ", "^VIX"]
+    # 2026-11-01: バックテスト（backtest_retest.py など）が使う指数・ETFと、S&P500の履歴にない監視銘柄。以前は別に取っていて、
+    # 空のキャッシュから `fetch` だけではバックテストが動かなかった（^GSPC がなくて落ちる）。取得済みのものは飛ばす
+    extra = ["^GSPC", "^NDX", "^SOX", "^TNX", "HYG", "IEI", "LQD", "IEF", "BKLN"]
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import backtest_theme as _bth
+        extra += sorted(_bth.load_watchlist())
+    except Exception as e:
+        print("監視銘柄の一覧を読めなかった（指数・ETFだけ追加）:", e, file=sys.stderr)
+    syms += [s for s in dict.fromkeys(extra) if s not in set(syms)]
     ysym = lambda s: s.replace(".", "-")
     with ThreadPoolExecutor(8) as ex:
         ok = list(ex.map(lambda s: fetch_one(ysym(s), os.path.join(a.cache, "prices", s + ".json")), syms))
     missing = [s for s, k in zip(syms, ok) if not k]
     open(os.path.join(a.cache, "missing.txt"), "w").write("\n".join(missing))
+    # 2026-11-01: 業種の一覧（universe.json）がキャッシュになければ、リポジトリの `新分析ツール/業種一覧.json`（ティッカー→業種。元のキャッシュの universe.json から作ったもの）から作る。
+    # バックテストは業種（AI・半導体を先に買う・同じ業種2銘柄まで）だけを使う。セクター・時価総額・名前は元の universe.json にしかないので空にする
+    upath = os.path.join(a.cache, "universe.json")
+    if not os.path.exists(upath):
+        try:
+            ind = json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "新分析ツール", "業種一覧.json"), encoding="utf-8"))
+            json.dump({s: {"industry": i, "sector": "", "name": "", "cap": 0} for s, i in ind.items()}, open(upath, "w"), ensure_ascii=False)
+            print(f"業種の一覧 universe.json を {len(ind)} 銘柄で作成（リポジトリの業種一覧.json から。セクターは空）")
+        except Exception as e:
+            print("universe.json を作れなかった:", e, file=sys.stderr)
     print(f"対象 {len(syms)} 銘柄、取得 {len(syms) - len(missing)}、取得不可 {len(missing)}")
 
 

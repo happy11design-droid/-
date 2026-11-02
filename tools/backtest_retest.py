@@ -2433,7 +2433,19 @@ def opt_stage(base, data, sim, days, ind, cache, part):
 
     cache_tr = {}
     def ddh(s, j):   # 合図の日の終値が、直近20・60・252取引日の高値（日中の高値）からどれだけ下か（2026-10-20 ユーザーの指示「直近の高値からより多く下落している順」）
-        return {f"dh{n}": (s["c"][j] / max(s["h"][max(0, j - n + 1):j + 1]) - 1) if j >= 0 else 0.0 for n in (20, 60, 252)}
+        out = {f"dh{n}": (s["c"][j] / max(s["h"][max(0, j - n + 1):j + 1]) - 1) if j >= 0 else 0.0 for n in (20, 60, 252)}
+        # 2026-11-01 ユーザーの質問「上昇率が高い銘柄順など年率が上がる選定方法はないか」: 買う順番に使う「上昇率の測り方」違い（RSは63・126・189・252日の上昇率の加重合計の百分位）。
+        # 252日分の履歴がない銘柄は RS と同じく最後に回す（-9.0）。m20=20日、m63=3カ月、m126=6カ月、mskip=12カ月−直近1カ月（20日前から252日前まで）、mvol=3カ月上昇率÷63日の日次変動の標準偏差（値動きが荒れていない上昇を先に）
+        c = s["c"]
+        if j >= 252:
+            rets = [c[k] / c[k - 1] - 1 for k in range(j - 62, j + 1)]
+            mu = sum(rets) / len(rets)
+            sd = (sum((r - mu) ** 2 for r in rets) / (len(rets) - 1)) ** 0.5
+            out.update({"m20": c[j] / c[j - 20] - 1, "m63": c[j] / c[j - 63] - 1, "m126": c[j] / c[j - 126] - 1,
+                        "mskip": c[j - 20] / c[j - 252] - 1, "mvol": (c[j] / c[j - 63] - 1) / max(sd, 1e-6)})
+        else:
+            out.update({k: -9.0 for k in ("m20", "m63", "m126", "mskip", "mvol")})
+        return out
     def gem_trade(b, s, mode, stop):
         """Geminiの手順（2026-10-20 ユーザーの指示）で、押し目・急落の底の合図の後の買い方・売り方を置き換える。
         mode = (買い方, 売り方)。買い方 "g3": 合図の日から10取引日以内の反転の足（陽線で、前日の高値を終値で上抜くか、下ヒゲが実体の2倍以上で終値が値幅の上半分か、陽の抱き線）の翌日の寄り付きで30%、
@@ -2953,6 +2965,13 @@ def opt_stage(base, data, sim, days, ind, cache, part):
           "rsb10_dh60": lambda t: (0 if t["ai"] else 1, -int(round(t["rs"]) // 10), t.get("dh60", 0.0)),
           "rsb10_dh252": lambda t: (0 if t["ai"] else 1, -int(round(t["rs"]) // 10), t.get("dh252", 0.0)),
           "rsb20_dh60": lambda t: (0 if t["ai"] else 1, -int(round(t["rs"]) // 20), t.get("dh60", 0.0)),
+          # 2026-11-01: 上昇率の測り方を変えた順。AI半導体を先にするのは今のルール（RSの高い順）と同じ。値が大きい順（nearhi は 52週の高値に近い順＝dh252 が 0 に近い順）
+          "m20": lambda t: (0 if t["ai"] else 1, -t.get("m20", -9.0)),
+          "m63": lambda t: (0 if t["ai"] else 1, -t.get("m63", -9.0)),
+          "m126": lambda t: (0 if t["ai"] else 1, -t.get("m126", -9.0)),
+          "mskip": lambda t: (0 if t["ai"] else 1, -t.get("mskip", -9.0)),
+          "mvol": lambda t: (0 if t["ai"] else 1, -t.get("mvol", -9.0)),
+          "nearhi": lambda t: (0 if t["ai"] else 1, -t.get("dh252", -9.0)),
           "dh20": lambda t: (0 if t["ai"] else 1, t.get("dh20", 0.0)),
           "dh60": lambda t: (0 if t["ai"] else 1, t.get("dh60", 0.0)),
           "dh252": lambda t: (0 if t["ai"] else 1, t.get("dh252", 0.0)),
@@ -3038,6 +3057,7 @@ def opt_stage(base, data, sim, days, ind, cache, part):
     V1["急落の底をRSI(2)≦15にする（OPT_C15=1 で動かす）"] = {"c15": True}
     # 見送った候補の確かめ直し（2026-10-17）: 買い方・新しい合図・買う順番
     V1["テーマの外の強い銘柄で空き枠を埋める（OPT_OUTSIDE=1、毎朝のツールと同じ）"] = {"outside": True}
+    V1["テーマの外も監視銘柄と混ぜて、全体でRSの高い順に買う（OPT_OUTSIDE=1）"] = {"outside": "mixed"}
     # 保有全体の異常（2026-10-18 ユーザーの指示「全ての銘柄が損切りに達した異常事態を対策できなかったことが問題」）
     for n_, x_, md_ in ((2, 0.08, "loser"), (2, 0.10, "loser"), (3, 0.08, "loser"), (3, 0.10, "loser"), ("all", 0.05, "loser"), ("all", 0.08, "loser"),
                         (2, 0.08, "all"), (3, 0.10, "all")):
@@ -3119,6 +3139,12 @@ def opt_stage(base, data, sim, days, ind, cache, part):
     V1["予約（B）も買う（押し目・ミネルヴィニ・新高値V2。OPT_RESV=1）"] = {"resv": ("B", "M", "V")}
     V1["予約（B）は押し目だけ買う（OPT_RESV=1）"] = {"resv": ("B",)}
     V1["予約（B）は順張り（ミネルヴィニ・新高値V2）だけ買う（OPT_RESV=1）"] = {"resv": ("M", "V")}
+    V1["買う順番: 3カ月の上昇率の高い順"] = {"prio": "m63"}
+    V1["買う順番: 6カ月の上昇率の高い順"] = {"prio": "m126"}
+    V1["買う順番: 直近1カ月（20日）の上昇率の高い順"] = {"prio": "m20"}
+    V1["買う順番: 12カ月−直近1カ月の上昇率の高い順"] = {"prio": "mskip"}
+    V1["買う順番: 3カ月の上昇率÷値動きの大きさの高い順"] = {"prio": "mvol"}
+    V1["買う順番: 52週の高値に近い順"] = {"prio": "nearhi"}
     V1["買う順番: 20日の高値からの下落率が大きい順"] = {"prio": "dh20"}
     V1["買う順番: 60日の高値からの下落率が大きい順"] = {"prio": "dh60"}
     V1["買う順番: 52週の高値からの下落率が大きい順"] = {"prio": "dh252"}
@@ -3196,6 +3222,8 @@ def opt_stage(base, data, sim, days, ind, cache, part):
         if sp["outside"]:   # テーマの外の候補は、同じ日の監視銘柄の候補の後（毎朝の theme_scan.py と同じ）
             if sp.get("outfirst_warn"):   # 2026-10-31: 早めの警告・S2の日だけ、テーマの外の候補を先に
                 trs = [{**t, "prio": (0 if (t["x"] == "out") == (t["sd"] in WARN) else 1,) + (t["prio"] if isinstance(t["prio"], tuple) else (t["prio"],))} for t in trs]
+            elif sp["outside"] == "mixed":   # 2026-11-02 ユーザーの質問「テーマの外でもRSが高い順に並べた方が年率は良くなるか」: 監視銘柄とテーマの外を分けずに、全体でRSの高い順（AI半導体を先は同じ）
+                pass
             else:
                 trs = [{**t, "prio": (1 if t["x"] == "out" else 0,) + (t["prio"] if isinstance(t["prio"], tuple) else (t["prio"],))} for t in trs]
         return lev(trs, sp["etf"]), sp
