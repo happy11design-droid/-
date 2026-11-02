@@ -2248,6 +2248,7 @@ def opt_stage(base, data, sim, days, ind, cache, part):
     drag = {s: -x["drag"] for s, x in tab.items() if isinstance(x, dict) and "drag" in x}
     HAS = {s for s, d in drag.items() if d < 0.15}
     up, prev = etf_up_days(cache)
+    DDSPLIT_ = bool(os.environ.get("OPT_DDSPLIT"))
     up_sox = etf_up_days(cache, "^SOX")[0]   # 2026-10-23: テーマだけが崩れた今回（S&P500は上昇の局面）も2倍ETFで買っていた
     # 2026-10-31: 毎朝のツールの「早めの警告」（S3: AI関連の業種のS&P500構成銘柄のうち50日線より上が40%未満、かつその等金額平均が50日線より下。
     # themedrop_stage と同じ。後知恵なし）か「テーマ全体の急落」（S2: SOXが直近60取引日の最高値から−10%以上）の日。合図の日の引けで判定
@@ -2918,6 +2919,8 @@ def opt_stage(base, data, sim, days, ind, cache, part):
             mdd = max(mdd, 1 - eq / peak)
             if log is not None:
                 log.append(("eq", d, eq))
+                if DDSPLIT_:   # 保有を買値で数えた資金（確定した損益だけ。2026-11-02。OPT_DDSPLIT のときだけ。ほかの集計は "eq" 以外を売買として読むため）
+                    log.append(("req", d, cash + sum(h["size"] for h in held)))
         if log is not None:
             for h in held:
                 log.append((h["t"]["in"], None, "open", h["t"]["sym"]))
@@ -3197,6 +3200,44 @@ def opt_stage(base, data, sim, days, ind, cache, part):
                 trs = [{**t, "prio": (1 if t["x"] == "out" else 0,) + (t["prio"] if isinstance(t["prio"], tuple) else (t["prio"],))} for t in trs]
         return lev(trs, sp["etf"]), sp
 
+    if os.environ.get("OPT_DDSPLIT"):   # 2026-11-02 ユーザーの質問「過去の最大の損失と比べて、今回は損切りした分と含み損の割合はどう違うか」
+        import statistics as _st
+        nm_ = os.environ.get("OPT_REF", forms[-1][0])
+        trs, sp = make(dict(forms)[nm_])
+        i15 = min(k for k, d in enumerate(days) if d >= "2015-01-01")
+        res = []
+        for q in range(30):
+            lg = []
+            port(trs, 5000 + q, days[0], days[-1], sp["slots"], sp["cap"], sp["swap"], sp["abn"], log=lg)
+            eqd = {x[1]: x[2] for x in lg if x[0] == "eq"}
+            rqd = {x[1]: x[2] for x in lg if x[0] == "req"}
+            stops = sorted(x[1] for x in lg if x[0] not in ("eq", "req") and x[2] == "stop" and x[1])
+            ds = [d for d in days[i15:] if d in eqd]
+            def split(pk, tr):
+                e0, e1, r1 = eqd[pk], eqd[tr], rqd[tr]
+                return {"peak": pk, "trough": tr, "total": e1 / e0 - 1, "real": (r1 - e0) / e0, "unreal": (e1 - r1) / e0,
+                        "stops": sum(1 for x in stops if pk < x <= tr)}
+            # 2015年〜の最大の下げ（含み損込み）
+            pk, best, cur_pk = ds[0], (0, None, None), ds[0]
+            for d in ds:
+                if eqd[d] >= eqd[cur_pk]:
+                    cur_pk = d
+                dd_ = eqd[d] / eqd[cur_pk] - 1
+                if dd_ < best[0]:
+                    best = (dd_, cur_pk, d)
+            mx = split(best[1], best[2])
+            # 今回: 2026-09-01 以降の最高値から、その後の一番低い日と、最後の日
+            rec = [d for d in ds if d >= "2026-09-01"]
+            pk2 = max(rec, key=lambda d: eqd[d])
+            tr2 = min((d for d in rec if d >= pk2), key=lambda d: eqd[d])
+            res.append((mx, split(pk2, tr2), split(pk2, ds[-1])))
+        f = lambda v: f"{_st.median(v) * 100:+.1f}%"
+        for lab, k in (("2015年〜の最大の下げ（一番低い日）", 0), ("今回（2026-09以降の高値から一番低い日）", 1), (f"今回（{days[-1]} の引け）", 2)):
+            xs = [r[k] for r in res]
+            print(f"{lab}: 合計 {f([x['total'] for x in xs])}（確定した分 {f([x['real'] for x in xs])}、含み損の分 {f([x['unreal'] for x in xs])}）、"
+                  f"その間の損切り {_st.median([x['stops'] for x in xs]):.0f}回。乱数1通り目: {xs[0]['peak']}→{xs[0]['trough']} "
+                  f"合計 {xs[0]['total'] * 100:+.1f}%（確定 {xs[0]['real'] * 100:+.1f}%・含み損 {xs[0]['unreal'] * 100:+.1f}%、損切り {xs[0]['stops']}回）", file=sys.stderr)
+        return
     if os.environ.get("OPT_TRADESTATS"):   # 2026-11-01 ユーザーの質問「今買っても損切りが続くのでは」: 警告・S2の日に買った売買の損切りの割合
         nm_ = os.environ.get("OPT_REF", forms[-1][0])
         trs, sp = make(dict(forms)[nm_])
