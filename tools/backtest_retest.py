@@ -3054,6 +3054,7 @@ def opt_stage(base, data, sim, days, ind, cache, part):
     V1["急落の底をRSI(2)≦15にする（OPT_C15=1 で動かす）"] = {"c15": True}
     # 見送った候補の確かめ直し（2026-10-17）: 買い方・新しい合図・買う順番
     V1["テーマの外の強い銘柄で空き枠を埋める（OPT_OUTSIDE=1、毎朝のツールと同じ）"] = {"outside": True}
+    V1["テーマの外も監視銘柄と混ぜて、全体でRSの高い順に買う（OPT_OUTSIDE=1）"] = {"outside": "mixed"}
     # 保有全体の異常（2026-10-18 ユーザーの指示「全ての銘柄が損切りに達した異常事態を対策できなかったことが問題」）
     for n_, x_, md_ in ((2, 0.08, "loser"), (2, 0.10, "loser"), (3, 0.08, "loser"), (3, 0.10, "loser"), ("all", 0.05, "loser"), ("all", 0.08, "loser"),
                         (2, 0.08, "all"), (3, 0.10, "all")):
@@ -3218,6 +3219,8 @@ def opt_stage(base, data, sim, days, ind, cache, part):
         if sp["outside"]:   # テーマの外の候補は、同じ日の監視銘柄の候補の後（毎朝の theme_scan.py と同じ）
             if sp.get("outfirst_warn"):   # 2026-10-31: 早めの警告・S2の日だけ、テーマの外の候補を先に
                 trs = [{**t, "prio": (0 if (t["x"] == "out") == (t["sd"] in WARN) else 1,) + (t["prio"] if isinstance(t["prio"], tuple) else (t["prio"],))} for t in trs]
+            elif sp["outside"] == "mixed":   # 2026-11-02 ユーザーの質問「テーマの外でもRSが高い順に並べた方が年率は良くなるか」: 監視銘柄とテーマの外を分けずに、全体でRSの高い順（AI半導体を先は同じ）
+                pass
             else:
                 trs = [{**t, "prio": (1 if t["x"] == "out" else 0,) + (t["prio"] if isinstance(t["prio"], tuple) else (t["prio"],))} for t in trs]
         return lev(trs, sp["etf"]), sp
