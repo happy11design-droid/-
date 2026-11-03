@@ -2736,8 +2736,8 @@ def opt_stage(base, data, sim, days, ind, cache, part):
         return None
 
     def stock_trades(stop, rel8=False, xsell=None, close_stop=False, hotwait=False, c10=False, kx=None, tstop=None, pstop=None, m30=False, lim2=False, hadd=None, gem=None, stg=None, rr=None,
-                     bmid=False, c20=False):
-        key_ = (stop, rel8, xsell, close_stop, hotwait, c10, kx, tstop, pstop, m30, lim2, hadd, gem, stg, rr, bmid, c20)
+                     bmid=False, c20=False, delay=None):
+        key_ = (stop, rel8, xsell, close_stop, hotwait, c10, kx, tstop, pstop, m30, lim2, hadd, gem, stg, rr, bmid, c20, delay)
         if key_ in cache_tr:
             return cache_tr[key_]
         out = []
@@ -2799,6 +2799,36 @@ def opt_stage(base, data, sim, days, ind, cache, part):
                     b = {**b, "px": lim_, "i1": x_[0], "xp": x_[1]}
                 else:
                     b = {**b, "px": lim_}
+            if delay and b["rule"] == delay[0]:   # 2026-11-03 ユーザーの指示: 押し目・急落の底を、合図から遅らせて買う（delay=(ルール, N日)）か、合図の日の終値の x 下の指値で買う（(ルール, "lim", x, 日数)）
+                i0_, n_ = b["i0"], len(s["c"])
+                def _sold(j):   # その日までに売りの条件がそろっていたか（押し目: 上のバンドに届く・%b≧1、急落の底: 5日線を上回った翌日の寄り付き）
+                    if b["rule"] == "C":
+                        return j >= b["i1"]
+                    return any((s["bb_up"][q - 1] is not None and s["h"][q] >= s["bb_up"][q - 1]) or (s["pctb"][q - 1] is not None and s["pctb"][q - 1] >= 1.0)
+                               for q in range(i0_ + 1, j + 1))
+                if delay[1] == "lim":
+                    lim_, k_ = s["c"][i0_ - 1] * (1 - delay[2]), None
+                    for j in range(i0_, min(i0_ + delay[3], n_ - 1)):
+                        if _sold(j):
+                            break
+                        if s["l"][j] <= lim_:
+                            k_ = j
+                            break
+                    if k_ is None:
+                        continue
+                    px_ = min(s["o"][k_], lim_)
+                else:
+                    k_ = i0_ + delay[1]
+                    if k_ >= n_ - 1 or _sold(k_):
+                        continue
+                    px_ = s["o"][k_]
+                if b["rule"] == "B":   # 押し目の手じまい（損切りは買った値段の15%下）を、買った日から計算し直す
+                    x_ = sim.b3x({"sym": b["sym"], "in": s["date"][k_], "px": px_})
+                    if not x_:
+                        continue
+                    b = {**b, "i0": k_, "px": px_, "i1": x_[0], "xp": x_[1]}
+                else:   # 急落の底の手じまい（5日線）はそのまま。損切りは下の共通の処理で買った値段から
+                    b = {**b, "i0": k_, "px": px_}
             if hotwait and b["rule"] in ("M", "V"):   # 過熱（合図の日の終値が+2σより上かつRSI(14)>70）の順張りは2日待って寄り付きで買う。待つ間に抜けた水準より下に戻ったら見送る（hot_stage と同じ）
                 j = b["i0"] - 1
                 r14 = (s.get("rsi14") or [None] * len(s["c"]))[j]
@@ -3084,6 +3114,18 @@ def opt_stage(base, data, sim, days, ind, cache, part):
           "買い下がり②合図で半分、終値が買値から8%下げたら残りの半分（押し目・急落の底）": {"buydown": (0.08, ("B", "C"))},
           "横ばいの局面①テーマの30週線が横ばいの日は押し目を買わない": {"skip": ("thyoko", "B")},
           "横ばいの局面②テーマの30週線が横ばいの日は押し目と急落の底を買わない": {"skip": ("thyoko", "rev")},
+          # 2026-11-03 ユーザーの指示「急落の底は1から3日、押し目は3から1週間に分けて、年率が良くなる日数を探して」
+          "遅らせて買う 急落の底1日後": {"delay": ("C", 1)},
+          "遅らせて買う 急落の底2日後": {"delay": ("C", 2)},
+          "遅らせて買う 急落の底3日後": {"delay": ("C", 3)},
+          "遅らせて買う 急落の底 合図の日の終値の2%下の指値（3日間）": {"delay": ("C", "lim", 0.02, 3)},
+          "遅らせて買う 押し目3日後": {"delay": ("B", 3)},
+          "遅らせて買う 押し目4日後": {"delay": ("B", 4)},
+          "遅らせて買う 押し目5日後": {"delay": ("B", 5)},
+          "遅らせて買う 押し目6日後": {"delay": ("B", 6)},
+          "遅らせて買う 押し目7日後": {"delay": ("B", 7)},
+          "遅らせて買う 押し目 合図の日の終値の3%下の指値（10日間）": {"delay": ("B", "lim", 0.03, 10)},
+          "遅らせて買う 押し目 合図の日の終値の5%下の指値（10日間）": {"delay": ("B", "lim", 0.05, 10)},
           "特殊な下げ⑫SOX−15%の間はテーマを買わない（戻す: 20日線）": {"skip": ("sp15x20", "theme")},
           "特殊な下げ⑬SOX−15%の間はテーマを買わない（戻す: 5日線）": {"skip": ("sp15x5", "theme")},
           "特殊な下げ⑭⑨に加えて戻すときテーマの外を売る（50日線）": {"skip": ("sp15", "theme"), "sellout": True},
@@ -3247,7 +3289,7 @@ def opt_stage(base, data, sim, days, ind, cache, part):
     def make(spec):
         sp = {**BASE, **spec}
         trs = [t for t in stock_trades(sp["stop"], sp["rel8"], sp["xsell"], sp["close_stop"], sp["hotwait"], sp["c10"], sp["kx"], sp["tstop"], sp["pstop"], sp["m30"],
-                                       sp["lim2"], sp["hadd"], sp["gem"], sp["stg"], sp["rr"], sp["bmid"], sp["c20"])
+                                       sp["lim2"], sp["hadd"], sp["gem"], sp["stg"], sp["rr"], sp["bmid"], sp["c20"], delay=sp.get("delay"))
                if t["rule"] in sp["rules"] and (not t["x"] or (t["x"] == "c15" and sp["c15"]) or (t["x"] == "out" and sp["outside"])
                                                  or (t["x"] == "resv" and sp["resv"] and t["rule"] in sp["resv"]))]
         if sp["vixrev"]:   # 逆張りは市場の恐怖が大きい日だけ買う（2026-10-26、ちょる子氏の Fear & Greed 20未満の代わりにVIX）: 合図の日のVIXの終値が thr 以上の日だけ
@@ -3407,6 +3449,21 @@ def opt_stage(base, data, sim, days, ind, cache, part):
         print("|---|---|---|---|---|---|---|---|---|---|---|")
         print("（5・10・20取引日後は、それより前に売った売買は売った値段で数える。買値は寄り付き、手数料を除く）")
         RN = {"B": "押し目（ボリンジャーIII）", "C": "急落の底（コナーズ）", "V": "新高値V2", "M": "ミネルヴィニ"}
+        print("\n## 一番安くなった日のばらつき（買った日＝0日。持っている間の終値で）\n")
+        print("| 合図 | 件数 | 0日 | 1日 | 2〜3日 | 4〜5日 | 6〜7日 | 8〜10日 | 11日〜 | 25%・50%・75%の日 |")
+        print("|---|---|---|---|---|---|---|---|---|---|")
+        for r_ in ("C", "B"):
+            for lab_, xs in ((f"{RN[r_]} 全部", [t for t in trs if t["rule"] == r_]), (f"{RN[r_]} テーマが横ばい", [t for t in trs if t["rule"] == r_ and THEME_REG.get(t["sd"]) == "横ばい"])):
+                ld = []
+                for t in xs:
+                    ds_ = [d for d in sorted(t["path"]) if d <= t["out"]]
+                    v_ = [t["path"][d] for d in ds_]
+                    ld.append(min(range(len(v_)), key=lambda i: v_[i]))
+                ld.sort()
+                bins = [(0, 0), (1, 1), (2, 3), (4, 5), (6, 7), (8, 10), (11, 10 ** 9)]
+                q_ = lambda f: ld[int(f * (len(ld) - 1))]
+                print(f"| {lab_} | {len(ld)} | " + " | ".join(f"{sum(1 for x in ld if a_ <= x <= b_) / len(ld):.0%}" for a_, b_ in bins) + f" | {q_(0.25)}・{q_(0.5)}・{q_(0.75)}日 |")
+        print()
         for r_ in ("C", "B", "V", "M"):
             xs = [t for t in trs if t["rule"] == r_]
             print(row(f"**{RN[r_]}** 全部", xs))
