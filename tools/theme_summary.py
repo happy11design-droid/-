@@ -80,6 +80,12 @@ def main():
         out += [f"- **テーマ全体の急落（S2・記録だけ）: {s2.get('label', '記録なし')}**"
                 + (f"（SOXが直近60取引日の最高値から {s2['drop'] * 100:+.1f}%）" if s2.get("drop") is not None else "")
                 + "。S2の日の順張りの候補には「S2なら見送る形」と付ける（売買のルールは変えない。記録してから採用を決める。2026-10-14）", ""]
+    spc = rec.get("special") or {}
+    if spc:
+        out += [f"- **特殊な下げ（記録だけ）: {spc.get('label', '記録なし')}**"
+                + (f"（{spc['since']}から）" if spc.get("since") else "")
+                + (f"（SOXが直近60取引日の最高値から {spc['drop'] * 100:+.1f}%、前の1年の大きな上げ・雇用の弱さ・物価の再加速のうち {spc.get('n')}つ）" if spc.get("drop") is not None else "")
+                + "。1995年〜では、この形の後にSOXの下げが長引くことが多かった（後知恵を含む）。売買のルールは変えない（2026-11-03）", ""]
     hv = {h["sym"]: h for h in rec.get("holdings", [])}
     try:   # 時間外（引け後）の騰落率（tools/news_headlines.py daily が書く。2026-10-29 ユーザーの指示）
         ah = json.load(open(os.path.join(D, "afterhours.json"), encoding="utf-8"))

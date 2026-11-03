@@ -307,6 +307,65 @@ def s2_state(sox, day):
     return {"on": on, "label": "あり（S2）" if on else "なし", "close": c[-1], "hi60": hi, "drop": drop}
 
 
+def fred_monthly(sid):
+    """FRED（米セントルイス連銀の公開データ、無料）の月次の値 [(YYYY-MM, 値)]。取れなければ []"""
+    # ブラウザの名前（-A）と圧縮を付けると FRED は応答を途中で切る（2026-11-03）ので、付けずに取る
+    txt = ""
+    for _ in range(3):
+        r = subprocess.run(["curl", "-sS", "--max-time", "60", f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={sid}"], capture_output=True, text=True)
+        txt = r.stdout if r.returncode == 0 else ""
+        if txt.startswith(("observation_date", "DATE")):
+            break
+    out = []
+    for r in csv.reader(txt.splitlines()[1:]):
+        try:
+            out.append((r[0][:7], float(r[1])))
+        except (ValueError, IndexError):
+            pass
+    return out
+
+
+def special_state(sox, day, th=0.15):
+    """特殊な下げ（2026-11-03 記録だけ。ユーザーの指示「今回のような特殊な下落局面で対策して欲しい」）:
+    SOX の終値が直近60取引日の最高値から−15%以下、かつ次の3つのうち2つ以上で「あり」になり、SOX の終値が50日線より上で50日線が10取引日前より上になるまで続く。
+      A: 下げの前の1年（60取引日前までの250取引日）の SOX の上げが+80%以上
+      B: 雇用の伸び（PAYEMS の3か月平均）が10万人未満（その月の数字は翌月10日から使う）
+      C: 物価（CPIAUCSL の前年比）が3.5%以上で、3か月前の月より高い（翌月20日から使う）
+    1995年〜の SOX では、この形の後に長い下げが多かった（tools/sox_analog.py。条件は過去を見て選んだもので後知恵を含む）。バックテストの同じ条件は backtest_retest.py の sp15"""
+    if not sox or len(sox["c"]) < 330 or sox["date"][-1] != day:
+        return {"on": None, "label": "判定不能（SOXを取得できない）"}
+    cpi, pay = fred_monthly("CPIAUCSL"), fred_monthly("PAYEMS")
+    if len(cpi) < 20 or len(pay) < 5:
+        return {"on": None, "label": "判定不能（物価・雇用を取得できない）"}
+    def avail(ym, dd):
+        y, m = int(ym[:4]), int(ym[5:7]) + 1
+        return f"{y + (m == 13):04d}-{(1 if m == 13 else m):02d}-{dd:02d}"
+    c_av, p_av = [avail(ym, 20) for ym, _ in cpi], [avail(ym, 10) for ym, _ in pay]
+    cv, pv = [v for _, v in cpi], [v for _, v in pay]
+    def cond(k):
+        d = sox["date"][k]
+        i = bisect.bisect_right(c_av, d) - 1
+        j = bisect.bisect_right(p_av, d) - 1
+        y, y3 = cv[i] / cv[i - 12] - 1, cv[i - 3] / cv[i - 15] - 1
+        p3 = (pv[j] - pv[j - 3]) / 3
+        up = c[k - 60] / c[k - 310] - 1
+        return {"A": up >= 0.8, "B": p3 < 100, "C": y >= 0.035 and y > y3, "up": up, "pay3": p3, "cpi": y, "cpi3": y3,
+                "cpi_month": cpi[i][0], "pay_month": pay[j][0]}
+    c = sox["c"]
+    on, since = False, None
+    for k in range(320, len(c)):
+        m50, m50p = sum(c[k - 49:k + 1]) / 50, sum(c[k - 59:k - 9]) / 50
+        if not on:
+            f = cond(k)
+            if c[k] / max(c[k - 59:k + 1]) - 1 <= -th and f["A"] + f["B"] + f["C"] >= 2:
+                on, since = True, sox["date"][k]
+        elif c[k] > m50 > m50p:
+            on, since = False, None
+    f = cond(len(c) - 1)
+    return {"on": on, "label": "あり（特殊な下げ）" if on else "なし", "since": since, "drop": c[-1] / max(c[-60:]) - 1,
+            "n": f["A"] + f["B"] + f["C"], **f}
+
+
 def shares_note(x, ex_):
     """BUY_USD 分の株数と購入金額の目安。値段は、予約注文ならその価格、寄り付きの成行なら今日の終値（寄り付きの値段で変わる）。
     2倍ETFで買う銘柄は、注文の価格（逆指値・指値・指値の上限）もETFの値段に直して書く（2026-10-04 ユーザーの指示）"""
@@ -408,6 +467,10 @@ def main():
     sox = got.pop("^SOX", None)
     day = spy["date"][-1]
     s2 = s2_state(sox, day)
+    try:
+        spc = special_state(sox, day)
+    except Exception as e_:   # 毎朝のツールを止めない
+        spc = {"on": None, "label": f"判定不能（{type(e_).__name__}）"}
     data = {s: got[s] for s in wl if s in got and got[s]["date"] and got[s]["date"][-1] == day and len(got[s]["c"]) > 260}
     missing = sorted(set(wl) - set(data))
 
@@ -478,6 +541,15 @@ def main():
     w(f"- **テーマ全体の急落（S2、記録だけ。売買のルールは変えない）: {s2['label']}**"
       + (f"（SOX {s2['close']:.2f}、直近60取引日の最高値 {s2['hi60']:.2f} から {pct(s2['drop'])}。S2＝最高値から−10%以上）" if s2.get("close") else "")
       + "。S2のときに「順張りの新しい買いだけ止める」形を記録で比べる（2026-10-14 ユーザー決定。バックテストでは年率は上がったが2つの期間ではどちらも少し下回ったため、記録してから採用を決める。`バックテスト結果/テーマ全体の急落を検知して手じまう・買いを止める.md`）")
+    mk_ = lambda b: "●" if b else "・"
+    w(f"- **特殊な下げ（記録だけ。売買のルールは変えない）: {spc['label']}**"
+      + (f"（{spc['since']}から）" if spc.get("since") else "")
+      + (f"。SOX は直近60取引日の最高値から {pct(spc['drop'])}（−15%以下が条件）、{mk_(spc['A'])}A 前の1年の上げ {pct(spc['up'])}（+80%以上）、"
+         f"{mk_(spc['B'])}B 雇用の伸び {spc['pay3']:.0f}千人/月（{spc['pay_month']}まで。10万人未満）、"
+         f"{mk_(spc['C'])}C 物価 {spc['cpi'] * 100:.1f}%（{spc['cpi_month']}。3か月前 {spc['cpi3'] * 100:.1f}%。3.5%以上で再加速）＝{spc['n']}つ（2つ以上が条件）" if spc.get("drop") is not None else "")
+      + "。1995年〜でSOXが−15%以下かつ条件2つ以上の日は、120日後にSOXが下だったのが69%・250日後が70%（中央値 −33%）、AI以外の8業種の平均は250日後 −7%。"
+        "ただし条件は過去を見て選んだもの（条件が2つ以上の局面は約5回）で、2026年7〜9月にこの間テーマを買わないと、その後の戻りを逃して2026年の成績は下がった"
+        "（`バックテスト結果/実際の運用の期間の確認_2026-10-23/特殊な下げと過去の似た下げ.md`。2026-11-03）")
     w(f"- テーマ指数（監視銘柄の等金額平均）の30週線による局面: **{stage.get(day, '判定不可')}**（上昇＝線より上かつ上向き、下落＝線より下かつ下向き、それ以外＝横ばい。ワインスタインのステージの近似）")
     w(f"- テーマ指数と50日線: {'50日線より上' if ma50[-1] and c[-1] > ma50[-1] else '50日線より下'}（乖離 {pct(c[-1] / ma50[-1] - 1) if ma50[-1] else '取得不可'}）")
     w(f"- S&P500に対する相対的な強さ: {'50日平均より上（S&P500より強い）' if rma[-1] and ratio[-1] > rma[-1] else '50日平均より下（S&P500より弱い）'}")
@@ -947,6 +1019,7 @@ def main():
     meta = {x["sym"]: {"hot": x.get("hot"), "rsi14": x.get("rsi14"), "s50": x.get("s50"), "rs": x.get("rs"),
                        "s2_skip": bool(s2.get("on")) and x["kind"].startswith(("順張り", "予約: ミネルヴィニ", "予約: 新高値"))} for x in cands}
     meta["_s2"] = s2
+    meta["_special"] = {k: v for k, v in spc.items() if k in ("on", "label", "since", "drop", "n", "A", "B", "C")}   # 特殊な下げの記録（2026-11-03）
     meta["_ref_b"] = [{"sym": x["sym"], "kind": x["kind"], "close": x["close"], "rs": x["rs"]} for x in ref_b]   # 参考の表示だけの予約（B）の候補（record.json に残す）
     meta["_omitted"] = [{"sym": x["sym"], "kind": x["kind"], "pattern": x["pat"], "close": x["close"], "rs": x["rs"]} for x in spare_out]   # 枠外で表に出さなかった候補（record.json に残す）
     json.dump(meta,

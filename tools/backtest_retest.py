@@ -482,7 +482,7 @@ def macro_sets(days, cache):
     for d in days:
         last = tm.get(d, last)
         tn.append(last)
-    out = {"M_rate": set(), "M_cpi": set(), "M_stag": set(), "M_rate100": set(), "M_rate20d": set()}
+    out = {"M_rate": set(), "M_cpi": set(), "M_stag": set(), "M_rate100": set(), "M_rate20d": set(), "M_cpi35": set(), "M_pay100": set()}
     info = {}
     for i, d in enumerate(days):
         if i >= 70 and all(x is not None for x in tn[i - 69:i + 1]):
@@ -498,9 +498,14 @@ def macro_sets(days, cache):
         k = bisect.bisect_right(c_av, d) - 1
         if k >= 15 and yoy(k) is not None and yoy(k - 3) is not None and yoy(k) > yoy(k - 3):
             out["M_cpi"].add(d)
+            if yoy(k) >= 0.035:   # 2026-11-03: 物価が3.5%以上で再加速（特殊な下げの条件）
+                out["M_cpi35"].add(d)
             q = bisect.bisect_right(p_av, d) - 1
             if q >= 3 and (pm[pay_ym[q]] - pm[pay_ym[q - 3]]) / 3 < 100:
                 out["M_stag"].add(d)
+        q_ = bisect.bisect_right(p_av, d) - 1
+        if q_ >= 3 and (pm[pay_ym[q_]] - pm[pay_ym[q_ - 3]]) / 3 < 100:   # 2026-11-03: 雇用の伸び（3か月平均）が10万人未満
+            out["M_pay100"].add(d)
         if i == len(days) - 1:
             q = bisect.bisect_right(p_av, d) - 1
             info = {"cpi_month": cpi_ym[k], "cpi_yoy": yoy(k), "cpi_yoy_3m": yoy(k - 3), "pay_month": pay_ym[q], "pay_3m": (pm[pay_ym[q]] - pm[pay_ym[q - 3]]) / 3,
@@ -2393,10 +2398,33 @@ def opt_stage(base, data, sim, days, ind, cache, part):
             "M_cpi": "物価の伸びの再加速（CPI前年比が3か月前より高い。発表後の数字）",
             "M_stag": "物価の伸びの再加速＋雇用の伸び（3か月平均）が10万人未満",
             "M_rate100": "10年金利が上昇局面（終値が100日線より上で、100日線が上向き。数値違い）",
-            "M_rate20d": "10年金利が20取引日前より高い（数値違い）"}
+            "M_rate20d": "10年金利が20取引日前より高い（数値違い）",
+            "M_cpi35": "物価（CPI前年比）が3.5%以上で再加速",
+            "M_pay100": "雇用の伸び（3か月平均）が10万人未満"}
     for k_, v_ in MAC.items():
         KD[k_] = v_
         KN[k_] = MACN[k_]
+    # 2026-11-03 ユーザーの指示「今回のような特殊な下落局面で対策して欲しい」: 特殊な下げ＝SOXが直近60取引日の最高値から−X%以下、かつ
+    # ①下げの前の1年（60取引日前までの250取引日）のSOXの上げが+80%以上 ②雇用の伸びが10万人未満 ③物価3.5%以上で再加速 のうち2つ以上。
+    # 一度なったら、SOXの終値が50日線より上で50日線が10取引日前より上になるまで続く。1994年〜のSOXでは、この形の後に長い下げが多かった
+    for th_ in (0.15, 0.20):
+        on_, sp_ = False, set()
+        for k in range(320, len(days)):
+            x_ = _sxl[k - 310:k + 1]
+            if None in x_:
+                continue
+            m_ = sum(_sxl[k - 49:k + 1]) / 50
+            mp_ = sum(_sxl[k - 59:k - 9]) / 50
+            if not on_:
+                n_ = int(_sxl[k - 60] / _sxl[k - 310] - 1 >= 0.8) + int(days[k] in MAC["M_pay100"]) + int(days[k] in MAC["M_cpi35"])
+                if _sxl[k] / max(_sxl[k - 59:k + 1]) - 1 <= -th_ and n_ >= 2:
+                    on_ = True
+            elif _sxl[k] > m_ > mp_:
+                on_ = False
+            if on_:
+                sp_.add(days[k])
+        SKIPSET[f"sp{int(th_ * 100)}"] = sp_
+        print(f"特殊な下げ（SOX −{th_:.0%}）の日: 2015年〜 {sum(1 for d in sp_ if d >= '2015-01-01')}日、" + "・".join(sorted({d[:7] for d in sp_})), file=sys.stderr)
     KD["NOT_ETFUP"] = {d for d in days if d not in up}   # S&P500（SPY）が100日線で「上昇」でない日（案1で2倍ETFを使わない日）
     KN["NOT_ETFUP"] = "S&P500（SPY）が20週線（100日線）で上昇の局面でない日"
     _gvx = bl.load_prices(cache, "^VIX")
@@ -3031,6 +3059,10 @@ def opt_stage(base, data, sim, days, ind, cache, part):
           # 2026-11-02: 下げの局面では、買うのを空き枠の半分まで（保有2銘柄までになるように買う。1銘柄の金額は今と同じ資金の1/4）
           "下げの局面では半分だけ買う⑦早めの警告かS2の日は保有2銘柄まで": {"half_in": "warn"},
           "下げの局面では半分だけ買う⑧テーマ指数が50日線より下の日は保有2銘柄まで": {"half_in": "th50"},
+          # 2026-11-03: 特殊な下げ（SOXの下げ＋前の1年の大きな上げ・雇用の弱さ・物価の再加速のうち2つ以上）の間
+          "特殊な下げ⑨SOX−15%の間はテーマを買わない（テーマの外だけ）": {"skip": ("sp15", "theme")},
+          "特殊な下げ⑩SOX−20%の間はテーマを買わない（テーマの外だけ）": {"skip": ("sp20", "theme")},
+          "特殊な下げ⑪SOX−15%の間は全部買わない": {"skip": ("sp15", "all")},
           "買う順番: 続けての合図より初日の合図を先に、その中はRSの高い順": {"prio": "first_rs"},
           "買う順番: 順張りを先に、その中はRSの高い順": {"prio": "trend_rs"},
           "買う順番: 逆張りを先に、その中はRSの高い順": {"prio": "rev_rs"},
@@ -3242,7 +3274,9 @@ def opt_stage(base, data, sim, days, ind, cache, part):
         if sp.get("skip"):   # 2026-11-02: 下げの局面では買わない（合図の日に判定）
             k_, who_ = sp["skip"]
             rr_ = ("B", "C") if who_ == "rev" else ("B", "C", "M", "V", "W")
-            if k_ == "stock":
+            if who_ == "theme":   # テーマ（87銘柄ならテーマの外以外、全業種ならAI関連の業種）だけ買わない
+                trs = [t for t in trs if not (t["sd"] in SKIPSET[k_] and ((t["x"] != "out") if sp["outside"] else t["ai"]))]
+            elif k_ == "stock":
                 trs = [t for t in trs if not (t["rule"] in rr_ and stock_dn(t["sym"], t["sd"]))]
             else:
                 trs = [t for t in trs if not (t["rule"] in rr_ and t["sd"] in SKIPSET[k_])]

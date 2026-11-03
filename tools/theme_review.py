@@ -106,6 +106,7 @@ def cmd_record(a):
     rec = {"trade_date": trade_date, "run_date": dt.datetime.now(dt.timezone(dt.timedelta(hours=9))).date().isoformat(),
            "theme_stage": stage, "candidates": cands, "holdings": holds,
            "s2": (json.load(open(mp, encoding="utf-8")).get("_s2") if os.path.exists(mp) else None),   # テーマ全体の急落 S2 の記録（2026-10-14）
+           "special": (json.load(open(mp, encoding="utf-8")).get("_special") if os.path.exists(mp) else None),   # 特殊な下げの記録（2026-11-03）
            # 枠外で表に出さず、著者・ニュース調査に回さなかった候補（2026-10-25〜。バックテストとの一致の点検に使う）
            "omitted": (json.load(open(mp, encoding="utf-8")).get("_omitted", []) if os.path.exists(mp) else []),
            # 参考の表示だけの予約（B）の候補（2026-10-25〜 注文しない）
