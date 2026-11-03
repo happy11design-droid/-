@@ -1,0 +1,145 @@
+{
+ "trade_date": "2026-11-03",
+ "run_date": "2026-11-04",
+ "theme_stage": "【ステージ3】（30週線が横ばいであり、天井圏の兆候を示すため第2章 [1]）",
+ "candidates": [
+  {
+   "sym": "DELL",
+   "kind": "逆張り: 急落の底（担当: コナーズ）（指値の2日目）",
+   "pattern": "A",
+   "close": 408.4,
+   "limit": null,
+   "stop_buy": null,
+   "limit_buy": 384.92,
+   "verdict": "様子見",
+   "author": "コナーズ",
+   "hot": false,
+   "rsi14": 35.588404767706265,
+   "s50": 0.037144320560612565,
+   "rs": 98.61252446183953,
+   "s2_skip": false
+  },
+  {
+   "sym": "MU",
+   "kind": "逆張り: 急落の底（担当: コナーズ）（指値の2日目）",
+   "pattern": "A",
+   "close": 855.1,
+   "limit": null,
+   "stop_buy": null,
+   "limit_buy": 816.92,
+   "verdict": "様子見",
+   "author": "コナーズ",
+   "hot": false,
+   "rsi14": 40.35621941573071,
+   "s50": 0.013690684864812175,
+   "rs": 98.4187866927593,
+   "s2_skip": false
+  },
+  {
+   "sym": "HPE",
+   "kind": "逆張り: 急落の底（担当: コナーズ）（指値の2日目）",
+   "pattern": "A",
+   "close": 53.1,
+   "limit": null,
+   "stop_buy": null,
+   "limit_buy": 50.17,
+   "verdict": "様子見",
+   "author": "コナーズ",
+   "hot": false,
+   "rsi14": 39.399968551519216,
+   "s50": 0.055767906245208776,
+   "rs": 97.64383561643835,
+   "s2_skip": false
+  },
+  {
+   "sym": "NTAP",
+   "kind": "逆張り: 急落の底（担当: コナーズ）（指値の2日目）",
+   "pattern": "A",
+   "close": 190.78,
+   "limit": null,
+   "stop_buy": null,
+   "limit_buy": 181.55,
+   "verdict": "買い",
+   "author": "コナーズ",
+   "hot": false,
+   "rsi14": 38.52997137422254,
+   "s50": 0.054799798905772246,
+   "rs": 96.28767123287672,
+   "s2_skip": false
+  },
+  {
+   "sym": "AAPL",
+   "kind": "逆張り: ボリンジャー メソッドIII",
+   "pattern": "A",
+   "close": 331.9,
+   "limit": null,
+   "stop_buy": null,
+   "limit_buy": null,
+   "verdict": "買い",
+   "author": "ボリンジャー",
+   "hot": false,
+   "rsi14": 41.70449159887297,
+   "s50": 0.03646577025139486,
+   "rs": 74.78277886497065,
+   "s2_skip": false
+  }
+ ],
+ "holdings": [
+  {
+   "sym": "SNDK",
+   "rule": "ルール外（ユーザーの判断。この日はどのルールの合図もなし）",
+   "buy_date": "2026-10-21",
+   "buy_price": 1371.3,
+   "verdict": "未判定",
+   "author": ""
+  },
+  {
+   "sym": "AMD",
+   "rule": "ボリンジャーIII",
+   "buy_date": "2026-10-21",
+   "buy_price": 549.97,
+   "verdict": "保有継続",
+   "author": "ボリンジャー"
+  }
+ ],
+ "s2": {
+  "on": true,
+  "label": "あり（S2）",
+  "close": 10600.396484375,
+  "hi60": 13217.8203125,
+  "drop": -0.19802234908956362
+ },
+ "special": {
+  "on": true,
+  "label": "あり（特殊な下げ）",
+  "since": "2026-10-16",
+  "drop": -0.19802234908956362,
+  "n": 3,
+  "A": true,
+  "B": true,
+  "C": true
+ },
+ "omitted": [
+  {
+   "sym": "PLTR",
+   "kind": "逆張り: ボリンジャー メソッドIII",
+   "pattern": "A",
+   "close": 175.39999389648438,
+   "rs": 59.28375733855186
+  }
+ ],
+ "ref_b": [
+  {
+   "sym": "CRM",
+   "kind": "予約: ボリンジャー メソッドIII（%bが0.05未満に近い）",
+   "close": 222.1999969482422,
+   "rs": 60.0587084148728
+  },
+  {
+   "sym": "QCOM",
+   "kind": "予約: ボリンジャー メソッドIII（%bが0.05未満に近い）",
+   "close": 164.42999267578125,
+   "rs": 36.81017612524462
+  }
+ ]
+}
