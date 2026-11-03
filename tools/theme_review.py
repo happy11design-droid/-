@@ -195,6 +195,28 @@ def cmd_review(a):
                 rows.append({**c, "date": r["trade_date"], "status": "まだ寄り付き前"})
                 continue
             px = s["o"][i + 1]
+            if "急落の底" in c["kind"] and c.get("pattern", "A") == "A" and c.get("limit_buy"):
+                # 2026-11-03 ユーザー採用（案B）: 急落の底は合図の日の終値の2%下の指値（3取引日）。届かなければ見送り、先に終値が5日線を上回ったら取り消す。
+                # 2日目・3日目にもう一度出た候補（「指値の2日目」）は、最初の日の記録で数えるので数えない
+                if "日目）" in c["kind"]:
+                    continue
+                k = None
+                for j in range(i + 1, min(i + 4, len(s["c"]))):
+                    if s["l"][j] <= c["limit_buy"]:
+                        k = j
+                        break
+                    if j >= 4 and s["c"][j] > sum(s["c"][j - 4:j + 1]) / 5:
+                        break
+                if k is None:
+                    st_ = "指値に届かず見送り（3取引日、または先に終値が5日線を上回った）" if i + 3 < len(s["c"]) or any(
+                        s["c"][j] > sum(s["c"][j - 4:j + 1]) / 5 for j in range(i + 1, len(s["c"])) if j >= 4) else "指値の期間中（まだ届いていない）"
+                    rows.append({**c, "date": r["trade_date"], "status": st_})
+                    continue
+                px = min(s["o"][k], c["limit_buy"])
+                od, op, why = follow("急落", s, k, px, px * (1 - STOP))
+                rows.append({**c, "date": r["trade_date"], "entry": px, "exit_date": od, "exit": op, "status": why + "（指値で約定）",
+                             "ret": op / px - 1 - 2 * COST})
+                continue
             if c.get("stop_buy") or c.get("limit_buy"):
                 # パターンB（予約注文）: 価格が届いたかどうかではなく、ユーザーが実際に約定した記録（保有銘柄.md・売買記録.md）があるときだけ数える
                 # （ユーザーの指示 2026-09-27。約定していなければ、翌日以降のスキャンで改めてエントリーを探す）
@@ -426,7 +448,7 @@ def slippage(hist_dir):
                     if c.get("sym") == t["sym"]:
                         cand, cdate = c, r.get("trade_date", "")
         exp, how = o, "寄り付き"
-        if cand and cand.get("pattern") == "B":
+        if cand and (cand.get("pattern") == "B" or cand.get("limit_buy")):   # 予約（B）と、急落の底の指値（2026-11-03〜）
             import splits as sp_
             f_ = sp_.factor(t["sym"], cdate)   # 予約の値段は記録の日の基準。株価（今の基準）とそろえる（株式分割。2026-10-30）
             sb, lb = num(cand.get("stop_buy")), num(cand.get("limit_buy"))
