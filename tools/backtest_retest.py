@@ -2315,6 +2315,63 @@ def opt_stage(base, data, sim, days, ind, cache, part):
         return c_[k] < m_ and m_ < sum(c_[k - 59:k - 9]) / 50
     SKIPSET = {"th50": TH50, "thturn": THTURN, "soxdn": SOXDN, "warn": WARN}
     SKIPSET["thyoko"] = {d for d, g_ in THEME_REG.items() if g_ == "横ばい"}   # 2026-11-03: テーマの30週線が横ばいの日
+    # 2026-11-03 ユーザーの指示「弱いグループの押し目・急落の底は買わない形をバックテストして」: グループ＝テーマ監視銘柄.md の7グループ（87銘柄）、
+    # それ以外の銘柄はYahooの業種。グループの等金額平均（毎日の騰落の平均）で、①直近21取引日の騰落がグループの中で一番弱い（業種は下位1/7）
+    # ②平均が50日線より下で50日線が10取引日前より下（グループの下げの局面）
+    import re as _re
+    _TG, _cur = {}, None
+    _md = open(os.path.join(os.path.dirname(OUTDIR.rstrip("/")), "テーマ監視銘柄.md"), encoding="utf-8").read()
+    for _ln in _md.splitlines():
+        _m = _re.match(r"^## (.+?)（", _ln)
+        if _ln.startswith("## "):
+            _cur = None if (not _m or _ln.startswith("## 指数に入っていない")) else _m.group(1)
+            continue
+        _m = _re.match(r"^\| ([A-Z][A-Z0-9.\-]*) \|", _ln)
+        if _m and _cur and _m.group(1) != "ティッカー":
+            _TG[_m.group(1)] = _cur
+    if os.environ.get("OPT_GROUP_IND"):   # 全業種の監視銘柄では、今の87銘柄のグループ（後知恵）を使わず業種だけで分ける
+        _TG = {}
+    def group_of(sym):
+        return ("T:" + _TG[sym]) if sym in _TG else ("I:" + str(ind.get(sym)))
+    _gm = {}
+    for s_ in data:
+        _gm.setdefault(group_of(s_), []).append(s_)
+    _gpos = {s_: {d: k for k, d in enumerate(data[s_]["date"])} for s_ in data}
+    GIDX = {}
+    for g_, mem_ in _gm.items():
+        iv_, lv_ = [], 1.0
+        for d in days:
+            r_ = []
+            for s_ in mem_:
+                k = _gpos[s_].get(d)
+                if k and data[s_]["c"][k - 1]:
+                    r_.append(data[s_]["c"][k] / data[s_]["c"][k - 1] - 1)
+            lv_ *= 1 + (sum(r_) / len(r_) if len(r_) >= (2 if g_.startswith("T:") else 3) else 0.0)
+            iv_.append(lv_ if r_ else None)
+        GIDX[g_] = iv_
+    GW = {"rank": {}, "trend": {}}
+    for k in range(60, len(days)):
+        r21 = {}
+        for g_, iv_ in GIDX.items():
+            if iv_[k] is None or iv_[k - 21] is None:
+                continue
+            r21[g_] = iv_[k] / iv_[k - 21] - 1
+            win_ = iv_[k - 59:k + 1]
+            if None not in win_:
+                m_ = sum(win_[10:]) / 50
+                mp_ = sum(win_[:50]) / 50
+                if iv_[k] < m_ < mp_:
+                    GW["trend"].setdefault(g_, set()).add(days[k])
+        th_ = [g_ for g_ in r21 if g_.startswith("T:")]
+        if th_:
+            GW["rank"].setdefault(min(th_, key=lambda g_: r21[g_]), set()).add(days[k])
+        in_ = sorted((g_ for g_ in r21 if g_.startswith("I:") and len(_gm[g_]) >= 3), key=lambda g_: r21[g_])
+        for g_ in in_[:max(1, len(in_) // 7)]:
+            GW["rank"].setdefault(g_, set()).add(days[k])
+    def gweak(kind, sym, d):
+        return d in GW[kind].get(group_of(sym), ())
+    print("テーマのグループ: " + "、".join(f"{g_[2:]} {len(m_)}" for g_, m_ in _gm.items() if g_.startswith("T:"))
+          + f"。2026-10-01〜の一番弱いグループ: " + "、".join(f"{d}:{next((g_[2:] for g_ in GW['rank'] if g_.startswith('T:') and d in GW['rank'][g_]), '—')}" for d in days if d >= "2026-10-01"), file=sys.stderr)
     print("下げの局面の日（2015年〜）: " + "、".join(f"{k} {sum(1 for d in days if d >= '2015-01-01' and d in v) / max(1, sum(1 for d in days if d >= '2015-01-01')):.0%}"
                                           for k, v in SKIPSET.items()), file=sys.stderr)
     _dd = {d: k for k, d in enumerate(days)}
@@ -3126,6 +3183,9 @@ def opt_stage(base, data, sim, days, ind, cache, part):
           "遅らせて買う 押し目7日後": {"delay": ("B", 7)},
           "遅らせて買う 押し目 合図の日の終値の3%下の指値（10日間）": {"delay": ("B", "lim", 0.03, 10)},
           "遅らせて買う 押し目 合図の日の終値の5%下の指値（10日間）": {"delay": ("B", "lim", 0.05, 10)},
+          "弱いグループ①直近1か月で一番弱いグループの押し目・急落の底は買わない": {"gskip": ("rank", "rev")},
+          "弱いグループ②グループが50日線より下で線が下向きなら押し目・急落の底は買わない": {"gskip": ("trend", "rev")},
+          "弱いグループ③グループが50日線より下で線が下向きなら全部のルールで買わない": {"gskip": ("trend", "all")},
           "特殊な下げ⑫SOX−15%の間はテーマを買わない（戻す: 20日線）": {"skip": ("sp15x20", "theme")},
           "特殊な下げ⑬SOX−15%の間はテーマを買わない（戻す: 5日線）": {"skip": ("sp15x5", "theme")},
           "特殊な下げ⑭⑨に加えて戻すときテーマの外を売る（50日線）": {"skip": ("sp15", "theme"), "sellout": True},
@@ -3353,6 +3413,10 @@ def opt_stage(base, data, sim, days, ind, cache, part):
                 trs = [t for t in trs if not (t["rule"] in rr_ and t["sd"] in SKIPSET[k_])]
         if sp.get("half_in"):   # 2026-11-02: 下げの局面の合図は、保有が2銘柄未満のときだけ買う（port の maxheld）
             trs = [{**t, "maxheld": 2} if t["sd"] in SKIPSET[sp["half_in"]] else t for t in trs]
+        if sp.get("gskip"):   # 2026-11-03: 弱いグループの合図は買わない（合図の日に判定）
+            k_, who_ = sp["gskip"]
+            rr_ = ("B", "C") if who_ == "rev" else ("B", "C", "M", "V", "W")
+            trs = [t for t in trs if not (t["rule"] in rr_ and gweak(k_, t["sym"], t["sd"]))]
         trs = [{**t, "prio": PR[sp["prio"]](t)} for t in trs]
         if sp["resv"]:   # 予約（B）の約定は、同じ日の成行（A、寄り付き）の後（毎朝の theme_scan.py の買う順番と同じ）
             trs = [{**t, "prio": (1 if t["x"] == "resv" else 0,) + (t["prio"] if isinstance(t["prio"], tuple) else (t["prio"],))} for t in trs]
