@@ -3417,6 +3417,22 @@ def opt_stage(base, data, sim, days, ind, cache, part):
                   f"その間の損切り {_st.median([x['stops'] for x in xs]):.0f}回。乱数1通り目: {xs[0]['peak']}→{xs[0]['trough']} "
                   f"合計 {xs[0]['total'] * 100:+.1f}%（確定 {xs[0]['real'] * 100:+.1f}%・含み損 {xs[0]['unreal'] * 100:+.1f}%、損切り {xs[0]['stops']}回）", file=sys.stderr)
         return
+    if os.environ.get("OPT_TRADELIST"):   # 2026-11-03 ユーザーの質問「運用を始めてから買いの判定をした銘柄で、含み損・損切りは何銘柄か」: その日以降に買う合図の売買を書き出す（株そのもの）
+        nm_ = os.environ.get("OPT_REF", forms[-1][0])
+        trs, sp = make({**dict(forms)[nm_], "etf": "none"})
+        lo_ = os.environ.get("OPT_TRADELIST_FROM", "2026-09-28")
+        rows_ = []
+        for t in trs:
+            if t.get("ghost") or t["in"] < lo_:
+                continue
+            ds_ = sorted(d for d in t["path"] if d <= t["out"])
+            v_ = [t["path"][d] / (1 - COST) for d in ds_]
+            rows_.append({"sym": t["sym"], "rule": t["rule"], "in": t["in"], "out": t["out"], "ret": t["path"][t["out"]] - 1, "stopped": bool(t.get("stopped")),
+                          "min": min(v_) - 1, "x": t.get("x"), "open": t["out"] == days[-1]})
+        json.dump(rows_, open(os.environ["OPT_TRADELIST"], "w"), ensure_ascii=False)
+        print("書き出し", len(rows_), file=sys.stderr)
+        return
+
     if os.environ.get("OPT_DAYSTATS"):   # 2026-11-03 ユーザーの質問「エントリーしたら想定ではいつ上がるのか」: 合図の後の日数（株そのもの、2倍ETFは使わない）
         import statistics as _st
         nm_ = os.environ.get("OPT_REF", forms[-1][0])
