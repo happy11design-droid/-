@@ -2314,6 +2314,7 @@ def opt_stage(base, data, sim, days, ind, cache, part):
         m_ = sum(c_[k - 49:k + 1]) / 50
         return c_[k] < m_ and m_ < sum(c_[k - 59:k - 9]) / 50
     SKIPSET = {"th50": TH50, "thturn": THTURN, "soxdn": SOXDN, "warn": WARN}
+    SKIPSET["thyoko"] = {d for d, g_ in THEME_REG.items() if g_ == "横ばい"}   # 2026-11-03: テーマの30週線が横ばいの日
     print("下げの局面の日（2015年〜）: " + "、".join(f"{k} {sum(1 for d in days if d >= '2015-01-01' and d in v) / max(1, sum(1 for d in days if d >= '2015-01-01')):.0%}"
                                           for k, v in SKIPSET.items()), file=sys.stderr)
     _dd = {d: k for k, d in enumerate(days)}
@@ -3078,6 +3079,11 @@ def opt_stage(base, data, sim, days, ind, cache, part):
           "特殊な下げ⑨SOX−15%の間はテーマを買わない（テーマの外だけ）": {"skip": ("sp15", "theme")},
           "特殊な下げ⑩SOX−20%の間はテーマを買わない（テーマの外だけ）": {"skip": ("sp20", "theme")},
           "特殊な下げ⑪SOX−15%の間は全部買わない": {"skip": ("sp15", "all")},
+          # 2026-11-03 ユーザーの指示「全て実行して」: 底に近いところで買う
+          "買い下がり①合図で半分、終値が買値から5%下げたら残りの半分（押し目・急落の底）": {"buydown": (0.05, ("B", "C"))},
+          "買い下がり②合図で半分、終値が買値から8%下げたら残りの半分（押し目・急落の底）": {"buydown": (0.08, ("B", "C"))},
+          "横ばいの局面①テーマの30週線が横ばいの日は押し目を買わない": {"skip": ("thyoko", "B")},
+          "横ばいの局面②テーマの30週線が横ばいの日は押し目と急落の底を買わない": {"skip": ("thyoko", "rev")},
           "特殊な下げ⑫SOX−15%の間はテーマを買わない（戻す: 20日線）": {"skip": ("sp15x20", "theme")},
           "特殊な下げ⑬SOX−15%の間はテーマを買わない（戻す: 5日線）": {"skip": ("sp15x5", "theme")},
           "特殊な下げ⑭⑨に加えて戻すときテーマの外を売る（50日線）": {"skip": ("sp15", "theme"), "sellout": True},
@@ -3293,7 +3299,7 @@ def opt_stage(base, data, sim, days, ind, cache, part):
             trs = [{**t, "ai_good": gd_.setdefault(t["sd"], good_(t["sd"]))} for t in trs]
         if sp.get("skip"):   # 2026-11-02: 下げの局面では買わない（合図の日に判定）
             k_, who_ = sp["skip"]
-            rr_ = ("B", "C") if who_ == "rev" else ("B", "C", "M", "V", "W")
+            rr_ = ("B",) if who_ == "B" else ("B", "C") if who_ == "rev" else ("B", "C", "M", "V", "W")
             if who_ == "theme":   # テーマ（87銘柄ならテーマの外以外、全業種ならAI関連の業種）だけ買わない
                 trs = [t for t in trs if not (t["sd"] in SKIPSET[k_] and ((t["x"] != "out") if sp["outside"] else t["ai"]))]
                 if sp.get("sellout"):   # 2026-11-03: 特殊な下げが終わった翌日の寄り付きで、テーマの外の保有を売ってテーマに戻す
@@ -3313,7 +3319,23 @@ def opt_stage(base, data, sim, days, ind, cache, part):
                 trs = [{**t, "prio": (0 if (t["x"] == "out") == (t["sd"] in WARN) else 1,) + (t["prio"] if isinstance(t["prio"], tuple) else (t["prio"],))} for t in trs]
             else:
                 trs = [{**t, "prio": (1 if t["x"] == "out" else 0,) + (t["prio"] if isinstance(t["prio"], tuple) else (t["prio"],))} for t in trs]
-        return lev(trs, sp["etf"]), sp
+        trs = lev(trs, sp["etf"])
+        if sp.get("buydown"):   # 2026-11-03 ユーザーの指示: 買い下がり。合図で枠の半分を買い、終値が買値から x 以上下げた日の引けで残りの半分を買う（押し目・急落の底）
+            x_, rr_ = sp["buydown"]
+            out_ = []
+            for t in trs:
+                if t.get("ghost") or t["rule"] not in rr_:
+                    out_.append(t)
+                    continue
+                ds_ = sorted(t["path"])
+                v_ = t["path"]
+                j_ = next((d for d in ds_ if v_[d] <= (1 - COST) * (1 - x_)), None)
+                pv_ = {}
+                for d in ds_:
+                    pv_[d] = 0.5 * v_[d] + 0.5 * ((v_[d] / v_[j_]) * (1 - COST) if j_ is not None and d >= j_ else 1.0)
+                out_.append({**t, "path": pv_, "bd": j_})
+            trs = out_
+        return trs, sp
 
     if os.environ.get("OPT_DDSPLIT"):   # 2026-11-02 ユーザーの質問「過去の最大の損失と比べて、今回は損切りした分と含み損の割合はどう違うか」
         import statistics as _st
@@ -3353,6 +3375,47 @@ def opt_stage(base, data, sim, days, ind, cache, part):
                   f"その間の損切り {_st.median([x['stops'] for x in xs]):.0f}回。乱数1通り目: {xs[0]['peak']}→{xs[0]['trough']} "
                   f"合計 {xs[0]['total'] * 100:+.1f}%（確定 {xs[0]['real'] * 100:+.1f}%・含み損 {xs[0]['unreal'] * 100:+.1f}%、損切り {xs[0]['stops']}回）", file=sys.stderr)
         return
+    if os.environ.get("OPT_DAYSTATS"):   # 2026-11-03 ユーザーの質問「エントリーしたら想定ではいつ上がるのか」: 合図の後の日数（株そのもの、2倍ETFは使わない）
+        import statistics as _st
+        nm_ = os.environ.get("OPT_REF", forms[-1][0])
+        trs, sp = make({**dict(forms)[nm_], "etf": "none"})
+        trs = [t for t in trs if not t.get("ghost") and t["in"] >= "2015-01-01" and t["out"] in di]
+        def row(lab, xs):
+            if len(xs) < 20:
+                return f"| {lab} | {len(xs)} |" + " — |" * 10
+            at_ = {5: [], 10: [], 20: []}
+            ld_, lo_, hd_, p5_, sd_ = [], [], [], [], []
+            for t in xs:
+                ds_ = [d for d in sorted(t["path"]) if d <= t["out"]]
+                v_ = [t["path"][d] / (1 - COST) for d in ds_]   # 買値（寄り付き）からの比
+                for n_ in at_:
+                    at_[n_].append(v_[min(n_, len(v_) - 1)] > 1)   # 売った後は売った値段のまま
+                m_ = min(range(len(v_)), key=lambda i: v_[i])
+                ld_.append(m_)
+                lo_.append(v_[m_] - 1)
+                hd_.append(len(v_) - 1)
+                p5_.append(next((i for i, x in enumerate(v_) if x >= 1.05), None))
+                if t.get("stopped"):
+                    sd_.append(len(v_) - 1)
+            rets = [t["path"][t["out"]] - 1 for t in xs]
+            ok5 = [k for k in p5_ if k is not None]
+            f_ = lambda b: f"{sum(b) / len(b):.0%}"
+            return (f"| {lab} | {len(xs)} | {f_(at_[5])} | {f_(at_[10])} | {f_(at_[20])} | {len(ok5) / len(xs):.0%}（{_st.median(ok5) if ok5 else '—'}日） | "
+                    f"{_st.median(ld_):.0f}日 | {_st.median(lo_):+.1%} | {len(sd_) / len(xs):.0%}（{_st.median(sd_) if sd_ else '—'}日） | {sum(rets) / len(rets):+.1%} | {_st.median(hd_):.0f}日 |")
+        print(f"## 合図の後の日数（{nm_}、合図が出た全部の売買、2015年〜。日数は取引日、0日＝買った日の引け）\n")
+        print("| 合図 | 件数 | 5取引日後に買値より上 | 10取引日後 | 20取引日後 | +5%に届いた（日数の中央値） | 一番安くなるまで（中央値） | 一番安いときの下げ（中央値） | 損切り（日数の中央値） | 1回平均 | 保有（中央値） |")
+        print("|---|---|---|---|---|---|---|---|---|---|---|")
+        print("（5・10・20取引日後は、それより前に売った売買は売った値段で数える。買値は寄り付き、手数料を除く）")
+        RN = {"B": "押し目（ボリンジャーIII）", "C": "急落の底（コナーズ）", "V": "新高値V2", "M": "ミネルヴィニ"}
+        for r_ in ("C", "B", "V", "M"):
+            xs = [t for t in trs if t["rule"] == r_]
+            print(row(f"**{RN[r_]}** 全部", xs))
+            for g_ in ("上昇", "横ばい", "下落"):
+                print(row(f"{RN[r_]} テーマが{g_}", [t for t in xs if THEME_REG.get(t["sd"]) == g_]))
+            print(row(f"{RN[r_]} 早めの警告・S2の日", [t for t in xs if t["sd"] in WARN]))
+            print(row(f"{RN[r_]} 特殊な下げの日", [t for t in xs if t["sd"] in SKIPSET["sp15"]]))
+        return
+
     if os.environ.get("OPT_TRADESTATS"):   # 2026-11-01 ユーザーの質問「今買っても損切りが続くのでは」: 警告・S2の日に買った売買の損切りの割合
         nm_ = os.environ.get("OPT_REF", forms[-1][0])
         trs, sp = make(dict(forms)[nm_])
@@ -3479,20 +3542,29 @@ def opt_stage(base, data, sim, days, ind, cache, part):
             w(f"| {nm} | {'1組目' if s0 == 5000 else '2組目'} | {pct(med(cg))} | {pct(med(mm))} | {pct(med(ii))} | {pct(med(oo))} | {pct(med(g3))} |"
               + (f" {pct(med(gs))} |" if SEP else "") + f" {'両方の期間で上' if ok else ''} |")
             print(nm, s0, file=sys.stderr)
-    if os.environ.get("OPT_YEARLY"):   # 年ごと（その年の初めに空の枠から始めた1年の増減。乱数30通りの中央値）
+    if os.environ.get("OPT_YEARLY"):   # 年ごと（2026-11-03 直した: 続けて持った資金の、前の年の終わりから1年の増減。乱数30通りの中央値）
+        # 以前は「その年の初めに空の枠から始めた1年」で、年末をまたぐ売買を数えていなかった（port は lo〜hi に買って売った売買だけを使う）。
+        # そのため長く持つ売買の多い年（2024・2025年など）が大きくずれ、年ごとの数字をつなげても年率と合わなかった（ユーザーの指摘 2026-11-03）
         years = sorted({d[:4] for d in days})
-        w("\n## 年ごとの成績（その年の初めに空の枠から始めた1年の増減、乱数30通りの中央値）\n")
+        w("\n## 年ごとの成績（続けて持った資金の、前の年の終わりから1年の増減。乱数30通りの中央値。2026-11-03 に直した数え方）\n")
         w("| 形 | " + " | ".join(years) + " |")
         w("|---|" + "---|" * len(years))
+        yend = {y: max(k for k, d in enumerate(days) if d[:4] == y) for y in years}
         for nm, spec in forms:
             trs, sp = make(spec)
-            row = []
-            for y in years:
-                ds = [d for d in days if d[:4] == y]
-                xs = [port(trs, 5000 + q, ds[0], ds[-1], sp["slots"], sp["cap"], sp["swap"], sp["abn"]) for q in range(30)]
-                yrs_ = (dt.date.fromisoformat(ds[-1]) - dt.date.fromisoformat(ds[0])).days / 365.25
-                row.append(pct(med([(1 + g) ** yrs_ - 1 for g, _ in xs])))
-            w(f"| {nm} | " + " | ".join(row) + " |")
+            per_ = {y: [] for y in years}
+            for q in range(30):
+                lg_ = []
+                port(trs, 5000 + q, days[0], days[-1], sp["slots"], sp["cap"], sp["swap"], sp["abn"], log=lg_)
+                eqd_ = {x[1]: x[2] for x in lg_ if x[0] == "eq"}
+                prev_ = 1.0
+                for y in years:
+                    e_ = eqd_.get(days[yend[y]])
+                    if e_ is None:
+                        continue
+                    per_[y].append(e_ / prev_ - 1)
+                    prev_ = e_
+            w(f"| {nm} | " + " | ".join(pct(med(per_[y])) if per_[y] else "—" for y in years) + " |")
             print("年ごと", nm, file=sys.stderr)
     good = [nm for nm, _ in forms if nm not in (REF, "今のルール（傾きの小さい順）") and all(res[(nm, s)][2] > res[(REF, s)][2] and res[(nm, s)][3] > res[(REF, s)][3] for s in (5000, 7300))]
     w(f"\n2組とも、2015〜2021年・2022年〜の両方で「{REF}」を上回った形: " + ("、".join(good) or "なし") + "\n")
