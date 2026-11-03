@@ -2407,24 +2407,32 @@ def opt_stage(base, data, sim, days, ind, cache, part):
     # 2026-11-03 ユーザーの指示「今回のような特殊な下落局面で対策して欲しい」: 特殊な下げ＝SOXが直近60取引日の最高値から−X%以下、かつ
     # ①下げの前の1年（60取引日前までの250取引日）のSOXの上げが+80%以上 ②雇用の伸びが10万人未満 ③物価3.5%以上で再加速 のうち2つ以上。
     # 一度なったら、SOXの終値が50日線より上で50日線が10取引日前より上になるまで続く。1994年〜のSOXでは、この形の後に長い下げが多かった
-    for th_ in (0.15, 0.20):
-        on_, sp_ = False, set()
+    # 2026-11-03 ユーザーの指示「途中でトレンド転換を感知したらテーマの外を売って87銘柄に戻せば年率上がるのでは？」: 戻す合図の速さを変える。
+    #   x50: 終値が50日線より上で50日線が10取引日前より上で終わる（最初の形）。x20・x5: 終値が20日線・5日線より上で終わり、
+    #   終値がその線より下で、特殊な下げの条件（SOXの下げと条件2つ以上）がそろうと、また始まる。SPEND は特殊な下げが終わった日（引けで判定）
+    SPEND = {}
+    for th_, x_n in ((0.15, 50), (0.20, 50), (0.15, 20), (0.15, 5)):
+        on_, sp_, end_ = False, set(), set()
         for k in range(320, len(days)):
             x_ = _sxl[k - 310:k + 1]
             if None in x_:
                 continue
-            m_ = sum(_sxl[k - 49:k + 1]) / 50
+            m_ = sum(_sxl[k - x_n + 1:k + 1]) / x_n
             mp_ = sum(_sxl[k - 59:k - 9]) / 50
             if not on_:
                 n_ = int(_sxl[k - 60] / _sxl[k - 310] - 1 >= 0.8) + int(days[k] in MAC["M_pay100"]) + int(days[k] in MAC["M_cpi35"])
-                if _sxl[k] / max(_sxl[k - 59:k + 1]) - 1 <= -th_ and n_ >= 2:
+                if _sxl[k] / max(_sxl[k - 59:k + 1]) - 1 <= -th_ and n_ >= 2 and (x_n == 50 or _sxl[k] < m_):
                     on_ = True
-            elif _sxl[k] > m_ > mp_:
+            elif (_sxl[k] > m_ > mp_) if x_n == 50 else (_sxl[k] > m_):
                 on_ = False
+                end_.add(days[k])
             if on_:
                 sp_.add(days[k])
-        SKIPSET[f"sp{int(th_ * 100)}"] = sp_
-        print(f"特殊な下げ（SOX −{th_:.0%}）の日: 2015年〜 {sum(1 for d in sp_ if d >= '2015-01-01')}日、" + "・".join(sorted({d[:7] for d in sp_})), file=sys.stderr)
+        nm_ = f"sp{int(th_ * 100)}" + ("" if x_n == 50 else f"x{x_n}")
+        SKIPSET[nm_] = sp_
+        SPEND[nm_] = end_
+        print(f"特殊な下げ（SOX −{th_:.0%}、戻す: {x_n}日線）の日: 2015年〜 {sum(1 for d in sp_ if d >= '2015-01-01')}日、" + "・".join(sorted({d[:7] for d in sp_}))
+              + f"、終わった日 {sorted(d for d in end_ if d >= '2026-01-01')}", file=sys.stderr)
     KD["NOT_ETFUP"] = {d for d in days if d not in up}   # S&P500（SPY）が100日線で「上昇」でない日（案1で2倍ETFを使わない日）
     KN["NOT_ETFUP"] = "S&P500（SPY）が20週線（100日線）で上昇の局面でない日"
     _gvx = bl.load_prices(cache, "^VIX")
@@ -2929,6 +2937,12 @@ def opt_stage(base, data, sim, days, ind, cache, part):
                         if log is not None:
                             log.append((h["t"]["in"], d, "abn", h["t"]["sym"]))
                 pend = []
+            for h in [x for x in held if d in x["t"].get("sell_on", ()) and x["t"]["out"] != d]:   # 特殊な下げが終わった翌日の寄り付き（2026-11-03）
+                g_ = open_gap(h["t"]["sym"], d)
+                cash += h["size"] * h["v"] * max(0.0, 1 + h["t"].get("L", 1) * (g_ - 1)) * (1 - COST)
+                held = [x for x in held if x is not h]
+                if log is not None:
+                    log.append((h["t"]["in"], d, "abn", h["t"]["sym"]))
             still = []
             for h in held:
                 h["vp"] = h["v"]
@@ -3063,6 +3077,11 @@ def opt_stage(base, data, sim, days, ind, cache, part):
           "特殊な下げ⑨SOX−15%の間はテーマを買わない（テーマの外だけ）": {"skip": ("sp15", "theme")},
           "特殊な下げ⑩SOX−20%の間はテーマを買わない（テーマの外だけ）": {"skip": ("sp20", "theme")},
           "特殊な下げ⑪SOX−15%の間は全部買わない": {"skip": ("sp15", "all")},
+          "特殊な下げ⑫SOX−15%の間はテーマを買わない（戻す: 20日線）": {"skip": ("sp15x20", "theme")},
+          "特殊な下げ⑬SOX−15%の間はテーマを買わない（戻す: 5日線）": {"skip": ("sp15x5", "theme")},
+          "特殊な下げ⑭⑨に加えて戻すときテーマの外を売る（50日線）": {"skip": ("sp15", "theme"), "sellout": True},
+          "特殊な下げ⑮⑫に加えて戻すときテーマの外を売る（20日線）": {"skip": ("sp15x20", "theme"), "sellout": True},
+          "特殊な下げ⑯⑬に加えて戻すときテーマの外を売る（5日線）": {"skip": ("sp15x5", "theme"), "sellout": True},
           "買う順番: 続けての合図より初日の合図を先に、その中はRSの高い順": {"prio": "first_rs"},
           "買う順番: 順張りを先に、その中はRSの高い順": {"prio": "trend_rs"},
           "買う順番: 逆張りを先に、その中はRSの高い順": {"prio": "rev_rs"},
@@ -3276,6 +3295,9 @@ def opt_stage(base, data, sim, days, ind, cache, part):
             rr_ = ("B", "C") if who_ == "rev" else ("B", "C", "M", "V", "W")
             if who_ == "theme":   # テーマ（87銘柄ならテーマの外以外、全業種ならAI関連の業種）だけ買わない
                 trs = [t for t in trs if not (t["sd"] in SKIPSET[k_] and ((t["x"] != "out") if sp["outside"] else t["ai"]))]
+                if sp.get("sellout"):   # 2026-11-03: 特殊な下げが終わった翌日の寄り付きで、テーマの外の保有を売ってテーマに戻す
+                    so_ = {days[_dd[d] + 1] for d in SPEND[k_] if _dd[d] + 1 < len(days)}
+                    trs = [{**t, "sell_on": so_} if ((t["x"] == "out") if sp["outside"] else not t["ai"]) else t for t in trs]
             elif k_ == "stock":
                 trs = [t for t in trs if not (t["rule"] in rr_ and stock_dn(t["sym"], t["sd"]))]
             else:
