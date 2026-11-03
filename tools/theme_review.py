@@ -277,6 +277,10 @@ def cmd_review(a):
     if not n_early:
         w("該当なし")
     actual_vs_expected(w)
+    try:
+        weather_check(a.dir, rows, w)
+    except Exception as e_:   # 週次レビューを止めない
+        w(f"\n## 5. 天気予報とニュースの答え合わせ\n\n計算できなかった（{type(e_).__name__}: {e_}）")
     slip_text, alert = slippage(a.dir)
     if a.slip_out:
         open(a.slip_out, "w", encoding="utf-8").write(slip_text)     # 記録はいつも残す
@@ -286,6 +290,71 @@ def cmd_review(a):
     if a.out:
         open(a.out, "w", encoding="utf-8").write(text)
     print(text)
+
+
+SHOCK_WORDS = re.compile(r"ショック|CDS|社債|信用不安|信用スプレッド|デフォルト|格下げ|資金調達不安|債務")
+
+
+def weather_check(rec_dir, rows, w):
+    """2026-11-03 ユーザーの指示: 毎朝の相場天気予報（天気）と、ショック・信用の言葉が出た日の後に、SOX とその日の候補がどう動いたか（記録だけ）。
+    天気予報は前の日までの出来事のまとめで、Claudeの相場観。売買のルールには使っていない。運用の始めからの累計と、直近10日"""
+    import statistics as st_
+    wdir = os.path.join(os.path.dirname(os.path.abspath(rec_dir)), "相場天気予報")
+    fs = sorted(glob.glob(os.path.join(wdir, "20??-??-??.md")))
+    sox = fetch_daily("^SOX")
+    w("\n## 5. 天気予報とニュースの答え合わせ（記録だけ。売買のルールは変えない）\n")
+    if not fs or not sox or not sox["c"]:
+        w("天気予報の記録かSOXの株価を読めなかった。")
+        return
+    sd = sox["date"]
+    def nxt(d):   # その日かその後の最初の取引日
+        return next((k for k, x in enumerate(sd) if x >= d), None)
+    # その日（米国の取引日）に買う候補の成績（候補の記録の日＝前の取引日の引け）
+    by_buy = {}
+    for x in rows:
+        if "ret" not in x:
+            continue
+        k = next((k for k, d_ in enumerate(sd) if d_ > x["date"]), None)
+        if k is not None:
+            by_buy.setdefault(sd[k], []).append(x["ret"])
+    days = []
+    for f in fs:
+        day = os.path.basename(f)[:-3]
+        t = open(f, encoding="utf-8").read()
+        m = re.search(r"weather:\s*([^（\s]+)（(.*?)）", t) or re.search(r"今日の天気[:：]\s*([^（\s]+)（(.*?)）", t)
+        if not m:
+            continue
+        k = nxt(day)
+        if k is None or k < 1:
+            continue
+        shock = bool(SHOCK_WORDS.search(m.group(2))) or len(SHOCK_WORDS.findall(t)) >= 3
+        r0 = sox["c"][k] / sox["c"][k - 1] - 1
+        r5 = sox["c"][k + 4] / sox["c"][k - 1] - 1 if k + 4 < len(sox["c"]) else None
+        cr = by_buy.get(sd[k], [])
+        days.append({"day": day, "w": m.group(1), "why": m.group(2), "shock": shock, "r0": r0, "r5": r5, "cand": cr})
+    pc = lambda v: "—" if v is None else f"{v * 100:+.1f}%"
+    def summ(lab, xs):
+        f5 = [x["r5"] for x in xs if x["r5"] is not None]
+        cs = [r for x in xs for r in x["cand"]]
+        w(f"| {lab} | {len(xs)} | {pc(st_.mean(x['r0'] for x in xs))} | {sum(1 for x in xs if x['r0'] < 0)} | {pc(st_.mean(f5) if f5 else None)} | "
+          + (f"{pc(st_.mean(cs))}（{len(cs)}件）" if cs else "—") + " |")
+    w(f"運用の始め（{days[0]['day'] if days else '-'}）からの累計。SOX は天気予報の日（米国の取引日。休みなら次の取引日）の値動きと、その日から5取引日。"
+      "候補は、その日に買う候補（前の取引日の引けの合図）をルールどおりに売買した場合の1回あたりの損益（上の節2と同じ計算）。\n")
+    w("| 天気 | 日数 | その日のSOX（平均） | その日に下げた日 | その日から5日（平均） | その日に買う候補の1回平均 |")
+    w("|---|---|---|---|---|---|")
+    for g in sorted({x["w"] for x in days}, key=lambda g: ("晴" not in g, "曇" not in g, g)):
+        summ(g, [x for x in days if x["w"] == g])
+    w("\n| ショック・信用の言葉（天気の理由に出た、か本文に3回以上） | 日数 | その日のSOX（平均） | その日に下げた日 | その日から5日（平均） | その日に買う候補の1回平均 |")
+    w("|---|---|---|---|---|---|")
+    summ("あり", [x for x in days if x["shock"]])
+    summ("なし", [x for x in days if not x["shock"]])
+    w("\n直近10日:\n")
+    w("| 日 | 天気（理由） | ショック・信用 | その日のSOX | 5日 | その日に買う候補 |")
+    w("|---|---|---|---|---|---|")
+    for x in days[-10:]:
+        w(f"| {x['day']} | {x['w']}（{x['why'][:40]}） | {'あり' if x['shock'] else '—'} | {pc(x['r0'])} | {pc(x['r5'])} | "
+          + (f"{pc(st_.mean(x['cand']))}（{len(x['cand'])}件）" if x["cand"] else "—") + " |")
+    w("\n- 天気予報はClaudeの相場観（前の日までの出来事のまとめ）で、売買のルールにも著者への質問にも使っていない。記録が貯まってから、ルールに使えるかをユーザーが判断する（2026-11-03）。")
 
 
 def load_real(path):
