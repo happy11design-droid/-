@@ -2411,6 +2411,7 @@ def opt_stage(base, data, sim, days, ind, cache, part):
     #   x50: 終値が50日線より上で50日線が10取引日前より上で終わる（最初の形）。x20・x5: 終値が20日線・5日線より上で終わり、
     #   終値がその線より下で、特殊な下げの条件（SOXの下げと条件2つ以上）がそろうと、また始まる。SPEND は特殊な下げが終わった日（引けで判定）
     SPEND = {}
+    SPIX = {d: k for k, d in enumerate(days)}
     for th_, x_n in ((0.15, 50), (0.20, 50), (0.15, 20), (0.15, 5)):
         on_, sp_, end_ = False, set(), set()
         for k in range(320, len(days)):
@@ -3296,7 +3297,7 @@ def opt_stage(base, data, sim, days, ind, cache, part):
             if who_ == "theme":   # テーマ（87銘柄ならテーマの外以外、全業種ならAI関連の業種）だけ買わない
                 trs = [t for t in trs if not (t["sd"] in SKIPSET[k_] and ((t["x"] != "out") if sp["outside"] else t["ai"]))]
                 if sp.get("sellout"):   # 2026-11-03: 特殊な下げが終わった翌日の寄り付きで、テーマの外の保有を売ってテーマに戻す
-                    so_ = {days[_dd[d] + 1] for d in SPEND[k_] if _dd[d] + 1 < len(days)}
+                    so_ = {days[SPIX[d] + 1] for d in SPEND[k_] if SPIX[d] + 1 < len(days)}
                     trs = [{**t, "sell_on": so_} if ((t["x"] == "out") if sp["outside"] else not t["ai"]) else t for t in trs]
             elif k_ == "stock":
                 trs = [t for t in trs if not (t["rule"] in rr_ and stock_dn(t["sym"], t["sd"]))]
