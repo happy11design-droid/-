@@ -292,6 +292,68 @@ def cmd_daily(a):
     print(f"headlines: {a.out}（保有・候補・時間外: {' '.join(must) or 'なし'}／下げ: {' '.join(picks) or 'なし'}／上げ: {' '.join(ups) or 'なし'}）")
 
 
+# 2026-11-04 ユーザーの指示「ニュースは予想ではなく流れの傾向をつかんで欲しい」: テーマの7グループごとに、悪いニュースの見出しの数を数える。
+# 見出しに会社の名前と悪い言葉の両方があるものだけ数える（同じ見出しは1つ）。原因の判断・売買の判断はしない
+BAD_Q = ('(downgrade OR downgraded OR "price target cut" OR "cuts guidance" OR "lowers guidance" OR "weak guidance" OR "weak outlook" OR '
+         'misses OR plunges OR tumbles OR sinks OR slumps OR selloff OR CDS OR "credit risk" OR "debt concerns" OR probe OR lawsuit OR "export curbs" OR warns)')
+BAD_RE = re.compile(r"downgrad|target (cut|lowered)|cuts? (its |full-year )?(guidance|outlook|forecast)|lowers? (its )?(guidance|outlook|forecast)|weak(er)? (guidance|outlook|forecast|demand)|"
+                    r"\bmiss(es|ed)?\b|plung|tumbl|\bsinks?\b|\bsank\b|slump|sell-?off|\brout\b|crash|\bCDS\b|credit (risk|concern|fear)|default|debt (concern|fear|worr)|"
+                    r"\bprobe\b|lawsuit|investigat|export (ban|curb|control|restriction)|\bwarns?\b|disappoint|layoff", re.I)
+NAME_FIX = {"AMD": "AMD", "QCOM": "Qualcomm", "ON": "onsemi", "HPE": "Hewlett Packard Enterprise", "HPQ": "HP Inc", "FFIV": "F5", "IBM": "IBM",
+            "META": "Meta", "AMZN": "Amazon", "GOOGL": "Alphabet", "FLEX": "Flex Ltd", "TEL": "TE Connectivity", "Q": "Qnity", "KLAC": "KLA",
+            "NVDA": "Nvidia", "NXPI": "NXP", "ASML": "ASML", "NBIS": "Nebius", "ADI": "Analog Devices", "CDNS": "Cadence", "MSI": "Motorola Solutions", "MPWR": "Monolithic Power", "CDW": "CDW", "APP": "AppLovin", "NOW": "ServiceNow", "SHOP": "Shopify", "ACN": "Accenture", "GEV": "GE Vernova"}
+
+
+def theme_groups():
+    """{グループ: [(ティッカー, 見出しで探す名前)]}（新分析ツール/テーマ監視銘柄.md の7グループ）"""
+    p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "新分析ツール", "テーマ監視銘柄.md")
+    out, cur = {}, None
+    for line in open(p, encoding="utf-8"):
+        m = re.match(r"^## (.+?)（", line)
+        if line.startswith("## "):
+            cur = None if (not m or line.startswith("## 指数に入っていない")) else m.group(1)
+            continue
+        m = re.match(r"^\| ([A-Z][A-Z0-9.\-]*) \| ([^|]+) \|", line)
+        if m and cur and m.group(1) != "ティッカー":
+            nm = NAME_FIX.get(m.group(1))
+            if not nm:
+                nm = re.sub(r",? (Inc\.?|Incorporated|Corporation|Corp\.?|Holdings?|Holding|Group|plc|Ltd\.?|N\.V\.|Co\.?|Company|Limited|International|Trust|"
+                            r"Technologies|Technology|Platforms|Systems|Networks|Services|Solutions|Devices|Electronics)\b", "", m.group(2)).strip(" ,.")
+                nm = re.sub(r"\.com$", "", nm)
+            out.setdefault(cur, []).append((m.group(1), nm))
+    return out
+
+
+def group_bad_news(start, end, groups=None, chunk=6, pause=0.5):
+    """start〜end（米国の日付）の、グループごとの悪いニュースの見出し {グループ: [(日付, 媒体, 見出し)]}。取れなかったグループは None"""
+    import time
+    groups = groups or theme_groups()
+    out = {}
+    for g, mem in groups.items():
+        seen, got, fail = set(), [], False
+        names = [nm for _, nm in mem]
+        for i in range(0, len(names), chunk):
+            part = names[i:i + chunk]
+            q = "(" + " OR ".join(f'"{n}"' for n in part) + ") " + BAD_Q
+            x = None
+            for _ in range(3):
+                x = google(q, EN, start, end, 300)
+                if x is not None:
+                    break
+                time.sleep(2)
+            if x is None:
+                fail = True
+                continue
+            for d, src, t in x:
+                if t in seen or not BAD_RE.search(t) or not any(re.search(r"\b" + re.escape(n) + r"\b", t, re.I) for n in part):
+                    continue
+                seen.add(t)
+                got.append((d, src, t))
+            time.sleep(pause)
+        out[g] = None if (fail and not got) else sorted(got)
+    return out
+
+
 def cmd_range(a, start, end):
     o = Out()
     tick = [t.strip().upper() for t in (a.tickers or "").split(",") if t.strip()]
@@ -315,11 +377,21 @@ def main():
     p = sub.add_parser("daily"); p.add_argument("movers"); p.add_argument("out"); p.add_argument("--per", type=int, default=5)
     p = sub.add_parser("day"); p.add_argument("date"); p.add_argument("--tickers"); p.add_argument("--per", type=int, default=5)
     p = sub.add_parser("range"); p.add_argument("start"); p.add_argument("end"); p.add_argument("--tickers"); p.add_argument("--per", type=int, default=3)
+    p = sub.add_parser("groups"); p.add_argument("start"); p.add_argument("end"); p.add_argument("--json")   # グループごとの悪いニュース（2026-11-04）
     a = ap.parse_args()
     if a.cmd == "daily":
         cmd_daily(a)
     elif a.cmd == "day":
         cmd_range(a, dt.date.fromisoformat(a.date), dt.date.fromisoformat(a.date))
+    elif a.cmd == "groups":
+        gs = theme_groups()
+        r = group_bad_news(dt.date.fromisoformat(a.start), dt.date.fromisoformat(a.end), gs)
+        if a.json:
+            json.dump({g: (None if v is None else [(d.isoformat(), s_, t) for d, s_, t in v]) for g, v in r.items()}, open(a.json, "w"), ensure_ascii=False)
+        for g, v in r.items():
+            print(f"## {g}（{len(gs[g])}銘柄）: {'取得できず' if v is None else f'{len(v)}件'}")
+            for d, s_, t in (v or [])[:8]:
+                print(f"- {d} {t}（{s_}）")
     else:
         cmd_range(a, dt.date.fromisoformat(a.start), dt.date.fromisoformat(a.end))
 

@@ -96,6 +96,7 @@ def cmd_record(a):
             m_ = meta.get(c["sym"]) or {}
             c["hot"], c["rsi14"], c["s50"], c["rs"] = m_.get("hot"), m_.get("rsi14"), m_.get("s50"), m_.get("rs")
             c["s2_skip"] = m_.get("s2_skip")
+            c["badnews"] = m_.get("badnews")   # 悪いニュースが続いているグループの候補か（2026-11-04）
     holds = []
     cand_syms = {c["sym"] for c in cands}
     for r in table_rows(scan, "## 5."):
@@ -107,6 +108,7 @@ def cmd_record(a):
            "theme_stage": stage, "candidates": cands, "holdings": holds,
            "s2": (json.load(open(mp, encoding="utf-8")).get("_s2") if os.path.exists(mp) else None),   # テーマ全体の急落 S2 の記録（2026-10-14）
            "special": (json.load(open(mp, encoding="utf-8")).get("_special") if os.path.exists(mp) else None),   # 特殊な下げの記録（2026-11-03）
+           "group_news": (json.load(open(mp, encoding="utf-8")).get("_group_news") if os.path.exists(mp) else None),   # グループごとの悪いニュースの数（2026-11-04）
            # 枠外で表に出さず、著者・ニュース調査に回さなかった候補（2026-10-25〜。バックテストとの一致の点検に使う）
            "omitted": (json.load(open(mp, encoding="utf-8")).get("_omitted", []) if os.path.exists(mp) else []),
            # 参考の表示だけの予約（B）の候補（2026-10-25〜 注文しない）
@@ -354,6 +356,15 @@ def weather_check(rec_dir, rows, w):
     for x in days[-10:]:
         w(f"| {x['day']} | {x['w']}（{x['why'][:40]}） | {'あり' if x['shock'] else '—'} | {pc(x['r0'])} | {pc(x['r5'])} | "
           + (f"{pc(st_.mean(x['cand']))}（{len(x['cand'])}件）" if x["cand"] else "—") + " |")
+    bn = [x for x in rows if "ret" in x and x.get("badnews") is not None]
+    if bn:
+        w("\n悪いニュースが続いているグループ（毎朝の節2の印。2026-11-04〜）の候補と、それ以外の候補（ルールどおりに売買した場合）:\n")
+        w("| 候補 | 件数 | 損切り | 勝ち | 1回平均 |")
+        w("|---|---|---|---|---|")
+        for lab, f_ in (("印のグループ", True), ("それ以外", False)):
+            g = [x for x in bn if bool(x["badnews"]) == f_]
+            if g:
+                w(f"| {lab} | {len(g)} | {sum(1 for x in g if '損切り' in x.get('status', '')) / len(g) * 100:.0f}% | {sum(1 for x in g if x['ret'] > 0) / len(g) * 100:.0f}% | {pc(st_.mean(x['ret'] for x in g))} |")
     w("\n- 天気予報はClaudeの相場観（前の日までの出来事のまとめ）で、売買のルールにも著者への質問にも使っていない。記録が貯まってから、ルールに使えるかをユーザーが判断する（2026-11-03）。")
 
 

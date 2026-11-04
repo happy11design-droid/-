@@ -367,6 +367,32 @@ def special_state(sox, day, th=0.15):
             "n": f["A"] + f["B"] + f["C"], **f}
 
 
+def group_news_state(dates):
+    """2026-11-04 ユーザーの指示「ニュースは予想ではなく流れの傾向をつかんで欲しい」: テーマの7グループごとに、直近5取引日とその前の5取引日の
+    悪いニュースの見出しの数（tools/news_headlines.group_bad_news。会社の名前と悪い言葉の両方がある見出し）。10取引日の1銘柄あたりの数が
+    一番多いグループ（3件以上）に印を付ける（記録だけ。売買のルールは変えない）。取れなければ None"""
+    try:
+        import news_headlines as nh_
+        gs_ = nh_.theme_groups()
+        d_ = [dt.date.fromisoformat(x) for x in dates[-10:]]
+        n1 = nh_.group_bad_news(d_[5], d_[9], gs_)
+        n0 = nh_.group_bad_news(d_[0], d_[4], gs_)
+    except Exception as e_:
+        print(f"グループのニュースを取れなかった: {type(e_).__name__}: {e_}", file=sys.stderr)
+        return None
+    out = {}
+    for g, mem in gs_.items():
+        a1, a0 = n1.get(g), n0.get(g)
+        k = len(a1 or []) + len(a0 or [])
+        out[g] = {"n1": None if a1 is None else len(a1), "n0": None if a0 is None else len(a0), "per": k / len(mem), "size": len(mem),
+                  "top": [f"{d_x.isoformat()} {t}（{src}）" for d_x, src, t in sorted((a1 or []) + (a0 or []), reverse=True)[:3]]}
+    top = max(out, key=lambda g: out[g]["per"])
+    for g in out:
+        out[g]["mark"] = g == top and (out[g]["n1"] or 0) + (out[g]["n0"] or 0) >= 3
+    out["_range"] = f"{d_[0].isoformat()}〜{d_[9].isoformat()}"
+    return out
+
+
 def shares_note(x, ex_):
     """BUY_USD 分の株数と購入金額の目安。値段は、予約注文ならその価格、寄り付きの成行なら今日の終値（寄り付きの値段で変わる）。
     2倍ETFで買う銘柄は、注文の価格（逆指値・指値・指値の上限）もETFの値段に直して書く（2026-10-04 ユーザーの指示）"""
@@ -472,6 +498,7 @@ def main():
         spc = special_state(sox, day)
     except Exception as e_:   # 毎朝のツールを止めない
         spc = {"on": None, "label": f"判定不能（{type(e_).__name__}）"}
+    gnews = group_news_state(spy["date"])
     data = {s: got[s] for s in wl if s in got and got[s]["date"] and got[s]["date"][-1] == day and len(got[s]["c"]) > 260}
     missing = sorted(set(wl) - set(data))
 
@@ -543,6 +570,20 @@ def main():
       + (f"（SOX {s2['close']:.2f}、直近60取引日の最高値 {s2['hi60']:.2f} から {pct(s2['drop'])}。S2＝最高値から−10%以上）" if s2.get("close") else "")
       + "。S2のときに「順張りの新しい買いだけ止める」形を記録で比べる（2026-10-14 ユーザー決定。バックテストでは年率は上がったが2つの期間ではどちらも少し下回ったため、記録してから採用を決める。`バックテスト結果/テーマ全体の急落を検知して手じまう・買いを止める.md`）")
     mk_ = lambda b: "●" if b else "・"
+    if gnews:
+        w(f"- **グループごとの悪いニュースの流れ（記録だけ。売買のルールは変えない。{gnews['_range']}）**: 会社の名前と悪い言葉（格下げ・目標株価の引き下げ・"
+          "見通しの引き下げ・予想未達・急落・信用・訴訟・輸出規制など）の両方がある見出しの数（Googleニュース、`tools/news_headlines.py`）。"
+          "10取引日の1銘柄あたりが一番多いグループに印。2026年7〜11月の確かめでは、印のグループの合図は10月は成績が悪かった（1回平均 −10.6%、ほか −5.6%）が、"
+          "7〜9月は逆に良かった（+11.6%、ほか +6.7%）（`バックテスト結果/実際の運用の期間の確認_2026-10-23/グループの悪いニュースの流れ.md`。2026-11-04）\n")
+        w("| グループ | 直近5取引日 | その前の5取引日 | 10取引日の1銘柄あたり | 印 |")
+        w("|---|---|---|---|---|")
+        for g_, v_ in sorted(((g_, v_) for g_, v_ in gnews.items() if not g_.startswith("_")), key=lambda kv: -kv[1]["per"]):
+            nn_ = lambda x: "取得できず" if x is None else f"{x}件"
+            w(f"| {g_}（{v_['size']}） | {nn_(v_['n1'])} | {nn_(v_['n0'])} | {v_['per']:.1f} | {'**悪いニュースが続いている**' if v_['mark'] else ''} |")
+        mk_g = [g_ for g_, v_ in gnews.items() if not g_.startswith("_") and v_["mark"]]
+        for g_ in mk_g:
+            w(f"\n印のグループ（{g_}）の最近の見出し: " + "／".join(gnews[g_]["top"]))
+        w("")
     w(f"- **特殊な下げ（記録だけ。売買のルールは変えない）: {spc['label']}**"
       + (f"（{spc['since']}から）" if spc.get("since") else "")
       + (f"。SOX は直近60取引日の最高値から {pct(spc['drop'])}（−15%以下が条件）、{mk_(spc['A'])}A 前の1年の上げ {pct(spc['up'])}（+80%以上）、"
@@ -994,6 +1035,11 @@ def main():
               + "、".join(f"{x['sym']}（{x['pat']}・{x['kind'].split('（')[0]}。{g}: {'・'.join(c)}）" for x, g, c in capped))
         if dropped:
             w(f"\n- パターンBは各ルールでRSの高い順に{B_MAX}件まで、急落の底・新高値のAは{CRASH_MAX}件（同時保有の上限）までとし、{dropped}件を省いた。")
+        if gnews:
+            mk_g = {g_ for g_, v_ in gnews.items() if not g_.startswith("_") and v_["mark"]}
+            bn_ = [x["sym"] for x in cands if x.get("group") in mk_g]
+            w(f"\n- 悪いニュースが続いているグループ（{'・'.join(sorted(mk_g)) or 'なし'}）の候補（記録だけ。売買のルールは変えない。著者には渡さない）: "
+              + ("、".join(bn_) if bn_ else "なし"))
         w(f"\n- 候補の数: 空き枠{free_buy}（同時保有{SLOTS}銘柄まで。保有{len(load_holdings())}、うち今日ルールの売りが成立{exit_n}）＋予備{CAND_SPARE}件まで表に出した（2026-10-25 ユーザー決定）。"
           + (f"ほかの{len(spare_out)}件は枠に入らないので、著者の判定とニュース調査に回さない: "
              + "、".join(f"{x['sym']}（{x['pat']}・{x['kind'].split('（')[0].split(': ')[-1]}、RS {x['rs'] or 0:.0f}）" for x in spare_out) if spare_out else "省いた候補はない。"))
@@ -1048,6 +1094,12 @@ def main():
                        "s2_skip": bool(s2.get("on")) and x["kind"].startswith(("順張り", "予約: ミネルヴィニ", "予約: 新高値"))} for x in cands}
     meta["_s2"] = s2
     meta["_special"] = {k: v for k, v in spc.items() if k in ("on", "label", "since", "drop", "n", "A", "B", "C")}   # 特殊な下げの記録（2026-11-03）
+    if gnews:   # グループごとの悪いニュースの流れ（2026-11-04）。候補ごとに印のグループかどうか
+        mk_g = {g_ for g_, v_ in gnews.items() if not g_.startswith("_") and v_["mark"]}
+        for x in cands:
+            if x["sym"] in meta:
+                meta[x["sym"]]["badnews"] = x.get("group") in mk_g
+        meta["_group_news"] = {g_: {k: v_[k] for k in ("n1", "n0", "per", "mark")} for g_, v_ in gnews.items() if not g_.startswith("_")}
     meta["_ref_b"] = [{"sym": x["sym"], "kind": x["kind"], "close": x["close"], "rs": x["rs"]} for x in ref_b]   # 参考の表示だけの予約（B）の候補（record.json に残す）
     meta["_omitted"] = [{"sym": x["sym"], "kind": x["kind"], "pattern": x["pat"], "close": x["close"], "rs": x["rs"]} for x in spare_out]   # 枠外で表に出さなかった候補（record.json に残す）
     json.dump(meta,
