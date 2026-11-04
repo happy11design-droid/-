@@ -2420,6 +2420,60 @@ def opt_stage(base, data, sim, days, ind, cache, part):
         sox.append(last)
     sdd20 = {d: (sox[i] / max(x for x in sox[max(0, i - 19):i + 1] if x) - 1) if sox[i] else 0.0 for i, d in enumerate(days)}
     sdd60 = {d: (sox[i] / max(x for x in sox[max(0, i - 59):i + 1] if x) - 1) if sox[i] else 0.0 for i, d in enumerate(days)}
+    # 2026-11-04 ユーザーの指示「悪いニュースが続いたりテーマ全体に影響するなら、様子見・もっと下がってから・違うテーマ・空売りの中で最善策を」:
+    # テーマ全体の悪い流れの引き金。s2＝SOXが直近60取引日の最高値から−10%以上（テーマ全体の急落、2015年〜で確かめられる）、
+    # warn＝早めの警告かS2（毎朝のツールと同じ）、news＝テーマの7グループの悪いニュースの見出しの合計が、前の8週の中央値の2倍以上の週の次の週
+    # （tools/group_news_weekly.py の結果。2026年6月〜しかない）
+    SKIPSET["s2"] = {d for d, v in sdd60.items() if v <= -0.10}
+    SKIPSET["news"] = set()
+    _nw = os.environ.get("OPT_NEWSW")
+    if _nw and os.path.exists(_nw):
+        _W = json.load(open(_nw))
+        _wk = sorted(_W)
+        _tot = {w: sum(len(v or []) for v in _W[w].values()) for w in _wk}
+        for i_, w in enumerate(_wk):
+            prev_ = [_tot[x] for x in _wk[max(0, i_ - 8):i_]]
+            if len(prev_) >= 3 and _tot[w] >= 2 * sorted(prev_)[len(prev_) // 2]:
+                m_ = dt.date.fromisoformat(w) + dt.timedelta(days=7)
+                SKIPSET["news"] |= {(m_ + dt.timedelta(days=j)).isoformat() for j in range(5)}
+        print("悪いニュースが広がった週の次の週: " + "、".join(sorted({d[:10] for d in SKIPSET["news"] if dt.date.fromisoformat(d).weekday() == 0})), file=sys.stderr)
+    # 空売り（2026-11-04）: 引き金の日の翌日の寄り付きで SOXX を空売り（1枠＝資金の1/4）、引き金が終わった翌日の寄り付きで買い戻す。
+    # 空売りの値動きは毎日の逆（−1倍）、借りる費用 年0.5%、売買の手数料は片道0.1%。損切りは15%（終値で判定し翌日の寄り付き）。
+    # 引き金の始めの5取引日のうちに空き枠があれば入る
+    _sxx = _lp2(cache, "SOXX")
+    _so, _sc = dict(zip(_sxx["date"], _sxx["o"])), dict(zip(_sxx["date"], _sxx["c"]))
+    def short_trades(trig, nslot=1, lev_=-1.0, fee=0.005):
+        out_, k = [], 1
+        on_ = [d in SKIPSET[trig] for d in days]
+        while k < len(days) - 1:
+            if not on_[k] or on_[k - 1]:
+                k += 1
+                continue
+            e_ = next((j for j in range(k, len(days)) if not on_[j]), len(days) - 1)   # 引き金が終わった日（引けで判定）→ 翌日の寄り付きで買い戻す
+            for off_ in range(min(5, e_ - k)):
+                i0_ = k + 1 + off_
+                if i0_ >= len(days) - 1 or days[i0_] not in _so:
+                    continue
+                v_, pv_, out_d = (1 - COST) * (1 + lev_ * (_sc[days[i0_]] / _so[days[i0_]] - 1)), {}, None
+                pv_[days[i0_]] = v_
+                for j in range(i0_ + 1, len(days)):
+                    d_, dp_ = days[j], days[j - 1]
+                    if d_ not in _sc or dp_ not in _sc:
+                        continue
+                    if j == min(e_ + 1, len(days) - 1) or v_ <= 0.85:   # 引き金が終わった翌日か損切りの翌日の寄り付き
+                        v_ = v_ * (1 + lev_ * (_so[d_] / _sc[dp_] - 1)) * (1 - COST)
+                        pv_[d_], out_d = v_, d_
+                        break
+                    v_ = v_ * (1 + lev_ * (_sc[d_] / _sc[dp_] - 1)) * (1 - fee / 252)
+                    pv_[d_] = v_
+                if out_d is None:
+                    out_d = max(pv_)
+                for n_ in range(nslot):
+                    out_.append({"sym": f"SOXX空売り{n_ + 1}", "in": days[i0_], "out": out_d, "path": dict(pv_), "rule": "S", "ret": pv_[out_d] - 1,
+                                 "s50": 0.0, "rs": 999, "ai": True, "first": True, "s2": False, "sd": days[i0_ - 1], "x": None,
+                                 "stopped": min(pv_.values()) <= 0.85, "ichi": True, "reg": 0.0, "dh20": 0.0, "dh60": 0.0, "dh252": 0.0})
+            k = e_ + 1
+        return out_
 
     # 信用の材料（2026-10-17 ユーザーの指示「テストして」）: 社債ETFの値動きで信用の悪化を判定する。FREDのハイイールド債の利回り差は2023-10より前がないので、
     # 同じくらいの年限の国債ETFとの比（金利の動きを打ち消す）を使う。HYG/IEI＝ハイイールド債、LQD/IEF＝投資適格債、BKLN＝ローン（どれも配当調整済み）
@@ -3207,6 +3261,21 @@ def opt_stage(base, data, sim, days, ind, cache, part):
           "SOX200①SOXが200日線より下の間はテーマの押し目・急落の底を買わない": {"skip": ("sox200", "theme_rev")},
           "SOX200②SOXが200日線の5%上より下の間はテーマの押し目・急落の底を買わない": {"skip": ("sox200n5", "theme_rev")},
           "SOX200③SOXが200日線より下で50日線が下向きの間はテーマの押し目・急落の底を買わない": {"skip": ("sox200dn", "theme_rev")},
+          "悪い流れ S2・様子見（全部買わない）": {"skip": ("s2", "all")},
+          "悪い流れ S2・もっと下がってから（テーマの押し目・急落の底は20日の高値から25%以上下げた銘柄だけ）": {"deeper": ("s2", 0.25)},
+          "悪い流れ S2・違うテーマ（テーマを買わずテーマの外だけ）": {"skip": ("s2", "theme")},
+          "悪い流れ S2・空売り（SOXXを1枠）": {"short": ("s2", 1, -1.0)},
+          "悪い流れ S2・違うテーマと空売り": {"skip": ("s2", "theme"), "short": ("s2", 1, -1.0)},
+          "悪い流れ 警告かS2・様子見（全部買わない）": {"skip": ("warn", "all")},
+          "悪い流れ 警告かS2・もっと下がってから（テーマの押し目・急落の底は20日の高値から25%以上下げた銘柄だけ）": {"deeper": ("warn", 0.25)},
+          "悪い流れ 警告かS2・違うテーマ（テーマを買わずテーマの外だけ）": {"skip": ("warn", "theme")},
+          "悪い流れ 警告かS2・空売り（SOXXを1枠）": {"short": ("warn", 1, -1.0)},
+          "悪い流れ 警告かS2・違うテーマと空売り": {"skip": ("warn", "theme"), "short": ("warn", 1, -1.0)},
+          "悪い流れ 悪いニュースが広がった週・様子見（全部買わない）": {"skip": ("news", "all")},
+          "悪い流れ 悪いニュースが広がった週・もっと下がってから（テーマの押し目・急落の底は20日の高値から25%以上下げた銘柄だけ）": {"deeper": ("news", 0.25)},
+          "悪い流れ 悪いニュースが広がった週・違うテーマ（テーマを買わずテーマの外だけ）": {"skip": ("news", "theme")},
+          "悪い流れ 悪いニュースが広がった週・空売り（SOXXを1枠）": {"short": ("news", 1, -1.0)},
+          "悪い流れ 悪いニュースが広がった週・違うテーマと空売り": {"skip": ("news", "theme"), "short": ("news", 1, -1.0)},
           "特殊な下げ⑫SOX−15%の間はテーマを買わない（戻す: 20日線）": {"skip": ("sp15x20", "theme")},
           "特殊な下げ⑬SOX−15%の間はテーマを買わない（戻す: 5日線）": {"skip": ("sp15x5", "theme")},
           "特殊な下げ⑭⑨に加えて戻すときテーマの外を売る（50日線）": {"skip": ("sp15", "theme"), "sellout": True},
@@ -3436,6 +3505,13 @@ def opt_stage(base, data, sim, days, ind, cache, part):
                 trs = [t for t in trs if not (t["rule"] in rr_ and t["sd"] in SKIPSET[k_])]
         if sp.get("half_in"):   # 2026-11-02: 下げの局面の合図は、保有が2銘柄未満のときだけ買う（port の maxheld）
             trs = [{**t, "maxheld": 2} if t["sd"] in SKIPSET[sp["half_in"]] else t for t in trs]
+        if sp.get("deeper"):   # 2026-11-04: 引き金の日は、テーマの押し目・急落の底を、直近20取引日の高値から th 以上下げた銘柄だけ買う（もっと下がってから）
+            k_, th_ = sp["deeper"]
+            trs = [t for t in trs if not (t["sd"] in SKIPSET[k_] and t["rule"] in ("B", "C") and ((t["x"] != "out") if sp["outside"] else t["ai"])
+                                          and t.get("dh20", 0.0) > -th_)]
+        if sp.get("short"):   # 2026-11-04: 引き金の間は SOXX を空売り
+            k_, n_, l_ = sp["short"]
+            trs = trs + short_trades(k_, n_, l_)
         if sp.get("gskip"):   # 2026-11-03: 弱いグループの合図は買わない（合図の日に判定）
             k_, who_ = sp["gskip"]
             rr_ = ("B", "C") if who_ == "rev" else ("B", "C", "M", "V", "W")
