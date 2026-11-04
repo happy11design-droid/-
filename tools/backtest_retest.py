@@ -2388,6 +2388,28 @@ def opt_stage(base, data, sim, days, ind, cache, part):
             GW["rank"].setdefault(g_, set()).add(days[k])
     def gweak(kind, sym, d):
         return d in GW[kind].get(group_of(sym), ())
+    # 2026-11-04 ユーザーの指示「上昇しているテーマをエントリーすれば良いだけ」→「バックテストして」: グループの直近 n 取引日の騰落の順位
+    # （テーマの7グループの中、業種は3銘柄以上の業種の中で。0＝一番強い、件数で割った値）
+    GRANK = {21: {}, 63: {}}
+    for n_ in (21, 63):
+        for k in range(n_, len(days)):
+            th_, in_ = [], []
+            for g_, iv_ in GIDX.items():
+                if iv_[k] is None or iv_[k - n_] is None:
+                    continue
+                r_ = iv_[k] / iv_[k - n_] - 1
+                if g_.startswith("T:"):
+                    th_.append((r_, g_))
+                elif len(_gm[g_]) >= 3:
+                    in_.append((r_, g_))
+            m_ = {}
+            for lst_ in (th_, in_):
+                lst_.sort(reverse=True)
+                for i_, (_, g_) in enumerate(lst_):
+                    m_[g_] = i_ / len(lst_)
+            GRANK[n_][days[k]] = m_
+    def grank(sym, d, n):
+        return GRANK[n].get(d, {}).get(group_of(sym), 0.5)
     print("テーマのグループ: " + "、".join(f"{g_[2:]} {len(m_)}" for g_, m_ in _gm.items() if g_.startswith("T:"))
           + f"。2026-10-01〜の一番弱いグループ: " + "、".join(f"{d}:{next((g_[2:] for g_ in GW['rank'] if g_.startswith('T:') and d in GW['rank'][g_]), '—')}" for d in days if d >= "2026-10-01"), file=sys.stderr)
     print("下げの局面の日（2015年〜）: " + "、".join(f"{k} {sum(1 for d in days if d >= '2015-01-01' and d in v) / max(1, sum(1 for d in days if d >= '2015-01-01')):.0%}"
@@ -3173,6 +3195,8 @@ def opt_stage(base, data, sim, days, ind, cache, part):
     PR = {"slope": lambda t: (0 if t["ai"] else 1, t["s50"]),
           "rs": lambda t: (0 if t["ai"] else 1, -t["rs"]),
           "rs_noai": lambda t: -t["rs"],
+          "grp63": lambda t: (grank(t["sym"], t["sd"], 63), -t["rs"]),   # 2026-11-04: 直近3か月で強いグループの候補から
+          "grp21": lambda t: (grank(t["sym"], t["sd"], 21), -t["rs"]),
           "first_rs": lambda t: (0 if t["ai"] else 1, 0 if t["first"] else 1, -t["rs"]),
           "trend_rs": lambda t: (0 if t["ai"] else 1, 0 if t["rule"] in ("M", "V") else 1, -t["rs"]),
           "rev_rs": lambda t: (0 if t["ai"] else 1, 0 if t["rule"] in ("B", "C") else 1, -t["rs"]),
@@ -3261,6 +3285,10 @@ def opt_stage(base, data, sim, days, ind, cache, part):
           "SOX200①SOXが200日線より下の間はテーマの押し目・急落の底を買わない": {"skip": ("sox200", "theme_rev")},
           "SOX200②SOXが200日線の5%上より下の間はテーマの押し目・急落の底を買わない": {"skip": ("sox200n5", "theme_rev")},
           "SOX200③SOXが200日線より下で50日線が下向きの間はテーマの押し目・急落の底を買わない": {"skip": ("sox200dn", "theme_rev")},
+          "強いグループを先に①直近3か月で強いグループの候補から買う": {"prio": "grp63"},
+          "強いグループを先に②直近1か月で強いグループの候補から買う": {"prio": "grp21"},
+          "強いグループだけ③直近3か月で上位3／7のグループの候補だけ買う": {"gtop": (63, 3 / 7)},
+          "強いグループだけ④直近1か月で上位3／7のグループの候補だけ買う": {"gtop": (21, 3 / 7)},
           "悪い流れ S2・様子見（全部買わない）": {"skip": ("s2", "all")},
           "悪い流れ S2・もっと下がってから（テーマの押し目・急落の底は20日の高値から25%以上下げた銘柄だけ）": {"deeper": ("s2", 0.25)},
           "悪い流れ S2・違うテーマ（テーマを買わずテーマの外だけ）": {"skip": ("s2", "theme")},
@@ -3512,6 +3540,9 @@ def opt_stage(base, data, sim, days, ind, cache, part):
         if sp.get("short"):   # 2026-11-04: 引き金の間は SOXX を空売り
             k_, n_, l_ = sp["short"]
             trs = trs + short_trades(k_, n_, l_)
+        if sp.get("gtop"):   # 2026-11-04: 直近 n 取引日で強い方から frac のグループの候補だけ買う（87銘柄のテーマの外は、もともと強い業種なのでそのまま）
+            n_, f_ = sp["gtop"]
+            trs = [t for t in trs if (sp["outside"] and t["x"] == "out") or t["rule"] == "S" or grank(t["sym"], t["sd"], n_) < f_]
         if sp.get("gskip"):   # 2026-11-03: 弱いグループの合図は買わない（合図の日に判定）
             k_, who_ = sp["gskip"]
             rr_ = ("B", "C") if who_ == "rev" else ("B", "C", "M", "V", "W")
