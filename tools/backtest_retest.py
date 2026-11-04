@@ -2315,6 +2315,24 @@ def opt_stage(base, data, sim, days, ind, cache, part):
         return c_[k] < m_ and m_ < sum(c_[k - 59:k - 9]) / 50
     SKIPSET = {"th50": TH50, "thturn": THTURN, "soxdn": SOXDN, "warn": WARN}
     SKIPSET["thyoko"] = {d for d, g_ in THEME_REG.items() if g_ == "横ばい"}   # 2026-11-03: テーマの30週線が横ばいの日
+    # 2026-11-04 ユーザーの指示「この結果を元に対策を考えて」→「テストして」: 7〜9月（SOXが200日線の12〜30%上）は押し目が戻り、
+    # 10月（SOXが200日線まで下げて割り込んだ）は押し目が損切りになった。SOXの200日線で、テーマの押し目・急落の底を止める日
+    for nm_ in ("sox200", "sox200n5", "sox200dn"):
+        SKIPSET[nm_] = set()
+    for k in range(210, len(days)):
+        x_ = _sxl[k - 199:k + 1]
+        if None in x_ or None in _sxl[k - 59:k + 1]:
+            continue
+        m200_ = sum(x_) / 200
+        m50_, m50p_ = sum(_sxl[k - 49:k + 1]) / 50, sum(_sxl[k - 59:k - 9]) / 50
+        if _sxl[k] < m200_:
+            SKIPSET["sox200"].add(days[k])
+            if m50_ < m50p_:
+                SKIPSET["sox200dn"].add(days[k])
+        if _sxl[k] < m200_ * 1.05:
+            SKIPSET["sox200n5"].add(days[k])
+    print("SOXの200日線: " + "、".join(f"{k_} 2015年〜の{sum(1 for d in SKIPSET[k_] if d >= '2015-01-01') / max(1, sum(1 for d in days if d >= '2015-01-01')):.0%}の日"
+                                     for k_ in ("sox200", "sox200n5", "sox200dn")), file=sys.stderr)
     # 2026-11-03 ユーザーの指示「弱いグループの押し目・急落の底は買わない形をバックテストして」: グループ＝テーマ監視銘柄.md の7グループ（87銘柄）、
     # それ以外の銘柄はYahooの業種。グループの等金額平均（毎日の騰落の平均）で、①直近21取引日の騰落がグループの中で一番弱い（業種は下位1/7）
     # ②平均が50日線より下で50日線が10取引日前より下（グループの下げの局面）
@@ -3186,6 +3204,9 @@ def opt_stage(base, data, sim, days, ind, cache, part):
           "弱いグループ①直近1か月で一番弱いグループの押し目・急落の底は買わない": {"gskip": ("rank", "rev")},
           "弱いグループ②グループが50日線より下で線が下向きなら押し目・急落の底は買わない": {"gskip": ("trend", "rev")},
           "弱いグループ③グループが50日線より下で線が下向きなら全部のルールで買わない": {"gskip": ("trend", "all")},
+          "SOX200①SOXが200日線より下の間はテーマの押し目・急落の底を買わない": {"skip": ("sox200", "theme_rev")},
+          "SOX200②SOXが200日線の5%上より下の間はテーマの押し目・急落の底を買わない": {"skip": ("sox200n5", "theme_rev")},
+          "SOX200③SOXが200日線より下で50日線が下向きの間はテーマの押し目・急落の底を買わない": {"skip": ("sox200dn", "theme_rev")},
           "特殊な下げ⑫SOX−15%の間はテーマを買わない（戻す: 20日線）": {"skip": ("sp15x20", "theme")},
           "特殊な下げ⑬SOX−15%の間はテーマを買わない（戻す: 5日線）": {"skip": ("sp15x5", "theme")},
           "特殊な下げ⑭⑨に加えて戻すときテーマの外を売る（50日線）": {"skip": ("sp15", "theme"), "sellout": True},
@@ -3402,7 +3423,9 @@ def opt_stage(base, data, sim, days, ind, cache, part):
         if sp.get("skip"):   # 2026-11-02: 下げの局面では買わない（合図の日に判定）
             k_, who_ = sp["skip"]
             rr_ = ("B",) if who_ == "B" else ("B", "C") if who_ == "rev" else ("B", "C", "M", "V", "W")
-            if who_ == "theme":   # テーマ（87銘柄ならテーマの外以外、全業種ならAI関連の業種）だけ買わない
+            if who_ == "theme_rev":   # 2026-11-04: テーマの押し目・急落の底だけ買わない（順張りとテーマの外は買う）
+                trs = [t for t in trs if not (t["sd"] in SKIPSET[k_] and t["rule"] in ("B", "C") and ((t["x"] != "out") if sp["outside"] else t["ai"]))]
+            elif who_ == "theme":   # テーマ（87銘柄ならテーマの外以外、全業種ならAI関連の業種）だけ買わない
                 trs = [t for t in trs if not (t["sd"] in SKIPSET[k_] and ((t["x"] != "out") if sp["outside"] else t["ai"]))]
                 if sp.get("sellout"):   # 2026-11-03: 特殊な下げが終わった翌日の寄り付きで、テーマの外の保有を売ってテーマに戻す
                     so_ = {days[SPIX[d] + 1] for d in SPEND[k_] if SPIX[d] + 1 < len(days)}
