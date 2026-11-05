@@ -3177,13 +3177,15 @@ def opt_stage(base, data, sim, days, ind, cache, part):
         k_ = pos_.setdefault(sym, {x: i for i, x in enumerate(s_["date"])}).get(d)
         return s_["o"][k_] / s_["c"][k_ - 1] if k_ and s_["c"][k_ - 1] else 1.0
 
+    _RF = {"skip": 0.0, "order": False, "cblog": False, "open_ok": False}   # 始める日をずらす検証（OPT_ROLL）だけで使う切り替え（2026-11-05）
+
     def port(trs, seed, lo, hi, slots=4, cap=2, swap=None, abn=None, log=None):
         """abn: 保有全体の異常（2026-10-18）=(銘柄数 N か "all", 買値からの下げ X, "loser"|"all")。引けで、買値から X 以上下げた保有が N 銘柄以上
         （"all" は2銘柄以上を持っていて全部）なら、翌日の寄り付きで損の出ている保有（"all" なら全部）を売る。買いはふつうに続ける。
         log: リストを渡すと (買った日, 売った日, "stop"|"rule"|"abn"|"open", 銘柄) と ("eq", 日, 資金) を入れる"""
         by_in = {}
         for t in trs:
-            if lo <= t["in"] and t["out"] <= hi:
+            if lo <= t["in"] and (t["out"] <= hi or (_RF["open_ok"] and t["in"] <= hi)):   # open_ok: 区切りの最後の日に持っている売買も入れる（その日の値段で数える）
                 by_in.setdefault(t["in"], []).append(t)
         cb_ = next((t["cb"] for t in trs if t.get("cb")), None)   # 2026-11-05: 損切りが続いたら止める (直近 w 件, うち k 件以上が損切り＝損で終わった売買, 止める取引日数)
         cb_hist, cb_until = [], -1
@@ -3242,6 +3244,8 @@ def opt_stage(base, data, sim, days, ind, cache, part):
             if cb_ and len(cb_hist) >= cb_[0] and sum(cb_hist[-cb_[0]:]) >= cb_[1]:   # 直近 w 件のうち k 件以上が損切り → 今日から止める
                 cb_until, cb_hist = di[d] + cb_[2], []
                 cb_start, cb_on = di[d], True
+                if log is not None and _RF["cblog"]:
+                    log.append(("cb", d, "cb", ""))
             if cb_ and cb_on and len(cb_) > 3 and cb_[3]:   # 再開の合図で止める形: 合図がそろうか、最長 cb_[2] 取引日で再開
                 if di[d] - cb_start >= 1 and cb_resume(di[d] - 1):
                     cb_until, cb_on = -1, False
@@ -3250,7 +3254,9 @@ def opt_stage(base, data, sim, days, ind, cache, part):
                 x_ = _sxl[di[d] - 20:di[d]]
                 if None not in x_ and _sxl[di[d] - 1] > sum(x_) / 20:
                     dd_on, dd_pk = False, eq
-            for t in sorted(by_in.get(d, []), key=lambda t: (t["prio"], rnd.random())):
+            for t in sorted(by_in.get(d, []), key=lambda t: (rnd.random(),) if _RF["order"] else (t["prio"], rnd.random())):
+                if _RF["skip"] and rnd.random() < _RF["skip"]:   # 乱数で候補の一部を見送る（取れなかった注文の代わり。OPT_ROLL）
+                    continue
                 if any(h["t"]["sym"] == t["sym"] for h in held):
                     continue
                 if dds_ and dd_on and t["rule"] not in ("S", "R"):
@@ -3796,6 +3802,36 @@ def opt_stage(base, data, sim, days, ind, cache, part):
             print(f"{lab}: 合計 {f([x['total'] for x in xs])}（確定した分 {f([x['real'] for x in xs])}、含み損の分 {f([x['unreal'] for x in xs])}）、"
                   f"その間の損切り {_st.median([x['stops'] for x in xs]):.0f}回。乱数1通り目: {xs[0]['peak']}→{xs[0]['trough']} "
                   f"合計 {xs[0]['total'] * 100:+.1f}%（確定 {xs[0]['real'] * 100:+.1f}%・含み損 {xs[0]['unreal'] * 100:+.1f}%、損切り {xs[0]['stops']}回）", file=sys.stderr)
+        return
+    if os.environ.get("OPT_ROLL"):   # 2026-11-05 ユーザーの指示「エントリーする日付を変えたり、乱数で検証しないと意味ないから検証して。たまたま損切りしなかっただけでは？」
+        # 始める日をずらし（2015年〜、OPT_ROLL_STEP 取引日ごと）、それぞれ空の枠から OPT_ROLL_WIN 取引日運用した成績を形ごとに書き出す。
+        # 今回の分は 2026-09-15〜10-30 の毎日から最終日まで。乱数: 同じ日の候補の買う順番を乱数にし（OPT_ROLL_ORDER=1）、候補の一部を乱数で見送る（OPT_ROLL_SKIP、既定25%）
+        import json as _js
+        win_, step_, nse_ = int(os.environ.get("OPT_ROLL_WIN", "60")), int(os.environ.get("OPT_ROLL_STEP", "5")), int(os.environ.get("OPT_ROLL_SEEDS", "10"))
+        _RF.update(skip=float(os.environ.get("OPT_ROLL_SKIP", "0.25")), order=os.environ.get("OPT_ROLL_ORDER", "1") == "1", cblog=True, open_ok=True)
+        k15 = next(k for k, d in enumerate(days) if d >= "2015-01-02")
+        rec_ = {k for k, d in enumerate(days) if "2026-09-15" <= d <= "2026-10-30"}
+        ks_ = sorted(set(range(k15, len(days) - 11, step_)) | rec_)
+        out_ = {"days": days, "win": win_, "skip": _RF["skip"], "order": _RF["order"], "forms": {}}
+        for nm_, spec_ in forms:
+            trs, sp = make(spec_)
+            rows_ = {}
+            for k in ks_:
+                hk = len(days) - 1 if k in rec_ else min(k + win_, len(days) - 1)
+                r_ = []
+                for q in range(nse_):
+                    lg = []
+                    port(trs, 9000 + q, days[k], days[hk], sp["slots"], sp["cap"], sp["swap"], sp["abn"], log=lg)
+                    eqs = [x[2] for x in lg if x[0] == "eq"]
+                    pk_, md_ = 1.0, 0.0
+                    for e_ in eqs:
+                        pk_ = max(pk_, e_); md_ = max(md_, 1 - e_ / pk_)
+                    nl_ = sum(1 for x in lg if x[0] not in ("eq", "cb") and x[1] is not None and x[1] <= days[hk] and x[2] == "stop")
+                    r_.append([round(eqs[-1] - 1, 5) if eqs else 0.0, round(md_, 5), int(any(x[0] == "cb" for x in lg)), nl_])
+                rows_[days[k]] = r_
+            out_["forms"][nm_] = rows_
+            print("始める日をずらす", nm_, len(rows_), file=sys.stderr)
+        _js.dump(out_, open(os.environ["OPT_ROLL"], "w"), ensure_ascii=False)
         return
     if os.environ.get("OPT_TRADELIST"):   # 2026-11-03 ユーザーの質問「運用を始めてから買いの判定をした銘柄で、含み損・損切りは何銘柄か」: その日以降に買う合図の売買を書き出す（株そのもの）
         nm_ = os.environ.get("OPT_REF", forms[-1][0])
