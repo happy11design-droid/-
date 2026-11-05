@@ -29,6 +29,37 @@ import backtest_swing as bs
 import backtest_theme as bth
 import backtest_trend as bt
 from backtest_regime import up as regime_up
+
+
+def stock_phase(i, d):
+    """銘柄の局面を5つで表す（2026-11-05 ユーザーの指示「上昇、下落、レンジ等の表示も直して」。それまでは上昇相場かレンジの2つだけで、下げている銘柄もレンジと出ていた）。
+    上昇相場: 終値 > 50日線 > 200日線、50日線が20取引日前より2%以上高い、ADX(14) ≧ 20（regime_up）
+    下落相場: 終値 < 50日線 < 200日線、50日線が20取引日前より2%以上低い、ADX(14) ≧ 20（上昇相場の裏返し。バックテストの stock_regime の "down" と同じ）
+    上げ: それ以外で、終値が50日線より上で、50日線が10取引日前より上か20日線が5取引日前より上
+    下げ: それ以外で、終値が50日線より下で、50日線が10取引日前より下か20日線が5取引日前より下（急な下げの初めは50日線がまだ上向きなので、20日線でも見る）
+    レンジ: どれにも当たらない（線より上なのに両方の線が下向き、線より下なのに両方の線が上向き、など）"""
+    if regime_up(i, d):
+        return "上昇相場"
+    if i < 20:
+        return "判定不可"
+    c, m50, m200, a, m10, m20 = d["c"][i], d["ma50"][i], d["ma200"][i], d["adx14"][i], d["ma50"][i - 10], d["ma50"][i - 20]
+    if None in (c, m50, m10):
+        return "判定不可"
+    if m200 is not None and m20 is not None and a is not None and c < m50 < m200 and m50 <= m20 * 0.98 and a >= 20:
+        return "下落相場"
+    t20, t20p = sum(d["c"][i - 19:i + 1]) / 20, sum(d["c"][i - 24:i - 4]) / 20
+    if c > m50 and (m50 > m10 or t20 > t20p):
+        return "上げ"
+    if c < m50 and (m50 < m10 or t20 < t20p):
+        return "下げ"
+    return "レンジ"
+
+
+PHASE_NOTE = ("- 局面（判定式はClaudeが置いたもの）: **上昇相場**＝終値 > 50日線 > 200日線、50日線が20取引日前より2%以上高い、ADX(14) ≧ 20／"
+              "**下落相場**＝終値 < 50日線 < 200日線、50日線が20取引日前より2%以上低い、ADX(14) ≧ 20／"
+              "**上げ**＝それ以外で終値が50日線より上、かつ50日線が10取引日前より上か20日線が5取引日前より上／"
+              "**下げ**＝それ以外で終値が50日線より下、かつ50日線が10取引日前より下か20日線が5取引日前より下（急な下げの初めは50日線がまだ上向きのため20日線でも見る）／"
+              "**レンジ**＝どれにも当たらない（2026-11-05 から5つ。それまでは上昇相場とレンジの2つだけで、下げている銘柄もレンジと出ていた）。")
 from backtest_minervini2 import add_pivot
 from backtest_lib import DEFAULT_CACHE, MEMBERS_URL, curl, market_regime, rsi_wilder, sma
 import backtest_crash as bcr
@@ -644,8 +675,8 @@ def main():
         for s_, ch, vr in sorted(mv, key=lambda x: -abs(x[1])):
             d = data[s_]
             rs = d["rs"][-1]
-            w(f"| {s_} | {wl[s_]} | {pct(ch)} | {vr:.1f}倍 | {d['c'][-1]:.2f} | {'上' if d['ma50'][-1] and d['c'][-1] > d['ma50'][-1] else '下'} | {'取得不可' if rs is None else f'{rs:.0f}'} | {'上昇相場' if regime_up(len(d['c']) - 1, d) else 'レンジ'} |")
-        w("\n- 局面: 終値 > 50日線 > 200日線、50日線が20取引日前より2%以上高い、ADX(14) ≧ 20 をすべて満たせば上昇相場、それ以外はレンジ（判定式はClaudeが置いたもの）。")
+            w(f"| {s_} | {wl[s_]} | {pct(ch)} | {vr:.1f}倍 | {d['c'][-1]:.2f} | {'上' if d['ma50'][-1] and d['c'][-1] > d['ma50'][-1] else '下'} | {'取得不可' if rs is None else f'{rs:.0f}'} | {stock_phase(len(d['c']) - 1, d)} |")
+        w("\n" + PHASE_NOTE)
     else:
         w("該当なし")
     w("")
@@ -845,7 +876,7 @@ def main():
         # 過熱（終値が+2σより上かつRSI(14)が70超え）。記録だけ（record.json）で、判定・表示には使わない（2026-10-10 ユーザーの指示。傾向を見てから採用を検討）
         hot_ = bool(d["bb_up"][i] is not None and d["c"][i] > d["bb_up"][i] and r14_ is not None and r14_ > 70)
         base = {"sym": s, "group": grp, "outside": is_out, "close": d["c"][i], "rs": rs, "chg": d["c"][i] / d["c"][i - 1] - 1, "s50": s50_, "hot": hot_, "rsi14": r14_,
-                "regime": "上昇相場" if regime_up(i, d) else "レンジ"}
+                "regime": stock_phase(i, d)}
         pb, ii = d["pctb"][i], d["ii21"][i]
         lvl05 = d["bb_dn"][i] + 0.05 * (d["bb_up"][i] - d["bb_dn"][i])
         if bs.O_method3(i, d):
@@ -1025,6 +1056,7 @@ def main():
             ex_ = etf2x_buy(x["sym"])
             od_ = x["order"] + (f"。**2倍ETFで買う: {ex_[0]}**（目減り 年{ex_[1] * 100:.0f}%。株と同じ金額。合図・損切り・手じまいは元の株 {x['sym']} の値段で判定）" if ex_ else etf_skip_note(x["sym"])) + shares_note(x, ex_)
             w(f"| {x['sym']} | {x['group']} | {x['pat']} | {x['kind']} | {perf(x)} | {x['close']:.2f} | {pct(x['chg'])} | {rs_} | {pct(x['s50'])} | {x['regime']} | {x['why']} | {eds[x['sym']]} | {od_} |")
+        w("\n" + PHASE_NOTE)
         w("\n- 2倍ETF: 2倍ETFがある銘柄（ユーザーがムームー証券で買えることを確認した38銘柄のうち、目減りが年15%未満のもの）は、株の代わりに2倍ETFを買う（2026-10-04 ユーザー決定。"
           "`バックテスト結果/2倍ETFを使う決まり.md`。年率 約27%→約33%、確定した損益だけの最大下落率 約30%→約31%、含み損込みは約33%→約45%）。"
           "買う金額は株と同じ（資金の25%）。合図・損切り（元の株の買値の15%下＝ETFでは約30%下）・手じまいはすべて元の株の値段で判定する。指値・逆指値はETFの値段に直して置く。"
