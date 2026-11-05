@@ -2314,6 +2314,78 @@ def opt_stage(base, data, sim, days, ind, cache, part):
         m_ = sum(c_[k - 49:k + 1]) / 50
         return c_[k] < m_ and m_ < sum(c_[k - 59:k - 9]) / 50
     SKIPSET = {"th50": TH50, "thturn": THTURN, "soxdn": SOXDN, "warn": WARN}
+    # 2026-11-05 ユーザーの指示「下落相場などがわかるのにそれに沿ったエントリーをすれば良いのでは」: 銘柄の局面を3つに分ける
+    # 上昇相場＝終値＞50日線＞200日線・50日線が20取引日前より2%以上高い・ADX(14)≧20（毎朝の表と同じ）、下落相場＝その逆（終値＜50日線＜200日線・2%以上低い・ADX≧20）、それ以外＝レンジ
+    def stock_regime(sym, d):
+        s_ = data.get(sym)
+        if not s_:
+            return "range"
+        pos = _spos.setdefault(sym, {x: i for i, x in enumerate(s_["date"])})
+        k = pos.get(d)
+        if k is None or k < 220:
+            return "range"
+        c_ = s_["c"]
+        m50, m200, m50p = sum(c_[k - 49:k + 1]) / 50, sum(c_[k - 199:k + 1]) / 200, sum(c_[k - 69:k - 19]) / 50
+        a_ = (s_.get("adx14") or [None] * len(c_))[k]
+        adx_ok = a_ is None or a_ >= 20
+        if c_[k] > m50 > m200 and m50 >= m50p * 1.02 and adx_ok:
+            return "up"
+        if c_[k] < m50 < m200 and m50 <= m50p * 0.98 and adx_ok:
+            return "down"
+        return "range"
+    def regime_shorts(kind, universe_fn):
+        """下落相場の銘柄の空売り（2026-11-05）。kind="rally": RSI(2)≧90（戻り）の翌日の寄り付きで空売り、終値が5日線を下回った翌日の寄り付きで買い戻す（最長20取引日）。
+        "breakdown": 終値が直前20取引日の最安値（終値）を下回った翌日の寄り付きで空売り、終値が20日線を上回った翌日の寄り付きで買い戻す（最長60取引日）。
+        どちらも損切り15%（日中の高値が空売りの値段の15%上）。2015年〜"""
+        out_ = []
+        for sym, s_ in data.items():
+            c_, o_, h_ = s_["c"], s_["o"], s_["h"]
+            n_ = len(c_)
+            k = 220
+            while k < n_ - 2:
+                d = s_["date"][k]
+                if d < "2015-01-01" or not universe_fn(sym, d) or stock_regime(sym, d) != "down":
+                    k += 1
+                    continue
+                if kind == "rally":
+                    up_ = [max(c_[j] - c_[j - 1], 0) for j in range(k - 9, k + 1)]
+                    dn_ = [max(c_[j - 1] - c_[j], 0) for j in range(k - 9, k + 1)]
+                    au, ad = up_[0], dn_[0]
+                    for u_, v_ in zip(up_[1:], dn_[1:]):
+                        au, ad = (au + u_) / 2, (ad + v_) / 2
+                    sig = ad == 0 or 100 - 100 / (1 + au / ad) >= 90
+                else:
+                    sig = c_[k] < min(c_[k - 20:k])
+                if not sig:
+                    k += 1
+                    continue
+                i0, px = k + 1, o_[k + 1]
+                if not px:
+                    k += 1
+                    continue
+                pv_, j, xd = {}, i0, None
+                while j < n_:
+                    if h_[j] >= px * 1.15:   # 損切り
+                        xp = max(o_[j] if j > i0 else px, px * 1.15)
+                        pv_[s_["date"][j]] = (1 - COST) * (1 - (xp / px - 1)) * (1 - COST)
+                        xd, stp = s_["date"][j], True
+                        break
+                    pv_[s_["date"][j]] = (1 - COST) * (1 - (c_[j] / px - 1))
+                    lim_ = 20 if kind == "rally" else 60
+                    cov = (c_[j] < sum(c_[j - 4:j + 1]) / 5) if kind == "rally" else (c_[j] > sum(c_[j - 19:j + 1]) / 20)
+                    if (cov or j - i0 >= lim_) and j + 1 < n_:
+                        pv_[s_["date"][j + 1]] = (1 - COST) * (1 - (o_[j + 1] / px - 1)) * (1 - COST)
+                        xd, stp = s_["date"][j + 1], False
+                        break
+                    j += 1
+                if xd is None:
+                    xd, stp = s_["date"][n_ - 1], False
+                out_.append({"sym": sym, "in": s_["date"][i0], "out": xd, "path": pv_, "rule": "R", "ret": pv_[xd] - 1, "s50": 0.0, "rs": -1000,
+                             "ai": False, "first": True, "s2": False, "sd": d, "x": None, "stopped": stp, "ichi": True, "reg": 0.0,
+                             "dh20": 0.0, "dh60": 0.0, "dh252": 0.0})
+                k = max(k + 1, s_["date"].index(xd) if xd in s_["date"] else k + 1)
+        return out_
+    _rsh = {}
     SKIPSET["thyoko"] = {d for d, g_ in THEME_REG.items() if g_ == "横ばい"}   # 2026-11-03: テーマの30週線が横ばいの日
     # 2026-11-04 ユーザーの指示「この結果を元に対策を考えて」→「テストして」: 7〜9月（SOXが200日線の12〜30%上）は押し目が戻り、
     # 10月（SOXが200日線まで下げて割り込んだ）は押し目が損切りになった。SOXの200日線で、テーマの押し目・急落の底を止める日
@@ -3293,6 +3365,11 @@ def opt_stage(base, data, sim, days, ind, cache, part):
           "SOX200①SOXが200日線より下の間はテーマの押し目・急落の底を買わない": {"skip": ("sox200", "theme_rev")},
           "SOX200②SOXが200日線の5%上より下の間はテーマの押し目・急落の底を買わない": {"skip": ("sox200n5", "theme_rev")},
           "SOX200③SOXが200日線より下で50日線が下向きの間はテーマの押し目・急落の底を買わない": {"skip": ("sox200dn", "theme_rev")},
+          "局面に沿う①下落相場の銘柄は押し目・急落の底で買わない": {"rskip": ("down", "rev")},
+          "局面に沿う②下落相場の銘柄は全部のルールで買わない": {"rskip": ("down", "all")},
+          "局面に沿う③上昇相場は全部・レンジは押し目と急落の底だけ・下落相場は買わない": {"rskip": ("down", "match")},
+          "局面に沿う④下落相場の銘柄の戻り売り（RSI2が90以上で空売り）": {"rshort": "rally"},
+          "局面に沿う⑤下落相場の銘柄の安値割れの空売り": {"rshort": "breakdown"},
           "機関投資家①買った株と同じ金額のSOXXをいつも空売り（市場の下げを打ち消す）": {"hedge": "always"},
           "機関投資家②SOXが50日線より下で線が下向きのときに買った株だけSOXXで打ち消す": {"hedge": "soxdn"},
           "機関投資家③早めの警告かS2のときに買った株だけSOXXで打ち消す": {"hedge": "warn"},
@@ -3575,6 +3652,19 @@ def opt_stage(base, data, sim, days, ind, cache, part):
         if sp.get("short"):   # 2026-11-04: 引き金の間は SOXX を空売り
             k_, n_, l_ = sp["short"]
             trs = trs + short_trades(k_, n_, l_)
+        if sp.get("rskip"):   # 2026-11-05: 銘柄の局面に沿う。rskip=(局面, "rev"|"all"|"match")
+            k_, who_ = sp["rskip"]
+            if who_ == "match":   # 上昇相場は全部のルール、レンジは押し目・急落の底だけ、下落相場は買わない
+                trs = [t for t in trs if t["rule"] in ("S", "R") or (lambda g_: g_ == "up" or (g_ == "range" and t["rule"] in ("B", "C")))(stock_regime(t["sym"], t["sd"]))]
+            else:
+                rr_ = ("B", "C") if who_ == "rev" else ("B", "C", "M", "V", "W")
+                trs = [t for t in trs if not (t["rule"] in rr_ and stock_regime(t["sym"], t["sd"]) == k_)]
+        if sp.get("rshort"):   # 2026-11-05: 下落相場の銘柄を空売り（87銘柄はテーマの7グループの銘柄、全業種はAI関連の業種のS&P500構成銘柄）
+            kind_ = sp["rshort"]
+            if (kind_, sp["outside"]) not in _rsh:
+                uni_ = (lambda sym, d: sym in _TG) if (sp["outside"] and _TG) else (lambda sym, d: ind.get(sym) in AI and sym in _mem2 and _im2(_mem2[sym], d))
+                _rsh[(kind_, sp["outside"])] = regime_shorts(kind_, uni_)
+            trs = trs + _rsh[(kind_, sp["outside"])]
         if sp.get("gtop"):   # 2026-11-04: 直近 n 取引日で強い方から frac のグループの候補だけ買う（87銘柄のテーマの外は、もともと強い業種なのでそのまま）
             n_, f_ = sp["gtop"]
             trs = [t for t in trs if (sp["outside"] and t["x"] == "out") or t["rule"] == "S" or grank(t["sym"], t["sd"], n_) < f_]
