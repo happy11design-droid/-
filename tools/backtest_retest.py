@@ -3188,6 +3188,8 @@ def opt_stage(base, data, sim, days, ind, cache, part):
         cb_ = next((t["cb"] for t in trs if t.get("cb")), None)   # 2026-11-05: 損切りが続いたら止める (直近 w 件, うち k 件以上が損切り, 止める取引日数)
         cb_hist, cb_until = [], -1
         cb_start, cb_on = -1, False   # 再開の合図で止める形（cb_[3]）: 止めた日の番号と、止めているかどうか
+        dds_ = next((t["ddstop"] for t in trs if t.get("ddstop")), None)   # 2026-11-05: 資金（含み損込み）が最高値から x 下げたら全部売り、SOXが20日線を上回るまで止める
+        dd_pk, dd_on = 1.0, False
         def cb_resume(k):   # 前の日（k）の引けで、再開の合図がそろったか（2026-11-05）
             kind_ = cb_[3]
             x_ = _sxl[k - 59:k + 1]
@@ -3244,8 +3246,14 @@ def opt_stage(base, data, sim, days, ind, cache, part):
                 if di[d] - cb_start >= 1 and cb_resume(di[d] - 1):
                     cb_until, cb_on = -1, False
             eq = cash + sum(h["size"] * h["v"] for h in held)
+            if dds_ and dd_on and di[d] >= 61:   # 止めている間: 前の日の引けで SOX が20日線を上回ったら再開（最高値をその日の資金に置き直す）
+                x_ = _sxl[di[d] - 20:di[d]]
+                if None not in x_ and _sxl[di[d] - 1] > sum(x_) / 20:
+                    dd_on, dd_pk = False, eq
             for t in sorted(by_in.get(d, []), key=lambda t: (t["prio"], rnd.random())):
                 if any(h["t"]["sym"] == t["sym"] for h in held):
+                    continue
+                if dds_ and dd_on and t["rule"] not in ("S", "R"):
                     continue
                 if cb_ and di[d] < cb_until and t["rule"] not in ("S", "R"):   # 損切りが続いたので止めている間は新しく買わない
                     continue
@@ -3288,6 +3296,10 @@ def opt_stage(base, data, sim, days, ind, cache, part):
             eq = cash + sum(h["size"] * h["v"] for h in held)
             peak = max(peak, eq)
             mdd = max(mdd, 1 - eq / peak)
+            if dds_:
+                dd_pk = max(dd_pk, eq)
+                if not dd_on and eq <= dd_pk * (1 - dds_) and held:   # 翌日の寄り付きで全部売る（pend）
+                    pend, dd_on = list(held), True
             if log is not None:
                 log.append(("eq", d, eq))
                 if DDSPLIT_:   # 保有を買値で数えた資金（確定した損益だけ。2026-11-02。OPT_DDSPLIT のときだけ。ほかの集計は "eq" 以外を売買として読むため）
@@ -3392,6 +3404,11 @@ def opt_stage(base, data, sim, days, ind, cache, part):
           "SOX200②SOXが200日線の5%上より下の間はテーマの押し目・急落の底を買わない": {"skip": ("sox200n5", "theme_rev")},
           "SOX200③SOXが200日線より下で50日線が下向きの間はテーマの押し目・急落の底を買わない": {"skip": ("sox200dn", "theme_rev")},
           "損切りが続いたら止める①3回続いたら10取引日止める": {"cb": (3, 3, 10)},
+          "資金で止める①資金が最高値から15%下げたら全部売りSOXが20日線を上回るまで止める": {"ddstop": 0.15},
+          "資金で止める②資金が最高値から20%下げたら全部売りSOXが20日線を上回るまで止める": {"ddstop": 0.20},
+          "損切りを近く①警告かS2の日の合図は損切り8%": {"tightstop": ("warn", 0.08)},
+          "損切りを近く②警告かS2の日の合図は損切り10%": {"tightstop": ("warn", 0.10)},
+          "損切りを近く③特殊な下げの日の合図は損切り8%": {"tightstop": ("sp15", 0.08)},
           "損切りが続いたら止める⑤3回続いたらSOXが20日線を上回るまで止める": {"cb": (3, 3, 120, "sox20")},
           "損切りが続いたら止める⑥3回続いたらSOXが上向きの50日線を上回るまで止める": {"cb": (3, 3, 120, "sox50up")},
           "損切りが続いたら止める⑦3回続いたら5取引日以上かつSOXが20日線を上回るまで止める": {"cb": (3, 3, 120, "min5_sox20")},
@@ -3679,6 +3696,15 @@ def opt_stage(base, data, sim, days, ind, cache, part):
                     pv_[d] = t["path"][d] - L_ * (px_ / o0_ - 1) - L_ * (0.005 * n_ / 252 + (2 * COST if d == t["out"] else COST))
                 out_.append({**t, "path": pv_, "hedged": True})
             trs = out_
+        if sp.get("tightstop"):   # 2026-11-05: 荒れた局面（引き金の日の合図）では損切りを近くする（tightstop=(引き金, 損切りの幅)）
+            k_, st_ = sp["tightstop"]
+            alt_ = stock_trades(st_, sp["rel8"], sp["xsell"], sp["close_stop"], sp["hotwait"], sp["c10"], sp["kx"], sp["tstop"], sp["pstop"], sp["m30"],
+                                sp["lim2"], sp["hadd"], sp["gem"], sp["stg"], sp["rr"], sp["bmid"], sp["c20"], delay=sp.get("delay"))
+            am_ = {(t["sym"], t["in"], t["rule"]): t for t in alt_}
+            trs = [({**am_[(t["sym"], t["in"], t["rule"])], **{k: t[k] for k in ("x", "ai", "rs", "s50", "first") if k in t}}
+                    if t["sd"] in SKIPSET[k_] and (t["sym"], t["in"], t["rule"]) in am_ and t["rule"] in ("B", "C", "M", "V", "W") else t) for t in trs]
+        if sp.get("ddstop"):   # 2026-11-05: 資金全体の下げで止める（port で判定）
+            trs = [{**t, "ddstop": sp["ddstop"]} for t in trs]
         if sp.get("cb"):   # 2026-11-05: 損切りが続いたら止める（port で判定）
             trs = [{**t, "cb": sp["cb"]} for t in trs]
         if sp.get("voltarget"):   # 2026-11-05: ボラティリティ・ターゲティング。合図の日の SOX の20日の値動きの大きさ（年率）が目標を超えるほど、買う金額を減らす（目標÷実際、最小0.25）。残りは現金
