@@ -3237,7 +3237,7 @@ def opt_stage(base, data, sim, days, ind, cache, part):
                     if log is not None:
                         log.append((h["t"]["in"], d, "stop" if h["t"].get("stopped") else "rule", h["t"]["sym"]))
                     if cb_ and h["t"]["rule"] not in ("S", "R"):   # 「損切り」＝損で終わった売買すべて（ルールの手じまいの損も含む。2026-10-14 ユーザーと決めた数え方。11/05 に直した。以前は15%の損切りだけを数えていた）
-                        cb_hist.append(bool(h["t"].get("stopped")) or h["v"] < 1.0)
+                        cb_hist.append(bool(h["t"].get("stopped")) or (h["v"] < 1.0 and not (len(cb_) > 4 and cb_[4] == "stop")))   # cb_[4]="stop": 15%の損切りだけを数える（比べる用）
                 else:
                     still.append(h)
             held = still
@@ -3416,6 +3416,7 @@ def opt_stage(base, data, sim, days, ind, cache, part):
           "損切りを近く②警告かS2の日の合図は損切り10%": {"tightstop": ("warn", 0.10)},
           "損切りを近く③特殊な下げの日の合図は損切り8%": {"tightstop": ("sp15", 0.08)},
           "損切りが続いたら止める⑤3回続いたらSOXが20日線を上回るまで止める": {"cb": (3, 3, 120, "sox20")},
+          "損切りが続いたら止める⑤'15%の損切りだけを数えて3回続いたらSOXが20日線を上回るまで止める": {"cb": (3, 3, 120, "sox20", "stop")},
           "損切りが続いたら止める⑥3回続いたらSOXが上向きの50日線を上回るまで止める": {"cb": (3, 3, 120, "sox50up")},
           "損切りが続いたら止める⑦3回続いたら5取引日以上かつSOXが20日線を上回るまで止める": {"cb": (3, 3, 120, "min5_sox20")},
           "損切りが続いたら止める②3回続いたら20取引日止める": {"cb": (3, 3, 20)},
