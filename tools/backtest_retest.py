@@ -3293,7 +3293,7 @@ def opt_stage(base, data, sim, days, ind, cache, part):
           "SOX200①SOXが200日線より下の間はテーマの押し目・急落の底を買わない": {"skip": ("sox200", "theme_rev")},
           "SOX200②SOXが200日線の5%上より下の間はテーマの押し目・急落の底を買わない": {"skip": ("sox200n5", "theme_rev")},
           "SOX200③SOXが200日線より下で50日線が下向きの間はテーマの押し目・急落の底を買わない": {"skip": ("sox200dn", "theme_rev")},
-          "機関投資家①買った株と同じ金額のSOXXをいつも空売り（市場の下げを打ち消す）": {"hedge": None},
+          "機関投資家①買った株と同じ金額のSOXXをいつも空売り（市場の下げを打ち消す）": {"hedge": "always"},
           "機関投資家②SOXが50日線より下で線が下向きのときに買った株だけSOXXで打ち消す": {"hedge": "soxdn"},
           "機関投資家③早めの警告かS2のときに買った株だけSOXXで打ち消す": {"hedge": "warn"},
           "機関投資家④ボラティリティ・ターゲティング（SOXの値動きが年率35%を超えるほど買う金額を減らす）": {"voltarget": 0.35},
@@ -3555,7 +3555,7 @@ def opt_stage(base, data, sim, days, ind, cache, part):
             trig_ = sp["hedge"]
             out_ = []
             for t in trs:
-                if t.get("ghost") or t["rule"] == "S" or (trig_ and t["sd"] not in SKIPSET[trig_]) or t["in"] not in _so:
+                if t.get("ghost") or t["rule"] == "S" or (trig_ != "always" and t["sd"] not in SKIPSET[trig_]) or t["in"] not in _so:
                     out_.append(t)
                     continue
                 L_ = t.get("L", 1)
