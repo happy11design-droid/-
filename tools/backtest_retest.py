@@ -3185,6 +3185,8 @@ def opt_stage(base, data, sim, days, ind, cache, part):
         for t in trs:
             if lo <= t["in"] and t["out"] <= hi:
                 by_in.setdefault(t["in"], []).append(t)
+        cb_ = next((t["cb"] for t in trs if t.get("cb")), None)   # 2026-11-05: 損切りが続いたら止める (直近 w 件, うち k 件以上が損切り, 止める取引日数)
+        cb_hist, cb_until = [], -1
         rnd = random.Random(seed)
         cash, held, peak, mdd, eq = 1.0, [], 1.0, 0.0, 1.0
         dd = days[di[lo]:di[hi] + 1]
@@ -3216,12 +3218,18 @@ def opt_stage(base, data, sim, days, ind, cache, part):
                     cash += h["size"] * h["v"]
                     if log is not None:
                         log.append((h["t"]["in"], d, "stop" if h["t"].get("stopped") else "rule", h["t"]["sym"]))
+                    if cb_ and h["t"]["rule"] not in ("S", "R"):
+                        cb_hist.append(bool(h["t"].get("stopped")))
                 else:
                     still.append(h)
             held = still
+            if cb_ and len(cb_hist) >= cb_[0] and sum(cb_hist[-cb_[0]:]) >= cb_[1]:   # 直近 w 件のうち k 件以上が損切り → 今日から止める
+                cb_until, cb_hist = di[d] + cb_[2], []
             eq = cash + sum(h["size"] * h["v"] for h in held)
             for t in sorted(by_in.get(d, []), key=lambda t: (t["prio"], rnd.random())):
                 if any(h["t"]["sym"] == t["sym"] for h in held):
+                    continue
+                if cb_ and di[d] < cb_until and t["rule"] not in ("S", "R"):   # 損切りが続いたので止めている間は新しく買わない
                     continue
                 if t.get("maxheld") and len(held) + ghost_n >= t["maxheld"]:   # 下げの局面では保有をこの数まで（2026-11-02）
                     continue
@@ -3365,6 +3373,10 @@ def opt_stage(base, data, sim, days, ind, cache, part):
           "SOX200①SOXが200日線より下の間はテーマの押し目・急落の底を買わない": {"skip": ("sox200", "theme_rev")},
           "SOX200②SOXが200日線の5%上より下の間はテーマの押し目・急落の底を買わない": {"skip": ("sox200n5", "theme_rev")},
           "SOX200③SOXが200日線より下で50日線が下向きの間はテーマの押し目・急落の底を買わない": {"skip": ("sox200dn", "theme_rev")},
+          "損切りが続いたら止める①3回続いたら10取引日止める": {"cb": (3, 3, 10)},
+          "損切りが続いたら止める②3回続いたら20取引日止める": {"cb": (3, 3, 20)},
+          "損切りが続いたら止める③2回続いたら10取引日止める": {"cb": (2, 2, 10)},
+          "損切りが続いたら止める④直近5件のうち3件が損切りなら10取引日止める": {"cb": (5, 3, 10)},
           "局面に沿う①下落相場の銘柄は押し目・急落の底で買わない": {"rskip": ("down", "rev")},
           "局面に沿う②下落相場の銘柄は全部のルールで買わない": {"rskip": ("down", "all")},
           "局面に沿う③上昇相場は全部・レンジは押し目と急落の底だけ・下落相場は買わない": {"rskip": ("down", "match")},
@@ -3646,6 +3658,8 @@ def opt_stage(base, data, sim, days, ind, cache, part):
                     pv_[d] = t["path"][d] - L_ * (px_ / o0_ - 1) - L_ * (0.005 * n_ / 252 + (2 * COST if d == t["out"] else COST))
                 out_.append({**t, "path": pv_, "hedged": True})
             trs = out_
+        if sp.get("cb"):   # 2026-11-05: 損切りが続いたら止める（port で判定）
+            trs = [{**t, "cb": sp["cb"]} for t in trs]
         if sp.get("voltarget"):   # 2026-11-05: ボラティリティ・ターゲティング。合図の日の SOX の20日の値動きの大きさ（年率）が目標を超えるほど、買う金額を減らす（目標÷実際、最小0.25）。残りは現金
             tgt_ = sp["voltarget"]
             trs = [{**t, "szm": max(0.25, min(1.0, tgt_ / SOXVOL[t["sd"]])) if SOXVOL.get(t["sd"]) else 1.0} for t in trs]
