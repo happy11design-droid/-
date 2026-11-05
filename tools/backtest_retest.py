@@ -2464,6 +2464,14 @@ def opt_stage(base, data, sim, days, ind, cache, part):
     # 引き金の始めの5取引日のうちに空き枠があれば入る
     _sxx = _lp2(cache, "SOXX")
     _so, _sc = dict(zip(_sxx["date"], _sxx["o"])), dict(zip(_sxx["date"], _sxx["c"]))
+    SOXVOL = {}
+    for k in range(21, len(days)):
+        x_ = _sxl[k - 20:k + 1]
+        if None in x_:
+            continue
+        r_ = [x_[i] / x_[i - 1] - 1 for i in range(1, len(x_))]
+        mu_ = sum(r_) / len(r_)
+        SOXVOL[days[k]] = (sum((v - mu_) ** 2 for v in r_) / (len(r_) - 1)) ** 0.5 * 252 ** 0.5
     def short_trades(trig, nslot=1, lev_=-1.0, fee=0.005):
         out_, k = [], 1
         on_ = [d in SKIPSET[trig] for d in days]
@@ -3163,7 +3171,7 @@ def opt_stage(base, data, sim, days, ind, cache, part):
                     held.remove(h)
                 if cap and sum(1 for h in held if ind.get(h["t"]["sym"]) == ind.get(t["sym"])) >= cap:
                     continue
-                size = min(eq / slots, cash)
+                size = min(eq / slots * t.get("szm", 1.0), cash)   # szm: ボラティリティ・ターゲティングの金額の倍率（2026-11-05）
                 if size <= 0:
                     break
                 cash -= size
@@ -3285,6 +3293,11 @@ def opt_stage(base, data, sim, days, ind, cache, part):
           "SOX200①SOXが200日線より下の間はテーマの押し目・急落の底を買わない": {"skip": ("sox200", "theme_rev")},
           "SOX200②SOXが200日線の5%上より下の間はテーマの押し目・急落の底を買わない": {"skip": ("sox200n5", "theme_rev")},
           "SOX200③SOXが200日線より下で50日線が下向きの間はテーマの押し目・急落の底を買わない": {"skip": ("sox200dn", "theme_rev")},
+          "機関投資家①買った株と同じ金額のSOXXをいつも空売り（市場の下げを打ち消す）": {"hedge": None},
+          "機関投資家②SOXが50日線より下で線が下向きのときに買った株だけSOXXで打ち消す": {"hedge": "soxdn"},
+          "機関投資家③早めの警告かS2のときに買った株だけSOXXで打ち消す": {"hedge": "warn"},
+          "機関投資家④ボラティリティ・ターゲティング（SOXの値動きが年率35%を超えるほど買う金額を減らす）": {"voltarget": 0.35},
+          "機関投資家⑤トレンドに従う空売り（SOXが50日線より下で線が下向きの間、SOXXを1枠空売り）": {"short": ("soxdn", 1, -1.0)},
           "強いグループを先に①直近3か月で強いグループの候補から買う": {"prio": "grp63"},
           "強いグループを先に②直近1か月で強いグループの候補から買う": {"prio": "grp21"},
           "強いグループだけ③直近3か月で上位3／7のグループの候補だけ買う": {"gtop": (63, 3 / 7)},
@@ -3537,6 +3550,28 @@ def opt_stage(base, data, sim, days, ind, cache, part):
             k_, th_ = sp["deeper"]
             trs = [t for t in trs if not (t["sd"] in SKIPSET[k_] and t["rule"] in ("B", "C") and ((t["x"] != "out") if sp["outside"] else t["ai"])
                                           and t.get("dh20", 0.0) > -th_)]
+        if sp.get("hedge"):   # 2026-11-05 ユーザーの指示「機関投資家のように利益が出せる方法を検証して」: 買った株と同じ金額の SOXX を空売りして、市場の下げを打ち消す。
+            # trig=None なら いつも、ほかは合図の日がその局面のときだけ。買った日の寄り付きで空売り、売った日の寄り付きで買い戻す（借りる費用 年0.5%、手数料 片道0.1%）。2倍ETFは2倍の金額
+            trig_ = sp["hedge"]
+            out_ = []
+            for t in trs:
+                if t.get("ghost") or t["rule"] == "S" or (trig_ and t["sd"] not in SKIPSET[trig_]) or t["in"] not in _so:
+                    out_.append(t)
+                    continue
+                L_ = t.get("L", 1)
+                o0_, pv_, n_ = _so[t["in"]], {}, 0
+                for d in sorted(t["path"]):
+                    px_ = _so.get(d) if d == t["out"] else _sc.get(d)
+                    if px_ is None:
+                        pv_[d] = t["path"][d]
+                        continue
+                    n_ += 1
+                    pv_[d] = t["path"][d] - L_ * (px_ / o0_ - 1) - L_ * (0.005 * n_ / 252 + (2 * COST if d == t["out"] else COST))
+                out_.append({**t, "path": pv_, "hedged": True})
+            trs = out_
+        if sp.get("voltarget"):   # 2026-11-05: ボラティリティ・ターゲティング。合図の日の SOX の20日の値動きの大きさ（年率）が目標を超えるほど、買う金額を減らす（目標÷実際、最小0.25）。残りは現金
+            tgt_ = sp["voltarget"]
+            trs = [{**t, "szm": max(0.25, min(1.0, tgt_ / SOXVOL[t["sd"]])) if SOXVOL.get(t["sd"]) else 1.0} for t in trs]
         if sp.get("short"):   # 2026-11-04: 引き金の間は SOXX を空売り
             k_, n_, l_ = sp["short"]
             trs = trs + short_trades(k_, n_, l_)
