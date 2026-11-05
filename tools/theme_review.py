@@ -97,6 +97,7 @@ def cmd_record(a):
             c["hot"], c["rsi14"], c["s50"], c["rs"] = m_.get("hot"), m_.get("rsi14"), m_.get("s50"), m_.get("rs")
             c["s2_skip"] = m_.get("s2_skip")
             c["badnews"] = m_.get("badnews")   # 悪いニュースが続いているグループの候補か（2026-11-04）
+            c["goodnews"] = m_.get("goodnews")   # 良いニュースが多いグループの候補か（2026-11-05）
     holds = []
     cand_syms = {c["sym"] for c in cands}
     for r in table_rows(scan, "## 5."):
@@ -361,8 +362,13 @@ def weather_check(rec_dir, rows, w):
         w("\n悪いニュースが続いているグループ（毎朝の節2の印。2026-11-04〜）の候補と、それ以外の候補（ルールどおりに売買した場合）:\n")
         w("| 候補 | 件数 | 損切り | 勝ち | 1回平均 |")
         w("|---|---|---|---|---|")
+        gn = [x for x in rows if "ret" in x and x.get("goodnews") is not None]
         for lab, f_ in (("印のグループ", True), ("それ以外", False)):
             g = [x for x in bn if bool(x["badnews"]) == f_]
+            if g:
+                w(f"| {lab} | {len(g)} | {sum(1 for x in g if '損切り' in x.get('status', '')) / len(g) * 100:.0f}% | {sum(1 for x in g if x['ret'] > 0) / len(g) * 100:.0f}% | {pc(st_.mean(x['ret'] for x in g))} |")
+        for lab, f_ in (("良いニュースが多いグループ（2026-11-05〜）", True), ("良いニュースの印なし", False)):
+            g = [x for x in gn if bool(x["goodnews"]) == f_]
             if g:
                 w(f"| {lab} | {len(g)} | {sum(1 for x in g if '損切り' in x.get('status', '')) / len(g) * 100:.0f}% | {sum(1 for x in g if x['ret'] > 0) / len(g) * 100:.0f}% | {pc(st_.mean(x['ret'] for x in g))} |")
     w("\n- 天気予報はClaudeの相場観（前の日までの出来事のまとめ）で、売買のルールにも著者への質問にも使っていない。記録が貯まってから、ルールに使えるかをユーザーが判断する（2026-11-03）。")

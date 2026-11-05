@@ -377,6 +377,7 @@ def group_news_state(dates):
         d_ = [dt.date.fromisoformat(x) for x in dates[-10:]]
         n1 = nh_.group_bad_news(d_[5], d_[9], gs_)
         n0 = nh_.group_bad_news(d_[0], d_[4], gs_)
+        gd_ = nh_.group_bad_news(d_[0], d_[9], gs_, good=True)   # 良いニュース（10取引日。2026-11-05）
     except Exception as e_:
         print(f"グループのニュースを取れなかった: {type(e_).__name__}: {e_}", file=sys.stderr)
         return None
@@ -384,11 +385,16 @@ def group_news_state(dates):
     for g, mem in gs_.items():
         a1, a0 = n1.get(g), n0.get(g)
         k = len(a1 or []) + len(a0 or [])
+        g10 = gd_.get(g)
         out[g] = {"n1": None if a1 is None else len(a1), "n0": None if a0 is None else len(a0), "per": k / len(mem), "size": len(mem),
+                  "good": None if g10 is None else len(g10), "gper": len(g10 or []) / len(mem),
+                  "gtop": [f"{d_x.isoformat()} {t}（{src}）" for d_x, src, t in sorted(g10 or [], reverse=True)[:2]],
                   "top": [f"{d_x.isoformat()} {t}（{src}）" for d_x, src, t in sorted((a1 or []) + (a0 or []), reverse=True)[:3]]}
     top = max(out, key=lambda g: out[g]["per"])
+    gtop_ = max(out, key=lambda g: out[g]["gper"])
     for g in out:
         out[g]["mark"] = g == top and (out[g]["n1"] or 0) + (out[g]["n0"] or 0) >= 3
+        out[g]["gmark"] = g == gtop_ and (out[g]["good"] or 0) >= 3   # 良いニュースが一番多いグループ（記録だけ）
     out["_range"] = f"{d_[0].isoformat()}〜{d_[9].isoformat()}"
     return out
 
@@ -575,14 +581,17 @@ def main():
           "見通しの引き下げ・予想未達・急落・信用・訴訟・輸出規制など）の両方がある見出しの数（Googleニュース、`tools/news_headlines.py`）。"
           "10取引日の1銘柄あたりが一番多いグループに印。2026年7〜11月の確かめでは、印のグループの合図は10月は成績が悪かった（1回平均 −10.6%、ほか −5.6%）が、"
           "7〜9月は逆に良かった（+11.6%、ほか +6.7%）（`バックテスト結果/実際の運用の期間の確認_2026-10-23/グループの悪いニュースの流れ.md`。2026-11-04）\n")
-        w("| グループ | 直近5取引日 | その前の5取引日 | 10取引日の1銘柄あたり | 印 |")
-        w("|---|---|---|---|---|")
+        w("| グループ | 悪いニュース 直近5取引日 | その前の5取引日 | 10取引日の1銘柄あたり | 良いニュース 10取引日（1銘柄あたり） | 印 |")
+        w("|---|---|---|---|---|---|")
         for g_, v_ in sorted(((g_, v_) for g_, v_ in gnews.items() if not g_.startswith("_")), key=lambda kv: -kv[1]["per"]):
             nn_ = lambda x: "取得できず" if x is None else f"{x}件"
-            w(f"| {g_}（{v_['size']}） | {nn_(v_['n1'])} | {nn_(v_['n0'])} | {v_['per']:.1f} | {'**悪いニュースが続いている**' if v_['mark'] else ''} |")
+            mk2_ = "・".join(x for x in ("**悪いニュースが続いている**" if v_["mark"] else "", "**良いニュースが多い**" if v_.get("gmark") else "") if x)
+            w(f"| {g_}（{v_['size']}） | {nn_(v_['n1'])} | {nn_(v_['n0'])} | {v_['per']:.1f} | {nn_(v_.get('good'))}（{v_.get('gper', 0):.1f}） | {mk2_} |")
         mk_g = [g_ for g_, v_ in gnews.items() if not g_.startswith("_") and v_["mark"]]
         for g_ in mk_g:
             w(f"\n印のグループ（{g_}）の最近の見出し: " + "／".join(gnews[g_]["top"]))
+        for g_ in [g_ for g_, v_ in gnews.items() if not g_.startswith("_") and v_.get("gmark")]:
+            w(f"\n良いニュースが多いグループ（{g_}）の最近の見出し: " + "／".join(gnews[g_]["gtop"]))
         w("")
     w(f"- **特殊な下げ（記録だけ。売買のルールは変えない）: {spc['label']}**"
       + (f"（{spc['since']}から）" if spc.get("since") else "")
@@ -1096,10 +1105,12 @@ def main():
     meta["_special"] = {k: v for k, v in spc.items() if k in ("on", "label", "since", "drop", "n", "A", "B", "C")}   # 特殊な下げの記録（2026-11-03）
     if gnews:   # グループごとの悪いニュースの流れ（2026-11-04）。候補ごとに印のグループかどうか
         mk_g = {g_ for g_, v_ in gnews.items() if not g_.startswith("_") and v_["mark"]}
+        gk_g = {g_ for g_, v_ in gnews.items() if not g_.startswith("_") and v_.get("gmark")}
         for x in cands:
             if x["sym"] in meta:
                 meta[x["sym"]]["badnews"] = x.get("group") in mk_g
-        meta["_group_news"] = {g_: {k: v_[k] for k in ("n1", "n0", "per", "mark")} for g_, v_ in gnews.items() if not g_.startswith("_")}
+                meta[x["sym"]]["goodnews"] = x.get("group") in gk_g   # 良いニュースが多いグループの候補か（2026-11-05）
+        meta["_group_news"] = {g_: {k: v_.get(k) for k in ("n1", "n0", "per", "mark", "good", "gper", "gmark")} for g_, v_ in gnews.items() if not g_.startswith("_")}
     meta["_ref_b"] = [{"sym": x["sym"], "kind": x["kind"], "close": x["close"], "rs": x["rs"]} for x in ref_b]   # 参考の表示だけの予約（B）の候補（record.json に残す）
     meta["_omitted"] = [{"sym": x["sym"], "kind": x["kind"], "pattern": x["pat"], "close": x["close"], "rs": x["rs"]} for x in spare_out]   # 枠外で表に出さなかった候補（record.json に残す）
     json.dump(meta,

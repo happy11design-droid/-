@@ -3187,6 +3187,20 @@ def opt_stage(base, data, sim, days, ind, cache, part):
                 by_in.setdefault(t["in"], []).append(t)
         cb_ = next((t["cb"] for t in trs if t.get("cb")), None)   # 2026-11-05: 損切りが続いたら止める (直近 w 件, うち k 件以上が損切り, 止める取引日数)
         cb_hist, cb_until = [], -1
+        cb_start, cb_on = -1, False   # 再開の合図で止める形（cb_[3]）: 止めた日の番号と、止めているかどうか
+        def cb_resume(k):   # 前の日（k）の引けで、再開の合図がそろったか（2026-11-05）
+            kind_ = cb_[3]
+            x_ = _sxl[k - 59:k + 1]
+            if k < 60 or None in x_:
+                return False
+            m20 = sum(x_[-20:]) / 20
+            if kind_ == "sox20":
+                return _sxl[k] > m20
+            if kind_ == "sox50up":
+                return _sxl[k] > sum(x_[-50:]) / 50 > sum(_sxl[k - 59:k - 9]) / 50
+            if kind_ == "min5_sox20":
+                return k - cb_start >= 5 and _sxl[k] > m20
+            return False
         rnd = random.Random(seed)
         cash, held, peak, mdd, eq = 1.0, [], 1.0, 0.0, 1.0
         dd = days[di[lo]:di[hi] + 1]
@@ -3225,6 +3239,10 @@ def opt_stage(base, data, sim, days, ind, cache, part):
             held = still
             if cb_ and len(cb_hist) >= cb_[0] and sum(cb_hist[-cb_[0]:]) >= cb_[1]:   # 直近 w 件のうち k 件以上が損切り → 今日から止める
                 cb_until, cb_hist = di[d] + cb_[2], []
+                cb_start, cb_on = di[d], True
+            if cb_ and cb_on and len(cb_) > 3 and cb_[3]:   # 再開の合図で止める形: 合図がそろうか、最長 cb_[2] 取引日で再開
+                if di[d] - cb_start >= 1 and cb_resume(di[d] - 1):
+                    cb_until, cb_on = -1, False
             eq = cash + sum(h["size"] * h["v"] for h in held)
             for t in sorted(by_in.get(d, []), key=lambda t: (t["prio"], rnd.random())):
                 if any(h["t"]["sym"] == t["sym"] for h in held):
@@ -3374,6 +3392,9 @@ def opt_stage(base, data, sim, days, ind, cache, part):
           "SOX200②SOXが200日線の5%上より下の間はテーマの押し目・急落の底を買わない": {"skip": ("sox200n5", "theme_rev")},
           "SOX200③SOXが200日線より下で50日線が下向きの間はテーマの押し目・急落の底を買わない": {"skip": ("sox200dn", "theme_rev")},
           "損切りが続いたら止める①3回続いたら10取引日止める": {"cb": (3, 3, 10)},
+          "損切りが続いたら止める⑤3回続いたらSOXが20日線を上回るまで止める": {"cb": (3, 3, 120, "sox20")},
+          "損切りが続いたら止める⑥3回続いたらSOXが上向きの50日線を上回るまで止める": {"cb": (3, 3, 120, "sox50up")},
+          "損切りが続いたら止める⑦3回続いたら5取引日以上かつSOXが20日線を上回るまで止める": {"cb": (3, 3, 120, "min5_sox20")},
           "損切りが続いたら止める②3回続いたら20取引日止める": {"cb": (3, 3, 20)},
           "損切りが続いたら止める③2回続いたら10取引日止める": {"cb": (2, 2, 10)},
           "損切りが続いたら止める④直近5件のうち3件が損切りなら10取引日止める": {"cb": (5, 3, 10)},

@@ -299,6 +299,11 @@ BAD_Q = ('(downgrade OR downgraded OR "price target cut" OR "cuts guidance" OR "
 BAD_RE = re.compile(r"downgrad|target (cut|lowered)|cuts? (its |full-year )?(guidance|outlook|forecast)|lowers? (its )?(guidance|outlook|forecast)|weak(er)? (guidance|outlook|forecast|demand)|"
                     r"\bmiss(es|ed)?\b|plung|tumbl|\bsinks?\b|\bsank\b|slump|sell-?off|\brout\b|crash|\bCDS\b|credit (risk|concern|fear)|default|debt (concern|fear|worr)|"
                     r"\bprobe\b|lawsuit|investigat|export (ban|curb|control|restriction)|\bwarns?\b|disappoint|layoff", re.I)
+# 2026-11-05 ユーザーの指示: 良いニュース（格上げ・目標株価の引き上げ・予想超え・見通しの引き上げ・大型の受注・急騰）も数える（記録だけ）
+GOOD_Q = ('(upgrade OR upgraded OR "price target raised" OR "raises guidance" OR "raises outlook" OR "beats estimates" OR "tops estimates" OR '
+          '"record revenue" OR surges OR soars OR jumps OR rallies OR "strong demand" OR "wins contract" OR "new order")')
+GOOD_RE = re.compile(r"upgrad|target (rais|lift|boost|hik)|raises? (its |full-year )?(guidance|outlook|forecast)|lifts? (guidance|outlook|forecast)|"
+                     r"\bbeats?\b|tops? (estimates|expectations)|record (revenue|sales|quarter)|surg|soar|\bjumps?\b|rall(y|ies)|strong demand|wins? (a |an )?(contract|deal|order)", re.I)
 NAME_FIX = {"AMD": "AMD", "QCOM": "Qualcomm", "ON": "onsemi", "HPE": "Hewlett Packard Enterprise", "HPQ": "HP Inc", "FFIV": "F5", "IBM": "IBM",
             "META": "Meta", "AMZN": "Amazon", "GOOGL": "Alphabet", "FLEX": "Flex Ltd", "TEL": "TE Connectivity", "Q": "Qnity", "KLAC": "KLA",
             "NVDA": "Nvidia", "NXPI": "NXP", "ASML": "ASML", "NBIS": "Nebius", "ADI": "Analog Devices", "CDNS": "Cadence", "MSI": "Motorola Solutions", "MPWR": "Monolithic Power", "CDW": "CDW", "APP": "AppLovin", "NOW": "ServiceNow", "SHOP": "Shopify", "ACN": "Accenture", "GEV": "GE Vernova"}
@@ -324,9 +329,11 @@ def theme_groups():
     return out
 
 
-def group_bad_news(start, end, groups=None, chunk=6, pause=0.5):
-    """start〜end（米国の日付）の、グループごとの悪いニュースの見出し {グループ: [(日付, 媒体, 見出し)]}。取れなかったグループは None"""
+def group_bad_news(start, end, groups=None, chunk=6, pause=0.5, good=False):
+    """start〜end（米国の日付）の、グループごとの悪いニュースの見出し {グループ: [(日付, 媒体, 見出し)]}。取れなかったグループは None。
+    good=True なら良いニュース（GOOD_Q・GOOD_RE）"""
     import time
+    q_words, q_re = (GOOD_Q, GOOD_RE) if good else (BAD_Q, BAD_RE)
     groups = groups or theme_groups()
     out = {}
     for g, mem in groups.items():
@@ -334,7 +341,7 @@ def group_bad_news(start, end, groups=None, chunk=6, pause=0.5):
         names = [nm for _, nm in mem]
         for i in range(0, len(names), chunk):
             part = names[i:i + chunk]
-            q = "(" + " OR ".join(f'"{n}"' for n in part) + ") " + BAD_Q
+            q = "(" + " OR ".join(f'"{n}"' for n in part) + ") " + q_words
             x = None
             for _ in range(3):
                 x = google(q, EN, start, end, 300)
@@ -345,7 +352,7 @@ def group_bad_news(start, end, groups=None, chunk=6, pause=0.5):
                 fail = True
                 continue
             for d, src, t in x:
-                if t in seen or not BAD_RE.search(t) or not any(re.search(r"\b" + re.escape(n) + r"\b", t, re.I) for n in part):
+                if t in seen or not q_re.search(t) or not any(re.search(r"\b" + re.escape(n) + r"\b", t, re.I) for n in part):
                     continue
                 seen.add(t)
                 got.append((d, src, t))
