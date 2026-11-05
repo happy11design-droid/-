@@ -3185,7 +3185,7 @@ def opt_stage(base, data, sim, days, ind, cache, part):
         for t in trs:
             if lo <= t["in"] and t["out"] <= hi:
                 by_in.setdefault(t["in"], []).append(t)
-        cb_ = next((t["cb"] for t in trs if t.get("cb")), None)   # 2026-11-05: 損切りが続いたら止める (直近 w 件, うち k 件以上が損切り, 止める取引日数)
+        cb_ = next((t["cb"] for t in trs if t.get("cb")), None)   # 2026-11-05: 損切りが続いたら止める (直近 w 件, うち k 件以上が損切り＝損で終わった売買, 止める取引日数)
         cb_hist, cb_until = [], -1
         cb_start, cb_on = -1, False   # 再開の合図で止める形（cb_[3]）: 止めた日の番号と、止めているかどうか
         dds_ = next((t["ddstop"] for t in trs if t.get("ddstop")), None)   # 2026-11-05: 資金（含み損込み）が最高値から x 下げたら全部売り、SOXが20日線を上回るまで止める
@@ -3234,8 +3234,8 @@ def opt_stage(base, data, sim, days, ind, cache, part):
                     cash += h["size"] * h["v"]
                     if log is not None:
                         log.append((h["t"]["in"], d, "stop" if h["t"].get("stopped") else "rule", h["t"]["sym"]))
-                    if cb_ and h["t"]["rule"] not in ("S", "R"):
-                        cb_hist.append(bool(h["t"].get("stopped")))
+                    if cb_ and h["t"]["rule"] not in ("S", "R"):   # 「損切り」＝損で終わった売買すべて（ルールの手じまいの損も含む。2026-10-14 ユーザーと決めた数え方。11/05 に直した。以前は15%の損切りだけを数えていた）
+                        cb_hist.append(bool(h["t"].get("stopped")) or h["v"] < 1.0)
                 else:
                     still.append(h)
             held = still
