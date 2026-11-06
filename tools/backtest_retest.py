@@ -2544,6 +2544,277 @@ def opt_stage(base, data, sim, days, ind, cache, part):
         r_ = [x_[i] / x_[i - 1] - 1 for i in range(1, len(x_))]
         mu_ = sum(r_) / len(r_)
         SOXVOL[days[k]] = (sum((v - mu_) ** 2 for v in r_) / (len(r_) - 1)) ** 0.5 * 252 ** 0.5
+    # 2026-11-06 ユーザーの指示「底の判定は世の中には様々な判定方法があるのでは？…全て実行して。目的は年率を上げて、下落率を下げられるような対策」:
+    # 市場の底の合図（NotebookLMの本の回答＋よく使われる方法）。どれも合図の日の引けで判定する。市場の広がりはS&P500のその日の構成銘柄で数える
+    BOTTOM = {}
+    nD = len(days)
+    _adv, _dec, _upv, _dnv, _ab50, _n50, _nh, _nl, _nn = ([0] * nD for _ in range(9))
+    _mem2 = _lm2(cache)
+    for sym_, s_ in data.items():
+        spans_ = _mem2.get(sym_)
+        if not spans_:
+            continue
+        dts_, c_, v_ = s_["date"], s_["c"], s_["v"]
+        acc_ = 0.0
+        from collections import deque as _dq
+        qmax_, qmin_ = _dq(), _dq()
+        for i in range(len(c_)):
+            if i >= 50:
+                acc_ -= c_[i - 50]
+            acc_ += c_[i]
+            while qmax_ and c_[qmax_[-1]] <= c_[i]:
+                qmax_.pop()
+            qmax_.append(i)
+            while qmin_ and c_[qmin_[-1]] >= c_[i]:
+                qmin_.pop()
+            qmin_.append(i)
+            while qmax_[0] <= i - 252:
+                qmax_.popleft()
+            while qmin_[0] <= i - 252:
+                qmin_.popleft()
+            k = di.get(dts_[i])
+            if k is None or i == 0 or not _im2(spans_, dts_[i]):
+                continue
+            if c_[i] > c_[i - 1]:
+                _adv[k] += 1
+                _upv[k] += v_[i] or 0
+            elif c_[i] < c_[i - 1]:
+                _dec[k] += 1
+                _dnv[k] += v_[i] or 0
+            if i >= 50:
+                _n50[k] += 1
+                _ab50[k] += 1 if c_[i] > acc_ / 50 else 0
+            if i >= 252:
+                _nn[k] += 1
+                _nh[k] += 1 if qmax_[0] == i else 0
+                _nl[k] += 1 if qmin_[0] == i else 0
+    def _ema(x, n):
+        out_, e_ = [None] * len(x), None
+        a_ = 2 / (n + 1)
+        for i, v in enumerate(x):
+            if v is None:
+                out_[i] = e_
+                continue
+            e_ = v if e_ is None else e_ + a_ * (v - e_)
+            out_[i] = e_
+        return out_
+    def _sma(x, k, n):
+        w_ = x[k - n + 1:k + 1] if k >= n - 1 else []
+        return sum(w_) / n if len(w_) == n and None not in w_ else None
+    def _rsi(x, n):
+        out_, ag, al = [None] * len(x), None, None
+        for i in range(1, len(x)):
+            if x[i] is None or x[i - 1] is None:
+                continue
+            ch = x[i] - x[i - 1]
+            g, l = max(ch, 0.0), max(-ch, 0.0)
+            if ag is None:
+                ag, al = g, l
+            else:
+                ag, al = (ag * (n - 1) + g) / n, (al * (n - 1) + l) / n
+            out_[i] = 100.0 if al == 0 else 100 - 100 / (1 + ag / al)
+        return out_
+    def _ser2(sym, key="c"):
+        g = _lp2(cache, sym)
+        m = dict(zip(g["date"], g[key])) if g else {}
+        out_, last_ = [], None
+        for d in days:
+            last_ = m.get(d, last_ if key == "c" else None)
+            out_.append(last_)
+        return out_
+    _ix, _qv, _sv = _ser2("^IXIC"), _ser2("QQQ", "v"), _ser2("SOXX", "v")
+    _sh, _sl = _ser2("^SOX", "h"), _ser2("^SOX", "l")
+    _vx = _ser2("^VIX")
+    def _first(cond, cool=20):   # 条件がはじめて成り立った日（cool 取引日のあいだは1回だけ）
+        out_, last_ = set(), -999
+        for k in range(1, nD):
+            if cond(k) and not cond(k - 1) and k - last_ > cool:
+                out_.add(days[k])
+                last_ = k
+        return out_
+    def _ftd(P, V, corr, up_):   # オニールのフォロースルー・デー（本の回答）: 調整（60日の高値から corr 以上の下げ）の安値の後、上げて引けた日を1日目とし、
+        out_, st_, low_, d1_ = set(), "none", None, None   # 4日目以降（25日目まで）に指数が up_ 以上上げ、出来高が前日と50日平均を上回る日。安値を割ったらやり直し
+        for k in range(60, nD):
+            if P[k] is None or P[k - 1] is None:
+                continue
+            hi_ = max(x for x in P[k - 60:k + 1] if x)
+            if st_ == "none":
+                if P[k] <= hi_ * (1 - corr):
+                    st_, low_, d1_ = "corr", P[k], None
+                continue
+            if P[k] < low_:
+                low_, d1_ = P[k], None
+                continue
+            if d1_ is None:
+                if P[k] > P[k - 1]:
+                    d1_ = k
+                continue
+            n_ = k - d1_ + 1
+            av_ = _sma(V, k - 1, 50)
+            if 4 <= n_ <= 25 and P[k] / P[k - 1] - 1 >= up_ and V[k] and V[k - 1] and av_ and V[k] > V[k - 1] and V[k] > av_:
+                out_.add(days[k])
+                st_ = "none"
+            elif n_ > 25:
+                d1_ = None
+        return out_
+    BOTTOM["FTD_N"] = _ftd(_ix, _qv, 0.08, 0.015)
+    BOTTOM["FTD_S"] = _ftd(_sxl, _sv, 0.10, 0.02)
+    _ar = [(_adv[k] / (_adv[k] + _dec[k])) if _adv[k] + _dec[k] else None for k in range(nD)]
+    _ez = _ema(_ar, 10)
+    BOTTOM["ZBT"] = _first(lambda k: k >= 10 and _ez[k] is not None and _ez[k] > 0.615 and min(x for x in _ez[k - 10:k] if x is not None) < 0.40, 20)
+    _p50 = [(_ab50[k] / _n50[k]) if _n50[k] else None for k in range(nD)]
+    BOTTOM["P50"] = _first(lambda k: k >= 20 and _p50[k] is not None and _p50[k] >= 0.30 and min(x for x in _p50[k - 20:k] if x is not None) <= 0.15, 20)
+    _us = [(_upv[k] / (_upv[k] + _dnv[k])) if _upv[k] + _dnv[k] else None for k in range(nD)]
+    BOTTOM["D90"] = _first(lambda k: k >= 10 and _us[k] is not None and _us[k] >= 0.90 and any(x is not None and x <= 0.10 for x in _us[k - 10:k]), 20)
+    _nlr = [(_nl[k] / _nn[k]) if _nn[k] else None for k in range(nD)]
+    def _nlpk(k):
+        if k < 10 or _nlr[k] is None:
+            return False
+        pk_ = max(x for x in _nlr[k - 10:k] if x is not None)
+        return pk_ >= 0.10 and _nlr[k] <= 0.3 * pk_
+    BOTTOM["NLPK"] = _first(_nlpk, 30)
+    _na = [((_adv[k] - _dec[k]) / (_adv[k] + _dec[k]) * 1000) if _adv[k] + _dec[k] else None for k in range(nD)]
+    _e19, _e39 = _ema(_na, 19), _ema(_na, 39)
+    _mo = [(a - b) if a is not None and b is not None else None for a, b in zip(_e19, _e39)]
+    BOTTOM["MCC"] = _first(lambda k: k >= 20 and _mo[k] is not None and _mo[k] > 0 and min(x for x in _mo[k - 20:k] if x is not None) < -100, 20)
+    BOTTOM["VIXPK"] = _first(lambda k: k >= 20 and _vx[k] is not None and _sma(_vx, k, 20) is not None and _vx[k] < _sma(_vx, k, 20)
+                              and max(x for x in _vx[k - 20:k] if x is not None) >= 30, 20)
+    _r14 = _rsi(_sxl, 14)
+    BOTTOM["RSI_S"] = _first(lambda k: k >= 20 and _r14[k] is not None and _r14[k] >= 50 and min(x for x in _r14[k - 20:k] if x is not None) <= 30, 20)
+    _m12, _m26 = _ema(_sxl, 12), _ema(_sxl, 26)
+    _mac = [(a - b) if a is not None and b is not None else None for a, b in zip(_m12, _m26)]
+    _msg = _ema(_mac, 9)
+    BOTTOM["MACD0"] = _first(lambda k: k >= 60 and _mac[k] is not None and _msg[k] is not None and _mac[k] > 0 and _msg[k] > 0
+                              and min(x for x in _msg[k - 60:k] if x is not None) < 0, 40)
+    def _maup(k):
+        if k < 80:
+            return False
+        m5, m25, m75 = _sma(_sxl, k, 5), _sma(_sxl, k, 25), _sma(_sxl, k, 75)
+        p5, p25, p75 = _sma(_sxl, k - 1, 5), _sma(_sxl, k - 1, 25), _sma(_sxl, k - 1, 75)
+        return None not in (m5, m25, m75, p5, p25, p75) and _sxl[k] > m5 > m25 > m75 and m5 > p5 and m25 > p25 and m75 > p75
+    BOTTOM["MAUP"] = _first(_maup, 40)
+    def _w30(k):
+        m_, mp_ = _sma(_sxl, k, 150), _sma(_sxl, k - 10, 150)
+        return m_ is not None and mp_ is not None and _sxl[k] > m_ and m_ >= mp_
+    BOTTOM["W30"] = _first(_w30, 60)
+    _nr = [(_adv[k] - _dec[k]) if _adv[k] + _dec[k] else None for k in range(nD)]
+    BOTTOM["MI"] = _first(lambda k: _sma(_nr, k, 200) is not None and _sma(_nr, k, 200) > 0, 40)
+    _hl = [(_nh[k] - _nl[k]) if _nn[k] else None for k in range(nD)]
+    BOTTOM["NHNL"] = _first(lambda k: k >= 10 and _hl[k] is not None and _hl[k] > 0 and all(x is not None and x < 0 for x in _hl[k - 10:k]), 20)
+    def _pb(k):
+        m_ = _sma(_sxl, k, 20)
+        if m_ is None:
+            return None
+        sd_ = (sum((x - m_) ** 2 for x in _sxl[k - 19:k + 1]) / 20) ** 0.5
+        return (_sxl[k] - (m_ - 2 * sd_)) / (4 * sd_) if sd_ else None
+    _PB = [_pb(k) for k in range(nD)]
+    _tr = [((_sh[k] or 0) - (_sl[k] or 0)) if _sh[k] and _sl[k] else None for k in range(nD)]
+    def _wb(k):   # ボリンジャーのW型（本の回答）: 1番底で %b<0、その後の2番底で %b>0（値は1番底の5%以内）、そして値幅・出来高の大きい上げの日
+        if k < 60 or None in (_sxl[k], _sxl[k - 1], _tr[k], _sv[k]):
+            return False
+        if not (_sxl[k] > _sxl[k - 1] and _sma(_tr, k - 1, 10) and _tr[k] > _sma(_tr, k - 1, 10) and _sma(_sv, k - 1, 50) and _sv[k] > _sma(_sv, k - 1, 50)):
+            return False
+        for k1 in range(k - 40, k - 4):
+            if _PB[k1] is not None and _PB[k1] < 0:
+                seg_ = range(k1 + 3, k)
+                k2 = min(seg_, key=lambda j: _sxl[j]) if len(seg_) else None
+                if k2 is not None and _PB[k2] is not None and _PB[k2] > 0 and _sxl[k2] <= _sxl[k1] * 1.05:
+                    return True
+        return False
+    BOTTOM["WB"] = _first(_wb, 30)
+    # コナーズ（本の回答）: 200日線より上で RSI(2)≦5、または VIX が10日線の5%上に3日以上 → 指数を空き枠で買う形に使う
+    _r2 = _rsi(_sxl, 2)
+    BOTTOM["CONR2"] = {days[k] for k in range(200, nD) if _r2[k] is not None and _r2[k] <= 5 and _sma(_sxl, k, 200) and _sxl[k] > _sma(_sxl, k, 200)}
+    BOTTOM["VIXS"] = {days[k] for k in range(210, nD) if all(_vx[j] is not None and _sma(_vx, j, 10) and _vx[j] >= 1.05 * _sma(_vx, j, 10) for j in range(k - 2, k + 1))
+                      and _sma(_sxl, k, 200) and _sxl[k] > _sma(_sxl, k, 200)}
+    print("底の合図（2015年〜の回数）: " + "、".join(f"{k_} {sum(1 for d in v if d >= '2015-01-01')}" for k_, v in BOTTOM.items()), file=sys.stderr)
+    for nm_, sg_ in BOTTOM.items():
+        # 待つ形: SOXが下向きの50日線の下（soxdn）になったら、その後に合図が出るまでテーマを買わない（5取引日続けて soxdn でなくなったら終わり）
+        w_, waiting_, out_n = set(), False, 99
+        for k in range(nD):
+            d = days[k]
+            in_ = d in SOXDN
+            if in_:
+                if out_n >= 5:   # 5取引日以上 soxdn でなかった後の、新しい下げの局面の始まり
+                    waiting_ = True
+                out_n = 0
+            else:
+                out_n += 1
+                if out_n >= 5:
+                    waiting_ = False
+            if waiting_ and d in sg_:   # 底の合図が出たら、この局面ではもう待たない
+                waiting_ = False
+            if waiting_ and in_:
+                w_.add(d)
+        SKIPSET["wait_" + nm_] = w_
+        b_ = set()   # 2倍ETFで買う形: 合図の翌日から40取引日のあいだの合図
+        for d in sg_:
+            k = di[d]
+            b_ |= set(days[k + 1:k + 41])
+        SKIPSET["boost_" + nm_] = b_
+    if os.environ.get("OPT_SIGDUMP"):
+        json.dump({"days": days, "sox": _sxl, "bottom": {k_: sorted(v) for k_, v in BOTTOM.items()},
+                   "wait": {k_: len([d for d in SKIPSET["wait_" + k_] if d >= "2015-01-01"]) for k_ in BOTTOM}},
+                  open(os.environ["OPT_SIGDUMP"], "w"))
+        print("底の合図を書き出し", os.environ["OPT_SIGDUMP"], file=sys.stderr)
+        return
+    IDLE = {}   # 待っている現金を置く指数ETF: (前の日の引け→寄り付きの倍率, 寄り付き→引けの倍率)
+    for sym_ in ("QQQ", "SPY"):
+        g_ = _lp2(cache, sym_)
+        if g_:
+            o_, c_ = dict(zip(g_["date"], g_["o"])), dict(zip(g_["date"], g_["c"]))
+            gap_, intra_ = {}, {}
+            for k in range(1, nD):
+                d, dp = days[k], days[k - 1]
+                if d in o_ and dp in c_ and c_[dp] and o_[d]:
+                    gap_[d], intra_[d] = o_[d] / c_[dp], c_[d] / o_[d]
+            IDLE[sym_] = (gap_, intra_)
+    def index_trades(sig, exit_="ma50", maxhold=120, top=True, stop=0.15):
+        """底の合図（またはコナーズの指数の押し目）の翌日の寄り付きで SOXX を1枠買う。exit_="ma50": SOXの終値が50日線を下回ったら（10取引日たってから）、
+        "ma5": 終値が5日線を上回ったら、翌日の寄り付きで売る。最長 maxhold 取引日、損切り stop（終値で判定し翌日の寄り付き）。top=True なら一番先に買う"""
+        out_ = []
+        for d in sorted(BOTTOM[sig]):
+            k = di[d]
+            i0_ = k + 1
+            if i0_ >= nD - 1 or days[i0_] not in _so:
+                continue
+            v_, pv_, out_d = (1 - COST) * (_sc[days[i0_]] / _so[days[i0_]]), {}, None
+            pv_[days[i0_]] = v_
+            for j in range(i0_ + 1, min(nD, i0_ + maxhold + 1)):
+                d_, dp_ = days[j], days[j - 1]
+                if d_ not in _sc or dp_ not in _sc:
+                    continue
+                kp = j - 1
+                if exit_ == "ma50":
+                    ex_ = j - 1 - i0_ >= 10 and _sma(_sxl, kp, 50) is not None and _sxl[kp] < _sma(_sxl, kp, 50)
+                else:
+                    ex_ = _sma(_sxl, kp, 5) is not None and _sxl[kp] > _sma(_sxl, kp, 5)
+                if ex_ or v_ <= (1 - COST) * (1 - stop) or j == min(nD - 1, i0_ + maxhold):
+                    v_ = v_ * (_so[d_] / _sc[dp_]) * (1 - COST)
+                    pv_[d_], out_d = v_, d_
+                    break
+                v_ = v_ * (_sc[d_] / _sc[dp_])
+                pv_[d_] = v_
+            if out_d is None:
+                out_d = max(pv_)
+            out_.append({"sym": f"SOXX買い{sig}", "in": days[i0_], "out": out_d, "path": dict(pv_), "rule": "S", "ret": pv_[out_d] - 1,
+                         "s50": 0.0, "rs": 999 if top else -999, "ai": top, "first": True, "s2": False, "sd": d, "x": None,
+                         "stopped": min(pv_.values()) <= (1 - COST) * (1 - stop), "ichi": True, "reg": 0.0, "dh20": 0.0, "dh60": 0.0, "dh252": 0.0})
+        return out_
+    # 決算の日（決算の5営業日前からは買わない形）
+    _earn = {}
+    try:
+        for sym_, lst_ in json.load(open(os.path.join(cache, "earnings.json"), encoding="utf-8")).items():
+            _earn[sym_] = sorted({di[x[0]] for x in lst_ if x[0] in di})
+    except Exception:
+        pass
+    def earn_soon(sym, d, n):
+        ks_, k = _earn.get(sym), di.get(d)
+        if not ks_ or k is None:
+            return False
+        import bisect as _bs
+        j = _bs.bisect_left(ks_, k)
+        return j < len(ks_) and ks_[j] - k <= n
     def short_trades(trig, nslot=1, lev_=-1.0, fee=0.005):
         out_, k = [], 1
         on_ = [d in SKIPSET[trig] for d in days]
@@ -3157,6 +3428,8 @@ def opt_stage(base, data, sim, days, ind, cache, part):
         out = []
         for t in trs:
             if t.get("ghost") or t["sym"] not in HAS or mode == "none" or (mode == "reg" and prev(t["in"]) not in up) \
+                    or (mode.startswith("boost_") and prev(t["in"]) not in up and t["sd"] not in SKIPSET[mode]) \
+                    or (mode == "reg_season" and (prev(t["in"]) not in up or int(t["in"][5:7]) in (5, 6, 7, 8, 9, 10))) \
                     or (mode == "reg_sox" and (prev(t["in"]) not in up or prev(t["in"]) not in up_sox)) \
                     or (mode.startswith("reg_not_") and (prev(t["in"]) not in up or prev(t["in"]) in KD[mode[8:]])):
                 out.append(t)
@@ -3187,6 +3460,10 @@ def opt_stage(base, data, sim, days, ind, cache, part):
         for t in trs:
             if lo <= t["in"] and (t["out"] <= hi or (_RF["open_ok"] and t["in"] <= hi)):   # open_ok: 区切りの最後の日に持っている売買も入れる（その日の値段で数える）
                 by_in.setdefault(t["in"], []).append(t)
+        idle_ = next((t["idle"] for t in trs if t.get("idle")), None)   # 2026-11-06: 待っている現金を指数ETF（QQQ・SPY）に置く
+        _ig, _ii = IDLE.get(idle_, ({}, {})) if idle_ else ({}, {})
+        ls_ = next((t["lossize"] for t in trs if t.get("lossize")), None)   # (続いた損の数 n, 金額の倍率 f): 損で終わった売買が n 回続いたら、勝つまで f 倍の金額で買う
+        ls_hist = []
         cb_ = next((t["cb"] for t in trs if t.get("cb")), None)   # 2026-11-05: 損切りが続いたら止める (直近 w 件, うち k 件以上が損切り＝損で終わった売買, 止める取引日数)
         cb_hist, cb_until = [], -1
         cb_start, cb_on = -1, False   # 再開の合図で止める形（cb_[3]）: 止めた日の番号と、止めているかどうか
@@ -3211,6 +3488,8 @@ def opt_stage(base, data, sim, days, ind, cache, part):
         pend = []
         for d in dd:
             ghost_n = 0   # 約定しなかった指値の注文（その日だけ枠を使う）
+            if idle_ and cash > 0:   # 前の日の引け→今日の寄り付きの指数ETFの値動き（現金を置いている分）
+                cash *= _ig.get(d, 1.0)
             if pend:   # 前の日の引けで異常と判定した保有を、その日の寄り付きで売る（その日にルールで売る保有はルールのまま）
                 for h in pend:
                     if any(h is x for x in held) and h["t"]["out"] != d:
@@ -3236,6 +3515,8 @@ def opt_stage(base, data, sim, days, ind, cache, part):
                     cash += h["size"] * h["v"]
                     if log is not None:
                         log.append((h["t"]["in"], d, "stop" if h["t"].get("stopped") else "rule", h["t"]["sym"]))
+                    if ls_ and h["t"]["rule"] not in ("S", "R"):
+                        ls_hist.append(h["v"] < 1.0)
                     if cb_ and h["t"]["rule"] not in ("S", "R"):   # 「損切り」＝損で終わった売買すべて（ルールの手じまいの損も含む。2026-10-14 ユーザーと決めた数え方。11/05 に直した。以前は15%の損切りだけを数えていた）
                         cb_hist.append(bool(h["t"].get("stopped")) or (h["v"] < 1.0 and not (len(cb_) > 4 and cb_[4] == "stop")))   # cb_[4]="stop": 15%の損切りだけを数える（比べる用）
                 else:
@@ -3283,10 +3564,13 @@ def opt_stage(base, data, sim, days, ind, cache, part):
                     held.remove(h)
                 if cap and sum(1 for h in held if ind.get(h["t"]["sym"]) == ind.get(t["sym"])) >= cap:
                     continue
-                size = min(eq / slots * t.get("szm", 1.0), cash)   # szm: ボラティリティ・ターゲティングの金額の倍率（2026-11-05）
+                lsm_ = ls_[1] if ls_ and len(ls_hist) >= ls_[0] and all(ls_hist[-ls_[0]:]) and t["rule"] not in ("S", "R") else 1.0
+                size = min(eq / slots * t.get("szm", 1.0) * lsm_, cash)   # szm: ボラティリティ・ターゲティングの金額の倍率（2026-11-05）
                 if size <= 0:
                     break
                 cash -= size
+                if idle_:   # 置いていた指数ETFを売る手数料
+                    cash -= min(cash, size * COST)
                 v0 = t["path"].get(d, 1.0)
                 if t["out"] == d:
                     cash += size * v0
@@ -3299,6 +3583,8 @@ def opt_stage(base, data, sim, days, ind, cache, part):
                 bad_ = sum(1 for h in held if h["v"] <= 1 - x_)
                 if (bad_ >= n_) if n_ != "all" else (len(held) >= 2 and bad_ == len(held)):
                     pend = [h for h in held if mode_ == "all" or h["v"] < 1]
+            if idle_ and cash > 0:   # 今日の寄り付き→引けの指数ETFの値動き
+                cash *= _ii.get(d, 1.0)
             eq = cash + sum(h["size"] * h["v"] for h in held)
             peak = max(peak, eq)
             mdd = max(mdd, 1 - eq / peak)
@@ -3471,6 +3757,16 @@ def opt_stage(base, data, sim, days, ind, cache, part):
           "2倍ETFはSOXも上昇のときだけ": {"etf": "reg_sox"},   # 2026-10-23: S&P500 と半導体指数（SOX）の両方が100日線の上で線が上向きの日だけ
           "損切り10%（日中の逆指値）": {"stop": 0.10}, "損切り12%（日中の逆指値）": {"stop": 0.12},
           "損切り18%（日中の逆指値）": {"stop": 0.18}, "損切り20%（日中の逆指値）": {"stop": 0.20},   # 2026-11-06 ユーザーの指示「下落率が少なくなるように改善して」
+          "決算の5営業日前からは買わない": {"earnskip": 5}, "決算の3営業日前からは買わない": {"earnskip": 3},
+          "毎月3〜8日は買わない（コナーズ）": {"domskip": (3, 8)},
+          "損が2回続いたら勝つまで金額を半分（ミネルヴィニ・オニール）": {"lossize": (2, 0.5)},
+          "損が3回続いたら勝つまで金額を半分": {"lossize": (3, 0.5)},
+          "5〜10月は2倍ETFを使わない（季節）": {"etf": "reg_season"},
+          "待っている現金をQQQに置く": {"idle": "QQQ"}, "待っている現金をSPYに置く": {"idle": "SPY"},
+          "上がったら買い増す（順張り、20日以内に+5%で半分）": {"pyr": (0.05, 20, 0.5, ("M", "V"))},
+          "上がったら買い増す（全部のルール、20日以内に+5%で半分）": {"pyr": (0.05, 20, 0.5, ("B", "C", "M", "V"))},
+          "空き枠でSOXXを買う（コナーズ: SOXが200日線より上でRSI(2)≦5、5日線を上回ったら売る）": {"idx": ("CONR2", "ma5", 20, False)},
+          "空き枠でSOXXを買う（コナーズ: VIXが10日線の5%上に3日、5日線を上回ったら売る）": {"idx": ("VIXS", "ma5", 20, False)},
           "ミネルヴィニを外す": {"rules": ("B", "C", "V")}, "急落の底を外す": {"rules": ("B", "M", "V")},
           "押し目を外す": {"rules": ("C", "M", "V")}, "新高値V2を外す": {"rules": ("B", "C", "M")},
           "P（保有が−8%かつSOXが20日の最高値から−5%で手じまう）": {"rel8": True},
@@ -3610,6 +3906,16 @@ def opt_stage(base, data, sim, days, ind, cache, part):
         V1[f"信用{k_}: その日は順張りの新しい買いを止める"] = {"kb": (k_, "trend")}
         V1[f"信用{k_}: その日は全部の新しい買いを止める"] = {"kb": (k_, "all")}
         V1[f"信用{k_}: ハイイールド債が10日線を上回るまで全部の新しい買いを止める"] = {"kb": (k_, "until")}
+    # 2026-11-06: 市場の底の合図の使い方（3通り）。底の合図の名前と説明
+    BN = {"FTD_N": "フォロースルー・デー（ナスダック、オニール）", "FTD_S": "フォロースルー・デー（SOX）", "ZBT": "ブレス・スラスト（ツバイク）",
+          "P50": "50日線より上の銘柄が15%以下から30%以上", "D90": "90%の下げの日の後の90%の上げの日", "NLPK": "新安値の数のピークアウト",
+          "MCC": "マクレラン・オシレーターが−100未満から0超え", "VIXPK": "VIXが30超えの後に20日線を下回る", "RSI_S": "SOXのRSI(14)が30以下から50超え",
+          "MACD0": "SOXのMACDとシグナルが0超え", "MAUP": "SOXの5日線＞25日線＞75日線でどれも上向き", "W30": "SOXが上向きの30週線の上（ワインスタインのステージ2）",
+          "MI": "モメンタム指数（騰落の200日平均）が0超え（ワインスタイン）", "NHNL": "新高値−新安値がプラスに転じる", "WB": "SOXのW型の底（ボリンジャー）"}
+    for k_, lab_ in BN.items():
+        V1[f"底を待つ: {lab_}"] = {"skip": ("wait_" + k_, "theme")}
+        V1[f"底の後40日は2倍ETF: {lab_}"] = {"etf": "boost_" + k_}
+        V1[f"底でSOXXを1枠: {lab_}"] = {"idx": (k_, "ma50", 120, True)}
     combos = [x for x in os.environ.get("OPT_COMBO", "").split(";") if x]
     forms = list(V1.items()) if part == 1 else [("今のルール（傾きの小さい順）", {})] + [
         (c, {k: v for nm in c.split("＋") for k, v in V1[nm].items()}) for c in combos]
@@ -3720,6 +4026,33 @@ def opt_stage(base, data, sim, days, ind, cache, part):
         if sp.get("voltarget"):   # 2026-11-05: ボラティリティ・ターゲティング。合図の日の SOX の20日の値動きの大きさ（年率）が目標を超えるほど、買う金額を減らす（目標÷実際、最小0.25）。残りは現金
             tgt_ = sp["voltarget"]
             trs = [{**t, "szm": max(0.25, min(1.0, tgt_ / SOXVOL[t["sd"]])) if SOXVOL.get(t["sd"]) else 1.0} for t in trs]
+        if sp.get("idx"):   # 2026-11-06: 底の合図（またはコナーズの指数の押し目）で SOXX を1枠買う
+            sg_, ex_, mh_, top_ = sp["idx"]
+            trs = trs + index_trades(sg_, ex_, mh_, top_)
+        if sp.get("earnskip"):   # 2026-11-06: 決算の n 営業日前からは買わない（買う日から n 取引日以内に決算がある合図）
+            trs = [t for t in trs if t["rule"] == "S" or not earn_soon(t["sym"], t["in"], sp["earnskip"])]
+        if sp.get("domskip"):   # 2026-11-06（コナーズの本の回答）: 毎月3〜8日は買わない
+            lo_, hi_ = sp["domskip"]
+            trs = [t for t in trs if t["rule"] == "S" or not (lo_ <= int(t["in"][8:10]) <= hi_)]
+        if sp.get("pyr"):   # 2026-11-06（オニール・ミネルヴィニ）: 上がったら買い増す。買ってから n 取引日のうちに終値が買値の +x になった日の引けで、
+            x_, n_, f_, rr_ = sp["pyr"]   # 金額 f 倍の買い増しを別の枠で入れ、元の売買と同じ日に売る
+            add_ = []
+            for t in trs:
+                if t.get("ghost") or t["rule"] not in rr_:
+                    continue
+                ds_ = sorted(d for d in t["path"] if d <= t["out"])
+                j_ = next((i for i, d in enumerate(ds_[:n_ + 1]) if i > 0 and t["path"][d] >= (1 - COST) * (1 + x_)), None)
+                if j_ is None or ds_[j_] == t["out"]:
+                    continue
+                b_ = t["path"][ds_[j_]]
+                pv_ = {d: (1 - COST) * t["path"][d] / b_ for d in ds_[j_:]}
+                add_.append({**t, "sym": t["sym"] + "+", "in": ds_[j_], "path": pv_, "ret": pv_[t["out"]] - 1, "szm": f_,
+                             "stopped": t.get("stopped"), "ai": t["ai"], "rs": t["rs"] + 0.5})
+            trs = trs + add_
+        if sp.get("idle"):   # 2026-11-06: 待っている現金を指数ETFに置く（port で計算）
+            trs = [{**t, "idle": sp["idle"]} for t in trs]
+        if sp.get("lossize"):   # 2026-11-06（ミネルヴィニ・オニールの本の回答）: 損が続いたら買う金額を減らす（port で判定）
+            trs = [{**t, "lossize": sp["lossize"]} for t in trs]
         if sp.get("short"):   # 2026-11-04: 引き金の間は SOXX を空売り
             k_, n_, l_ = sp["short"]
             trs = trs + short_trades(k_, n_, l_)
