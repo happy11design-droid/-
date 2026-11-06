@@ -3,14 +3,15 @@
 「何度も検証で使うのだからどのセッションでも使用できるようきちんと保存して」）
 
 データは ~/.cache/stock_backtest/ に置く（backtest_lib.DEFAULT_CACHE）。この場所はセッションの作業環境（コンテナ）の中にあり、
-環境が入れ替わると消える。そこで、圧縮して GitHub のデータ用ブランチ（DATA_BRANCH、1コミットだけ）に保存し、次のセッションで戻す。
+環境が入れ替わると消える。そこで、ファイルのまま GitHub のデータ用ブランチ（DATA_BRANCH）に普通のコミットで保存し、次のセッションで戻す。
+（強制の上書きはしない。2回目以降の保存は変わった分だけが増える）
 
 使い方:
   tools/backtest_cache.py restore            # GitHubから戻す（約1分）。バックテストを始める前にまずこれ
   tools/backtest_cache.py build              # インターネットから全部作り直す（約30〜60分）
   tools/backtest_cache.py refresh [--until YYYY-MM-DD]
                                              # 株価を最新に取り直す（until の日を含めない。米国の引け前は今日を入れない）
-  tools/backtest_cache.py save               # 今のデータを圧縮してGitHubに保存（データ用ブランチを1コミットで置き換える）
+  tools/backtest_cache.py save               # 今のデータをGitHubのデータ用ブランチに保存（普通のコミット）
   tools/backtest_cache.py status             # 今のデータの中身（銘柄数・最終日）
 
 作り直す中身（build）:
@@ -23,7 +24,6 @@
 import argparse
 import datetime as dt
 import glob
-import hashlib
 import json
 import os
 import re
@@ -41,7 +41,6 @@ import backtest_lib as bl
 
 CACHE = bl.DEFAULT_CACHE
 DATA_BRANCH = "data/backtest-cache"
-CHUNK = 90 * 1024 * 1024   # GitHub は1ファイル100MBまで
 EXTRA = ["SPY", "QQQ", "^VIX", "^GSPC", "^SOX", "^NDX", "^IXIC", "^TNX", "^MOVE", "SOXX", "SMH", "TQQQ", "HYG", "IEI", "LQD", "BKLN", "JNK", "TLT",
          "XLE", "XLV", "XLU", "XLP", "XLF", "XLI", "XLB", "XLY", "XLK", "XLC", "XLRE"]
 
@@ -155,83 +154,72 @@ def git_url():
     return subprocess.run(["git", "remote", "get-url", "origin"], cwd=ROOT, capture_output=True, text=True).stdout.strip()
 
 
+def _clone(dst):
+    """データ用ブランチを浅く取る。ブランチがまだなければ False"""
+    for attempt in range(4):
+        r = subprocess.run(["git", "clone", "-q", "--depth", "1", "--single-branch", "--branch", DATA_BRANCH, git_url(), dst],
+                           capture_output=True, text=True)
+        if r.returncode == 0:
+            return True
+        if "not found" in (r.stderr or "").lower() or "couldn't find remote ref" in (r.stderr or "").lower():
+            return False
+        shutil.rmtree(dst, ignore_errors=True)
+        time.sleep(2 ** (attempt + 1))
+    sys.exit(f"GitHubのデータ用ブランチ {DATA_BRANCH} を取れませんでした")
+
+
+IGNORE = shutil.ignore_patterns("*.pkl", "*.new", "long")   # long はその日に取り直す一時データ
+
+
 def cmd_save(a):
-    tmp = tempfile.mkdtemp()
-    try:
-        arc = os.path.join(tmp, "cache.tar.xz")
-        print("圧縮中…", flush=True)
-        parent, name = os.path.dirname(CACHE), os.path.basename(CACHE)
-        with open(arc, "wb") as f:
-            tar = subprocess.Popen(["tar", "-C", parent, "--exclude", "*.pkl", "--exclude", "*.new", "-cf", "-", name], stdout=subprocess.PIPE)
-            xz = subprocess.run(["xz", "-T0", "-6"], stdin=tar.stdout, stdout=f)
-            tar.wait()
-        repo = os.path.join(tmp, "repo")
-        os.makedirs(repo)
-        parts, h = [], hashlib.sha256()
-        with open(arc, "rb") as f:
-            k = 0
-            while True:
-                b = f.read(CHUNK)
-                if not b:
-                    break
-                h.update(b)
-                nm = f"cache.tar.xz.{k:02d}"
-                open(os.path.join(repo, nm), "wb").write(b)
-                parts.append(nm)
-                k += 1
-        ps = glob.glob(os.path.join(CACHE, "prices", "*.json"))
-        spy = os.path.join(CACHE, "prices", "SPY.json")
-        man = {"saved_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"), "prices": len(ps),
-               "last_day": json.load(open(spy))[-1][0] if os.path.exists(spy) else None,
-               "parts": parts, "sha256": h.hexdigest(), "bytes": os.path.getsize(arc)}
-        json.dump(man, open(os.path.join(repo, "manifest.json"), "w"), ensure_ascii=False, indent=1)
-        open(os.path.join(repo, "README.md"), "w", encoding="utf-8").write(
-            "# バックテストのデータ（自動で作るブランチ）\n\n`tools/backtest_cache.py save` が1コミットで置き換える。戻すのは `tools/backtest_cache.py restore`。\n"
-            "中身は ~/.cache/stock_backtest/ を tar.xz にして90MBずつに分けたもの。\n")
-        g = lambda *c: subprocess.run(["git", *c], cwd=repo, check=True)
-        g("init", "-q")
-        g("checkout", "-q", "-b", "data")
-        g("add", ".")
-        g("-c", "user.name=Claude", "-c", "user.email=noreply@anthropic.com", "commit", "-q", "-m",
-          f"バックテストのデータ（株価 {man['prices']} 銘柄、最終日 {man['last_day']}）")
-        for attempt in range(4):
-            r = subprocess.run(["git", "push", "-q", "--force", git_url(), f"HEAD:refs/heads/{DATA_BRANCH}"], cwd=repo)
+    """ファイルのまま（圧縮せず）データ用ブランチに普通のコミットで保存する。強制の上書きはしない（2回目以降は変わった分だけ増える）"""
+    for attempt in range(3):
+        tmp = tempfile.mkdtemp()
+        try:
+            repo = os.path.join(tmp, "repo")
+            if not _clone(repo):
+                os.makedirs(repo)
+                subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+                subprocess.run(["git", "checkout", "-q", "--orphan", "data"], cwd=repo, check=True)
+            dst = os.path.join(repo, "cache")
+            shutil.rmtree(dst, ignore_errors=True)
+            shutil.copytree(CACHE, dst, ignore=IGNORE)
+            ps = glob.glob(os.path.join(dst, "prices", "*.json"))
+            spy = os.path.join(dst, "prices", "SPY.json")
+            man = {"saved_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"), "prices": len(ps),
+                   "last_day": json.load(open(spy))[-1][0] if os.path.exists(spy) else None}
+            json.dump(man, open(os.path.join(repo, "manifest.json"), "w"), ensure_ascii=False, indent=1)
+            open(os.path.join(repo, "README.md"), "w", encoding="utf-8").write(
+                "# バックテストのデータ（`tools/backtest_cache.py` が書くブランチ）\n\n"
+                "`cache/` は ~/.cache/stock_backtest/ の中身（株価・業種・決算日）。戻すのは `python3 tools/backtest_cache.py restore`、"
+                "保存は `save`。手で編集しない。\n")
+            g = lambda *c: subprocess.run(["git", *c], cwd=repo, check=True)
+            g("add", "-A")
+            if subprocess.run(["git", "diff", "--cached", "--quiet"], cwd=repo).returncode == 0:
+                print("変わったところがないので保存しない")
+                return
+            g("-c", "user.name=Claude", "-c", "user.email=noreply@anthropic.com", "commit", "-q", "-m",
+              f"バックテストのデータ（株価 {man['prices']} 銘柄、最終日 {man['last_day']}）")
+            r = subprocess.run(["git", "push", "-q", git_url(), f"HEAD:refs/heads/{DATA_BRANCH}"], cwd=repo)
             if r.returncode == 0:
-                break
-            time.sleep(2 ** (attempt + 1))
-        else:
-            sys.exit("GitHubへの保存に失敗しました")
-        print(f"保存しました: {DATA_BRANCH}（{man['bytes'] / 1e6:.0f}MB、{len(parts)}個、株価 {man['prices']} 銘柄、最終日 {man['last_day']}）")
-    finally:
-        shutil.rmtree(tmp, ignore_errors=True)
+                print(f"保存しました: {DATA_BRANCH}（株価 {man['prices']} 銘柄、最終日 {man['last_day']}）")
+                return
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+        time.sleep(2 ** (attempt + 1))
+    sys.exit("GitHubへの保存に3回失敗しました")
 
 
 def cmd_restore(a):
     tmp = tempfile.mkdtemp()
     try:
         repo = os.path.join(tmp, "repo")
-        for attempt in range(4):
-            r = subprocess.run(["git", "clone", "-q", "--depth", "1", "--single-branch", "--branch", DATA_BRANCH, git_url(), repo])
-            if r.returncode == 0:
-                break
-            shutil.rmtree(repo, ignore_errors=True)
-            time.sleep(2 ** (attempt + 1))
-        else:
-            sys.exit(f"GitHubのデータ用ブランチ {DATA_BRANCH} を取れませんでした（まだ保存していないなら build してから save）")
+        if not _clone(repo):
+            sys.exit(f"データ用ブランチ {DATA_BRANCH} がまだありません（build してから save）")
         man = json.load(open(os.path.join(repo, "manifest.json")))
-        arc = os.path.join(tmp, "cache.tar.xz")
-        h = hashlib.sha256()
-        with open(arc, "wb") as f:
-            for nm in man["parts"]:
-                b = open(os.path.join(repo, nm), "rb").read()
-                h.update(b)
-                f.write(b)
-        if h.hexdigest() != man["sha256"]:
-            sys.exit("保存したデータが壊れています（sha256 が合わない）")
-        os.makedirs(os.path.dirname(CACHE), exist_ok=True)
         if os.path.exists(CACHE) and not a.keep:
             shutil.rmtree(CACHE)
-        subprocess.run(["tar", "-C", os.path.dirname(CACHE), "-xJf", arc], check=True)
+        shutil.copytree(os.path.join(repo, "cache"), CACHE, dirs_exist_ok=True)
         print(f"戻しました: 保存 {man['saved_at']}、株価 {man['prices']} 銘柄、最終日 {man['last_day']}")
         cmd_status(a)
     finally:
