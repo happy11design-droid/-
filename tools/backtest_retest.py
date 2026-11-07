@@ -2787,6 +2787,7 @@ def opt_stage(base, data, sim, days, ind, cache, part):
                   open(os.environ["OPT_SIGDUMP"], "w"))
         print("底の合図を書き出し", os.environ["OPT_SIGDUMP"], file=sys.stderr)
         return
+    TAXON, TAX_R, QFEE = os.environ.get("OPT_TAX") == "1", 0.20315, 0.00132
     IDLE = {}   # 待っている現金を置く指数ETF: (前の日の引け→寄り付きの倍率, 寄り付き→引けの倍率)
     for sym_ in ("QQQ", "SPY"):
         g_ = _lp2(cache, sym_)
@@ -3490,6 +3491,8 @@ def opt_stage(base, data, sim, days, ind, cache, part):
             if lo <= t["in"] and (t["out"] <= hi or (_RF["open_ok"] and t["in"] <= hi)):   # open_ok: 区切りの最後の日に持っている売買も入れる（その日の値段で数える）
                 by_in.setdefault(t["in"], []).append(t)
         idle_ = next((t["idle"] for t in trs if t.get("idle")), None)   # 2026-11-06: 待っている現金を指数ETF（QQQ・SPY）に置く
+        tax_on = TAXON   # 2026-11-07（OPT_TAX=1）: 確定した損益に年ごとの税（20.315%、その年の中で損益を通算）。待っているQQQの売り買いも税の通算と手数料0.132%に入れる
+        rz_, yr_, qb_, qh_ = 0.0, None, 0.0, 0.0
         _ig, _ii = IDLE.get(idle_, ({}, {})) if idle_ else ({}, {})
         ls_ = next((t["lossize"] for t in trs if t.get("lossize")), None)   # (続いた損の数 n, 金額の倍率 f): 損で終わった売買が n 回続いたら、勝つまで f 倍の金額で買う
         ls_hist = []
@@ -3517,6 +3520,10 @@ def opt_stage(base, data, sim, days, ind, cache, part):
         pend = []
         for d in dd:
             ghost_n = 0   # 約定しなかった指値の注文（その日だけ枠を使う）
+            if tax_on and d[:4] != yr_:   # 年が変わった: 前の年の確定した利益に税
+                if yr_ is not None and rz_ > 0:
+                    cash -= TAX_R * rz_
+                rz_, yr_ = 0.0, d[:4]
             if idle_ and cash > 0:   # 前の日の引け→今日の寄り付きの指数ETFの値動き（現金を置いている分）
                 cash *= _ig.get(d, 1.0)
             if pend:   # 前の日の引けで異常と判定した保有を、その日の寄り付きで売る（その日にルールで売る保有はルールのまま）
@@ -3542,6 +3549,8 @@ def opt_stage(base, data, sim, days, ind, cache, part):
                     h["v"] = v
                 if h["t"]["out"] == d:
                     cash += h["size"] * h["v"]
+                    if tax_on:
+                        rz_ += h["size"] * (h["v"] - 1)
                     if log is not None:
                         log.append((h["t"]["in"], d, "stop" if h["t"].get("stopped") else "rule", h["t"]["sym"]))
                     if ls_ and h["t"]["rule"] not in ("S", "R"):
@@ -3598,11 +3607,13 @@ def opt_stage(base, data, sim, days, ind, cache, part):
                 if size <= 0:
                     break
                 cash -= size
-                if idle_:   # 置いていた指数ETFを売る手数料
+                if idle_ and not tax_on:   # 置いていた指数ETFを売る手数料（税を入れるときは引けでまとめて計算する）
                     cash -= min(cash, size * COST)
                 v0 = t["path"].get(d, 1.0)
                 if t["out"] == d:
                     cash += size * v0
+                    if tax_on:
+                        rz_ += size * (v0 - 1)
                     if log is not None:
                         log.append((d, d, "stop" if t.get("stopped") else "rule", t["sym"]))
                     continue
@@ -3614,6 +3625,19 @@ def opt_stage(base, data, sim, days, ind, cache, part):
                     pend = [h for h in held if mode_ == "all" or h["v"] < 1]
             if idle_ and cash > 0:   # 今日の寄り付き→引けの指数ETFの値動き
                 cash *= _ii.get(d, 1.0)
+            if idle_ and tax_on:   # 待っているQQQの増減を買い足し・一部売りとみなし、売った分の損益を税の通算に、売り買いに手数料（恩株ツールと同じ）
+                g_ = _ig.get(d, 1.0) * _ii.get(d, 1.0)
+                h_exp, h_end = qh_ * g_, max(cash, 0.0)
+                flow_ = h_end - h_exp
+                if flow_ < -1e-9 and h_exp > 0:
+                    f_ = min(1.0, -flow_ / h_exp)
+                    rz_ += f_ * (h_exp - qb_)
+                    qb_ *= (1 - f_)
+                    cash -= QFEE * (-flow_)
+                elif flow_ > 1e-9:
+                    qb_ += flow_
+                    cash -= QFEE * flow_
+                qh_ = max(cash, 0.0)
             eq = cash + sum(h["size"] * h["v"] for h in held)
             peak = max(peak, eq)
             mdd = max(mdd, 1 - eq / peak)
