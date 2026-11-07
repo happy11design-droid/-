@@ -2752,6 +2752,35 @@ def opt_stage(base, data, sim, days, ind, cache, part):
             k = di[d]
             b_ |= set(days[k + 1:k + 41])
         SKIPSET["boost_" + nm_] = b_
+    # 2026-11-07 ユーザーの指示「底の可能性が高い確率がわかったら打診買いから始めて、上昇相場の確率が高くなるにつれて買い増して利益を伸ばす」:
+    # 日ごとの市場の段階。down＝SOXが下向きの50日線の下、upx＝SOXが上向きの50日線と上向きの30週線（150日線）の上、
+    # nsig＝直近40取引日に出た底の合図の種類の数（早い合図 early と確認の合図 conf に分けても数える）
+    _EARLY = ("FTD_N", "FTD_S", "ZBT", "P50", "D90", "NLPK", "MCC", "VIXPK", "RSI_S")
+    _CONF = ("MACD0", "MAUP", "W30", "MI", "NHNL", "WB")
+    _sigk = {nm_: sorted(di[d] for d in BOTTOM[nm_]) for nm_ in _EARLY + _CONF}
+    import bisect as _bs2
+    LAD = {}
+    for k in range(nD):
+        d = days[k]
+        def _n(names):
+            return sum(1 for nm_ in names if (lambda ks: (lambda j: j > 0 and ks[j - 1] >= k - 39)(_bs2.bisect_right(ks, k)))(_sigk[nm_]))
+        m50, m50p, m150, m150p = _sma(_sxl, k, 50), _sma(_sxl, k - 10, 50), _sma(_sxl, k, 150), _sma(_sxl, k - 10, 150)
+        upx = None not in (m50, m50p, m150, m150p, _sxl[k]) and _sxl[k] > m50 > m50p and _sxl[k] > m150 and m150 > m150p
+        LAD[d] = (d in SOXDN, upx, _n(_EARLY), _n(_CONF))
+    def ladder_m(d, kind, base):
+        dn_, upx_, ne_, nc_ = LAD.get(d, (False, False, 0, 0))
+        if not dn_ or kind == "none":
+            return 1.0
+        if kind == "flat":
+            return base
+        n_ = ne_ + nc_
+        if kind == "cnt":   # 半分→1つで3/4→2つ以上で全額
+            return 1.0 if n_ >= 2 else 0.75 if n_ == 1 else base
+        if kind == "cnt4":   # 1/4→1つで1/2→2つで3/4→3つ以上で全額
+            return min(1.0, base + 0.25 * n_)
+        if kind == "ec":   # 半分→早い合図で3/4→確認の合図で全額
+            return 1.0 if nc_ >= 1 else 0.75 if ne_ >= 1 else base
+        return 1.0
     if os.environ.get("OPT_SIGDUMP"):
         json.dump({"days": days, "sox": _sxl, "bottom": {k_: sorted(v) for k_, v in BOTTOM.items()},
                    "wait": {k_: len([d for d in SKIPSET["wait_" + k_] if d >= "2015-01-01"]) for k_ in BOTTOM}},
@@ -3427,7 +3456,7 @@ def opt_stage(base, data, sim, days, ind, cache, part):
     def lev(trs, mode):
         out = []
         for t in trs:
-            if t.get("ghost") or t["sym"] not in HAS or mode == "none" or (mode == "reg" and prev(t["in"]) not in up) \
+            if t.get("ghost") or t["sym"] not in HAS or (not t.get("force2x") and (mode == "none" or (mode == "reg" and prev(t["in"]) not in up))) \
                     or (mode.startswith("boost_") and prev(t["in"]) not in up and t["sd"] not in SKIPSET[mode]) \
                     or (mode == "reg_season" and (prev(t["in"]) not in up or int(t["in"][5:7]) in (5, 6, 7, 8, 9, 10))) \
                     or (mode == "reg_sox" and (prev(t["in"]) not in up or prev(t["in"]) not in up_sox)) \
@@ -3764,6 +3793,14 @@ def opt_stage(base, data, sim, days, ind, cache, part):
           "5〜10月は2倍ETFを使わない（季節）": {"etf": "reg_season"},
           "待っている現金をQQQに置く": {"idle": "QQQ"}, "待っている現金をSPYに置く": {"idle": "SPY"},
           "上がったら買い増す（順張り、20日以内に+5%で半分）": {"pyr": (0.05, 20, 0.5, ("M", "V"))},
+          "段階的に増やす①下げの局面は半分→底の合図1つで3/4→2つ以上で全額、上昇の局面は2倍ETF": {"ladder": ("cnt", 0.5, True, False)},
+          "段階的に増やす②下げの局面は1/4→合図1つごとに1/4ずつ増やす、上昇の局面は2倍ETF": {"ladder": ("cnt4", 0.25, True, False)},
+          "段階的に増やす③①と同じで上昇の局面の2倍ETFなし": {"ladder": ("cnt", 0.5, False, False)},
+          "段階的に増やす④下げの局面は半分→早い底の合図で3/4→確認の合図で全額、上昇の局面は2倍ETF": {"ladder": ("ec", 0.5, True, False)},
+          "段階的に増やす⑤①に加えて、打診買いした保有に全額の段階で含み益なら残りを買い足す": {"ladder": ("cnt", 0.5, True, True)},
+          "段階的に増やす⑥④に加えて、打診買いした保有に全額の段階で含み益なら残りを買い足す": {"ladder": ("ec", 0.5, True, True)},
+          "段階的に増やす（比べる用）下げの局面はいつも半分": {"ladder": ("flat", 0.5, False, False)},
+          "段階的に増やす（比べる用）上昇の局面は2倍ETFだけ": {"ladder": ("none", 1.0, True, False)},
           "上がったら買い増す（全部のルール、20日以内に+5%で半分）": {"pyr": (0.05, 20, 0.5, ("B", "C", "M", "V"))},
           "空き枠でSOXXを買う（コナーズ: SOXが200日線より上でRSI(2)≦5、5日線を上回ったら売る）": {"idx": ("CONR2", "ma5", 20, False)},
           "空き枠でSOXXを買う（コナーズ: VIXが10日線の5%上に3日、5日線を上回ったら売る）": {"idx": ("VIXS", "ma5", 20, False)},
@@ -4049,6 +4086,26 @@ def opt_stage(base, data, sim, days, ind, cache, part):
                 add_.append({**t, "sym": t["sym"] + "+", "in": ds_[j_], "path": pv_, "ret": pv_[t["out"]] - 1, "szm": f_,
                              "stopped": t.get("stopped"), "ai": t["ai"], "rs": t["rs"] + 0.5})
             trs = trs + add_
+        if sp.get("ladder"):   # 2026-11-07: 市場の段階で買う金額を変える（打診買い→買い増し）。boost=True なら上昇の局面（upx）の合図は2倍ETF
+            kind_, base_, boost_, topup_ = sp["ladder"]
+            out_ = []
+            for t in trs:
+                if t.get("ghost") or t["rule"] in ("S", "R"):
+                    out_.append(t)
+                    continue
+                m_ = ladder_m(t["sd"], kind_, base_)
+                t2 = {**t, "szm": t.get("szm", 1.0) * m_}
+                if boost_ and LAD.get(t["sd"], (0, False))[1]:
+                    t2["force2x"] = True
+                out_.append(t2)
+                if topup_ and m_ < 1.0:   # 打診買いの後、市場の段階が全額になった最初の日の引けで、含み益なら残りを買い足す（元の売買と同じ日に売る）
+                    ds_ = sorted(d for d in t["path"] if d <= t["out"])
+                    j_ = next((i for i, d in enumerate(ds_) if i > 0 and d != t["out"] and ladder_m(d, kind_, base_) >= 1.0 and t["path"][d] > 1.0), None)
+                    if j_ is not None:
+                        b_ = t["path"][ds_[j_]]
+                        pv_ = {d: (1 - COST) * t["path"][d] / b_ for d in ds_[j_:]}
+                        out_.append({**t, "sym": t["sym"] + "+", "in": ds_[j_], "path": pv_, "ret": pv_[t["out"]] - 1, "szm": 1.0 - m_, "rs": t["rs"] + 0.5})
+            trs = out_
         if sp.get("idle"):   # 2026-11-06: 待っている現金を指数ETFに置く（port で計算）
             trs = [{**t, "idle": sp["idle"]} for t in trs]
         if sp.get("lossize"):   # 2026-11-06（ミネルヴィニ・オニールの本の回答）: 損が続いたら買う金額を減らす（port で判定）
