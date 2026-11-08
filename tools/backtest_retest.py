@@ -3076,6 +3076,50 @@ def opt_stage(base, data, sim, days, ind, cache, part):
         LDRSELL[k_] = {days[i + 1] for i in st_ if i + 1 < len(days)}
     for k_ in ("ldr50", "epldr50", "epldd10"):
         print(f"主導株 {k_}: 2015年〜 {sum(1 for d in SKIPSET[k_] if d >= '2015-01-01')}日", file=sys.stderr)
+    # 2026-11-08 ユーザーの指示「テストして」（7月は大手の決算が下げを止め、今回は大手の決算が下げの原因になった）:
+    # 大手4社（MSFT・GOOGL・AMZN・META）の決算の翌取引日の値動き（決算の日の終値→翌日の終値。4社とも引け後に発表）。
+    # 決算の季節＝前の決算から20取引日以上あいたら新しい季節。e2n＝その季節で2社目が−5%以下になった日、
+    # eavg＝4社がそろった日に4社の平均が−3%以下。その日の引けで判定し、その日から20・60取引日
+    _ej = json.load(open(os.path.join(cache, "earnings.json")))
+    _rx = []
+    for s_ in ("MSFT", "GOOGL", "AMZN", "META"):
+        g_ = load_prices(cache, s_)
+        gp_ = {d: k for k, d in enumerate(g_["date"])}
+        for d0, _ in _ej.get(s_, []):
+            if d0 < "2014-06-01" or d0 not in gp_ or gp_[d0] + 1 >= len(g_["date"]):
+                continue
+            k = gp_[d0]
+            d1 = g_["date"][k + 1]
+            if d1 in di:
+                _rx.append((d1, s_, g_["c"][k + 1] / g_["c"][k] - 1))
+    _rx.sort()
+    _seas, _cur = [], []
+    for r_ in _rx:
+        if _cur and di[r_[0]] - di[_cur[-1][0]] > 20:
+            _seas.append(_cur)
+            _cur = []
+        _cur.append(r_)
+    if _cur:
+        _seas.append(_cur)
+    E2N, EAVG = set(), set()
+    for sz_ in _seas:
+        bad_ = [r_ for r_ in sz_ if r_[2] <= -0.05]
+        if len(bad_) >= 2:
+            E2N.add(bad_[1][0])
+        if len({r_[1] for r_ in sz_}) == 4 and sum(r_[2] for r_ in sz_) / len(sz_) <= -0.03:
+            EAVG.add(sz_[-1][0])
+    # 線と長さを変えた確かめ（平均 −2%・−4%、10・40取引日）
+    EAVGT = {}
+    for th_ in (0.02, 0.03, 0.04):
+        EAVGT[th_] = {sz_[-1][0] for sz_ in _seas if len({r_[1] for r_ in sz_}) == 4 and sum(r_[2] for r_ in sz_) / len(sz_) <= -th_}
+    for nm_, src_, n_ in (("e2n20", E2N, 20), ("eavg20", EAVG, 20), ("eavg60", EAVG, 60), ("eavg2_20", EAVGT[0.02], 20), ("eavg4_20", EAVGT[0.04], 20),
+                          ("eavg10", EAVG, 10), ("eavg40", EAVG, 40)):
+        SKIPSET[nm_] = {days[j_] for d in src_ for j_ in range(di[d], min(len(days), di[d] + n_))}
+        LDRSELL[nm_] = {days[di[d] + 1] for d in src_ if di[d] + 1 < len(days)}
+    print("大手4社の決算の平均 −2%以下: " + "・".join(sorted(d for d in EAVGT[0.02] if d >= "2015-01-01")) + "、−4%以下: "
+          + "・".join(sorted(d for d in EAVGT[0.04] if d >= "2015-01-01")), file=sys.stderr)
+    print("大手4社の決算: 2社以上−5% " + "・".join(sorted(d for d in E2N if d >= "2015-01-01")) + "、平均−3%以下 "
+          + "・".join(sorted(d for d in EAVG if d >= "2015-01-01")), file=sys.stderr)
     for d, v in EPALERT.items():
         if d >= "2015-01-01":
             k = di[d]
@@ -3838,6 +3882,21 @@ def opt_stage(base, data, sim, days, ind, cache, part):
           "主導株⑯⑭になった翌日にテーマ株を売り、⑭の日は買わない": {"skip": ("epldr50", "theme"), "ldrsell": "epldr50"},
           "主導株⑰SOXの下げの間で上位10銘柄の20日の高値からの下げの中央値が−10%以下の日はテーマを買わない": {"skip": ("epldd10", "theme")},
           "主導株⑱⑰になった翌日にテーマ株を売り、⑰の日は買わない": {"skip": ("epldd10", "theme"), "ldrsell": "epldd10"},
+          # 2026-11-08: 大手4社（MSFT・GOOGL・AMZN・META）の決算の翌日の値動き
+          "決算⑲大手4社のうち2社以上が決算の翌日に−5%以下なら20取引日テーマを買わない": {"skip": ("e2n20", "theme")},
+          "決算⑳⑲の20取引日は保有2銘柄まで": {"half_in": "e2n20"},
+          "決算㉑大手4社の決算の翌日の値動きの平均が−3%以下なら20取引日テーマを買わない": {"skip": ("eavg20", "theme")},
+          "決算㉒㉑の20取引日は保有2銘柄まで": {"half_in": "eavg20"},
+          "決算㉓㉑になった翌日にテーマ株を売り、20取引日買わない": {"skip": ("eavg20", "theme"), "ldrsell": "eavg20"},
+          "決算㉔㉑を60取引日続ける": {"skip": ("eavg60", "theme")},
+          "決算㉕平均−2%以下なら20取引日は保有2銘柄まで": {"half_in": "eavg2_20"},
+          "決算㉖平均−4%以下なら20取引日は保有2銘柄まで": {"half_in": "eavg4_20"},
+          "決算㉗平均−3%以下なら10取引日は保有2銘柄まで": {"half_in": "eavg10"},
+          "決算㉘平均−3%以下なら40取引日は保有2銘柄まで": {"half_in": "eavg40"},
+          "決算㉙平均−2%以下なら翌日にテーマ株を売り20取引日買わない": {"skip": ("eavg2_20", "theme"), "ldrsell": "eavg2_20"},
+          "決算㉚平均−4%以下なら翌日にテーマ株を売り20取引日買わない": {"skip": ("eavg4_20", "theme"), "ldrsell": "eavg4_20"},
+          "決算㉛平均−3%以下なら翌日にテーマ株を売り10取引日買わない": {"skip": ("eavg10", "theme"), "ldrsell": "eavg10"},
+          "決算㉜平均−3%以下なら翌日にテーマ株を売り40取引日買わない": {"skip": ("eavg40", "theme"), "ldrsell": "eavg40"},
           # 2026-11-03 ユーザーの指示「全て実行して」: 底に近いところで買う
           "買い下がり①合図で半分、終値が買値から5%下げたら残りの半分（押し目・急落の底）": {"buydown": (0.05, ("B", "C"))},
           "買い下がり②合図で半分、終値が買値から8%下げたら残りの半分（押し目・急落の底）": {"buydown": (0.08, ("B", "C"))},
