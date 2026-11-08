@@ -15,6 +15,12 @@
   - 乗り換え rot: 枠が埋まっているときに新しい合図が出たら、持っている株のうち値上がり率が一番低いものが rot 未満なら売って乗り換える
   - 売りは終値。売買コスト片道0.1%。利益に20.315%の税（損失との通算はしない）
   - 待っている現金は cash_px（日付→価格）に置く（値上がりへの税は考えない）。None なら0%
+  2026-11-08 ユーザーの指示「qqqの損失が30%の損切りに達した時損切りするの？…損切りした直後にqqqをまた買うの？」→「テストして」:
+  - qtax: 待っているQQQを売った分の利益にも税（売るたびに利益の20.315%。損との通算はしない）、QQQの売り買いにも手数料
+  - qstop=(X, "cost"|"peak"): QQQが買値の平均（cost）か、持ってからの高値（peak）から −X% の終値で全部売って現金にし、
+    QQQの終値が上向きの50日線（50日線が10取引日前より上）を上回ったら、その終値で買い直す（現金のあいだの利息はなし）
+  - qoff=N: 株を損切りした日から N 取引日は、待っている現金をQQQに置かない（現金）
+  - skip=N: 株を損切りした日から N 取引日は、新しい合図を買わない
 """
 import random
 
@@ -24,7 +30,7 @@ COST = 0.001
 
 
 def simulate(feats, days, sig_by_day, slots=4, stop=None, T=252, rot=None, entry="open", cash_px=None, seed=0,
-             capital=6000.0, collect=False, order="random"):
+             capital=6000.0, collect=False, order="random", qtax=False, qstop=None, qoff=None, skip=None):
     """order: 枠より多く合図が出たときの選び方。"random"・"mom_desc"（6カ月の上昇が大きい順）・"mom_asc"（小さい順）・
     "rev_desc"（売上の伸びが大きい順）・"vol_asc"（直近1カ月の上昇が小さい順）"""
     rnd = random.Random(seed)
@@ -37,6 +43,39 @@ def simulate(feats, days, sig_by_day, slots=4, stop=None, T=252, rot=None, entry
     pending = []     # (sym, kind, 価格, 期限のt)
     curve, log = [], []
     n_onk = 0
+    # 待っているQQQの状態（2026-11-08）。qB＝持っているQQQの取得金額の合計、inq＝現金をQQQに置いているか
+    st_ = {"inq": bool(cash_px), "qB": capital, "qpeak": None, "qstopped": False, "off": -1, "skip": -1, "nq": 0}
+    if cash_px:
+        qd_ = sorted(cash_px)
+        qi_ = {d: i for i, d in enumerate(qd_)}
+        qp_ = [cash_px[d] for d in qd_]
+
+    def q_up(d):   # QQQの終値が上向きの50日線より上
+        i = qi_.get(d)
+        if i is None or i < 60:
+            return False
+        m = sum(qp_[i - 49:i + 1]) / 50
+        return qp_[i] > m > sum(qp_[i - 59:i - 9]) / 50
+
+    def cash_add(x):   # 売った代金を待っている現金に入れる（QQQに置いているならQQQを買う）
+        nonlocal cash
+        if st_["inq"] and qtax:
+            x *= 1 - COST
+        if st_["inq"]:
+            st_["qB"] += x
+        cash += x
+
+    def cash_sub(x):   # 待っている現金から x を使う（QQQに置いているならQQQを売る。利益に税）
+        nonlocal cash
+        if st_["inq"] and cash > 0:
+            f = min(1.0, x / cash)
+            gain = x - st_["qB"] * f
+            st_["qB"] *= 1 - f
+            cash -= x
+            if qtax:
+                cash -= TAX * max(0.0, gain) + x * COST
+        else:
+            cash -= x
 
     def price(s, d, key="c"):
         k = pos[s].get(d)
@@ -47,7 +86,13 @@ def simulate(feats, days, sig_by_day, slots=4, stop=None, T=252, rot=None, entry
         p = active[s]
         sh = p["sh"] * frac
         proceeds = sh * px * (1 - COST)
-        cash += proceeds - TAX * max(0.0, proceeds - sh * p["px"])
+        cash_add(proceeds - TAX * max(0.0, proceeds - sh * p["px"]))
+        if why == "損切り":
+            t_ = days.index(d) if isinstance(days, list) else 0
+            if qoff:
+                st_["off"] = max(st_["off"], t_ + qoff)
+            if skip:
+                st_["skip"] = max(st_["skip"], t_ + skip)
         if collect:
             log.append((s, p["d0"], d, px / p["px"], why))
         if frac < 1.0:
@@ -69,10 +114,10 @@ def simulate(feats, days, sig_by_day, slots=4, stop=None, T=252, rot=None, entry
             p["add"] = False
         else:
             active[s] = {"sh": a / px, "px": px, "t": t, "add": entry == "half", "d0": d}
-        cash -= a
+        cash_sub(a)
 
     for t, d in enumerate(days):
-        if cash_px and t > 0 and cash > 0 and d in cash_px and days[t - 1] in cash_px:
+        if cash_px and st_["inq"] and t > 0 and cash > 0 and d in cash_px and days[t - 1] in cash_px:
             cash *= cash_px[d] / cash_px[days[t - 1]]
         # 1) 寄り付き・指値の約定
         keep = []
@@ -127,10 +172,10 @@ def simulate(feats, days, sig_by_day, slots=4, stop=None, T=252, rot=None, entry
         for s in list(onk):
             if d > feats[s]["date"][-1]:
                 c = feats[s]["c"][-1]
-                cash += onk[s] * c * (1 - COST) * (1 - TAX)
+                cash_add(onk[s] * c * (1 - COST) * (1 - TAX))
                 del onk[s]
         # 3) 合図
-        today = [s for s in sig_by_day.get(d, ()) if s not in active and not any(q[0] == s for q in pending)]
+        today = [s for s in sig_by_day.get(d, ()) if s not in active and not any(q[0] == s for q in pending)] if t > st_["skip"] else []
         rnd.shuffle(today)
         if order != "random":
             key = {"mom_desc": ("r126", -1), "mom_asc": ("r126", 1), "rev_desc": ("rev", -1), "vol_asc": ("r21", 1)}[order]
@@ -163,6 +208,31 @@ def simulate(feats, days, sig_by_day, slots=4, stop=None, T=252, rot=None, entry
             elif entry == "confirm":
                 pending.append((s, "confirm", c, t + 1))   # 翌日の終値で判定
             free -= 1
+        # 4) 待っているQQQの損切り・買い直し・損切りの後の現金（その日の終値）
+        if cash_px and d in cash_px:
+            q = cash_px[d]
+            if st_["inq"]:
+                st_["qpeak"] = q if st_["qpeak"] is None else max(st_["qpeak"], q)
+                if qstop and cash > 0:
+                    x_, md_ = qstop
+                    hit = (cash <= st_["qB"] * (1 - x_)) if md_ == "cost" else (q <= st_["qpeak"] * (1 - x_))
+                    if hit:
+                        st_["qstopped"] = True
+                        st_["nq"] += 1
+                        if collect:
+                            log.append(("QQQ", d, d, cash / st_["qB"] if st_["qB"] else 1.0, "QQQの損切り"))
+            elif st_["qstopped"] and q_up(d):
+                st_["qstopped"] = False
+            want = (not st_["qstopped"]) and t > st_["off"]
+            if want != st_["inq"]:
+                if not want:   # QQQを全部売って現金に
+                    if qtax and cash > 0:
+                        cash -= TAX * max(0.0, cash - st_["qB"]) + cash * COST
+                    st_["inq"], st_["qB"], st_["qpeak"] = False, 0.0, None
+                else:          # 現金でQQQを買う
+                    if qtax:
+                        cash *= 1 - COST
+                    st_["inq"], st_["qB"], st_["qpeak"] = True, cash, q
         eq = cash
         for s, p in active.items():
             c = price(s, d)
@@ -171,7 +241,7 @@ def simulate(feats, days, sig_by_day, slots=4, stop=None, T=252, rot=None, entry
             c = price(s, d)
             eq += sh * (c if c is not None else feats[s]["c"][-1])
         curve.append(eq)
-    return {"curve": curve, "n_onk": n_onk, "log": log, "onk": onk}
+    return {"curve": curve, "n_onk": n_onk, "log": log, "onk": onk, "nq": st_["nq"]}
 
 
 def metrics(curve, days):
