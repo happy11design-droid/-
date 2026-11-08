@@ -72,8 +72,19 @@ def curl(url):
     return r.stdout if r.returncode == 0 else ""
 
 
+NEWS_CACHE = os.path.expanduser("~/.cache/stock_backtest/news/")
+
+
 def google(q, lang, start, end, n):
-    """start〜end（米国の日付、両端を含む）に配信された見出し [(日付, 媒体, 見出し)]。取れなければ None"""
+    """start〜end（米国の日付、両端を含む）に配信された見出し [(日付, 媒体, 見出し)]。取れなければ None
+    2026-11-08 ユーザーの指示「今後検証に必要な取得した情報は全セッションで使用できるように保存するようにして」:
+    3日以上前に終わった期間の見出しは ~/.cache/stock_backtest/news/ に置き、次からは取り直さない（tools/backtest_cache.py save で全セッションに残る）"""
+    key = None
+    if end + dt.timedelta(days=3) < dt.date.today():
+        import hashlib
+        key = NEWS_CACHE + hashlib.sha1(f"{q}|{lang}|{start}|{end}|{n}".encode()).hexdigest() + ".json"
+        if os.path.exists(key):
+            return [(dt.date.fromisoformat(d), s_, t_) for d, s_, t_ in json.load(open(key, encoding="utf-8"))]
     full = f"{q} after:{start - dt.timedelta(days=1)} before:{end + dt.timedelta(days=2)}"
     t = curl(f"https://news.google.com/rss/search?q={urllib.parse.quote(full)}&{lang}")
     if "<rss" not in t:
@@ -93,7 +104,11 @@ def google(q, lang, start, end, n):
         if NOISE.search(title):
             continue
         out.append((d, src, title))
-    return sorted(out[:n], key=lambda x: x[0])   # Googleの関連の高い順に n 件を取り、日付の順に並べる
+    res = sorted(out[:n], key=lambda x: x[0])   # Googleの関連の高い順に n 件を取り、日付の順に並べる
+    if key:
+        os.makedirs(NEWS_CACHE, exist_ok=True)
+        json.dump([(d.isoformat(), s_, t_) for d, s_, t_ in res], open(key, "w", encoding="utf-8"), ensure_ascii=False)
+    return res
 
 
 def yahoo(sym, start, end, n):

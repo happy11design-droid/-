@@ -2989,6 +2989,55 @@ def opt_stage(base, data, sim, days, ind, cache, part):
                     out.add(d)
         return out
     KU = {k: k_until(k) for k in KD}
+    # 2026-11-08 ユーザーの指示「7月の下げと今の下げは同じ扱いなのですか？…厳密に検証して」→「全て検証して」（tools/episode_features.py）:
+    # SOXの大きな下げの種類。警報の日＝SOXが直近60取引日の最高値から−15%以下になった最初の日（前の警報の後、−5%以内まで戻ってからを新しい回とする）。
+    # 警報の日の引けで種類を決め、当てはまれば、SOXの終値が50日線より上で50日線が10取引日前より上になるまで続く（特殊な下げと同じ終わり方）。
+    #   epall: すべての下げ、epcalm: 静かな下げ（VIX 25未満・S&P500（SPY）の60取引日の高値からの下げが−6%より浅い）、
+    #   epcred: 信用の悪化（HYG/IEI が20取引日の高値から−1.5%以下）、ep2nd: 前の警報から126取引日以内の2回目の下げ
+    _spl = [_spm.get(d) for d in days]
+    for d_i in range(1, len(days)):
+        if _spl[d_i] is None:
+            _spl[d_i] = _spl[d_i - 1]
+    EPALERT = {}
+    _armed, _alerts = True, []
+    for k in range(70, len(days)):
+        if None in _sxl[k - 59:k + 1]:
+            continue
+        x_ = _sxl[k] / max(_sxl[k - 59:k + 1]) - 1
+        if x_ > -0.05:
+            _armed = True
+        if x_ <= -0.15 and _armed:
+            _armed = False
+            w_ = [v for v in hy[k - 19:k + 1] if v]
+            hdd_ = hy[k] / max(w_) - 1 if hy[k] and len(w_) == 20 else None
+            sw_ = [v for v in _spl[k - 59:k + 1] if v]
+            sdd_ = _spl[k] / max(sw_) - 1 if _spl[k] and sw_ else 0.0
+            vx_ = VIXC.get(days[k]) or 0.0
+            up1_ = _sxl[k - 60] / _sxl[k - 310] - 1 if k >= 310 and _sxl[k - 310] and _sxl[k - 60] else 0.0
+            EPALERT[days[k]] = {"all": True, "calm": vx_ < 25 and sdd_ > -0.06, "cred": hdd_ is not None and hdd_ <= -0.015,
+                                "2nd": any(k - j <= 126 for j in _alerts), "big50": up1_ >= 0.5 and vx_ < 25, "big80": up1_ >= 0.8 and vx_ < 25}
+            _alerts.append(k)
+    #   big50・big80: 大きな上げの後の静かな下げ（警報の日の60取引日前までの250取引日のSOXの上げが+50%・+80%以上、VIX 25未満）。
+    #   1995年〜のSOXでは、+80%以上の4回すべてで120取引日後も下（大きな上げの後は50日線がずっと下にあるので、
+    #   いったん50日線を下回ってから上向きの50日線を上回るまで続ける）
+    for g_ in ("all", "calm", "cred", "2nd", "big50", "big80"):
+        on_, set_, below_ = False, set(), False
+        for k in range(70, len(days)):
+            if None in _sxl[k - 59:k + 1]:
+                continue
+            m_ = sum(_sxl[k - 49:k + 1]) / 50
+            mp_ = sum(_sxl[k - 59:k - 9]) / 50
+            if on_ and _sxl[k] < m_:
+                below_ = True
+            if days[k] in EPALERT and EPALERT[days[k]][g_]:
+                on_, below_ = True, _sxl[k] < m_
+            elif on_ and _sxl[k] > m_ > mp_ and (below_ or not g_.startswith("big")):
+                on_ = False
+            if on_:
+                set_.add(days[k])
+        SKIPSET["ep" + g_] = set_
+        print(f"SOXの下げの種類 {g_}: 警報の日 " + "・".join(d for d, v in EPALERT.items() if v[g_] and d >= "2015-01-01")
+              + f"、2015年〜 {sum(1 for d in set_ if d >= '2015-01-01')}日", file=sys.stderr)
 
     # 市場全体の状態（2026-10-17、見送った候補を今の形で確かめ直す）。S_名前＝その状態の日、T_名前＝その状態に変わった日（前の取引日は違った）。
     # 元: backtest_market_signal.py（MACDの線が0より下・VIX≧20）、backtest_regime_filter.py（S&P500の150日線の局面）、backtest_b3_stopouts.py
@@ -3725,6 +3774,19 @@ def opt_stage(base, data, sim, days, ind, cache, part):
           "特殊な下げ⑨SOX−15%の間はテーマを買わない（テーマの外だけ）": {"skip": ("sp15", "theme")},
           "特殊な下げ⑩SOX−20%の間はテーマを買わない（テーマの外だけ）": {"skip": ("sp20", "theme")},
           "特殊な下げ⑪SOX−15%の間は全部買わない": {"skip": ("sp15", "all")},
+          # 2026-11-08: SOXの下げの種類ごとに、テーマを買わない（87銘柄はテーマの外だけ買う）・保有2銘柄まで（tools/episode_features.py）
+          "下げの種類①すべての下げの間はテーマを買わない": {"skip": ("epall", "theme")},
+          "下げの種類②静かな下げ（VIX25未満・S&P500の下げが浅い）の間はテーマを買わない": {"skip": ("epcalm", "theme")},
+          "下げの種類③信用の悪化（HYG/IEI−1.5%）の下げの間はテーマを買わない": {"skip": ("epcred", "theme")},
+          "下げの種類④半年以内の2回目の下げの間はテーマを買わない": {"skip": ("ep2nd", "theme")},
+          "下げの種類⑤すべての下げの間は保有2銘柄まで": {"half_in": "epall"},
+          "下げの種類⑥静かな下げの間は保有2銘柄まで": {"half_in": "epcalm"},
+          "下げの種類⑦信用の悪化の下げの間は保有2銘柄まで": {"half_in": "epcred"},
+          "下げの種類⑧半年以内の2回目の下げの間は保有2銘柄まで": {"half_in": "ep2nd"},
+          "下げの種類⑨大きな上げ（+50%）の後の静かな下げの間はテーマを買わない": {"skip": ("epbig50", "theme")},
+          "下げの種類⑩大きな上げ（+80%）の後の静かな下げの間はテーマを買わない": {"skip": ("epbig80", "theme")},
+          "下げの種類⑪大きな上げ（+50%）の後の静かな下げの間は保有2銘柄まで": {"half_in": "epbig50"},
+          "下げの種類⑫大きな上げ（+80%）の後の静かな下げの間は保有2銘柄まで": {"half_in": "epbig80"},
           # 2026-11-03 ユーザーの指示「全て実行して」: 底に近いところで買う
           "買い下がり①合図で半分、終値が買値から5%下げたら残りの半分（押し目・急落の底）": {"buydown": (0.05, ("B", "C"))},
           "買い下がり②合図で半分、終値が買値から8%下げたら残りの半分（押し目・急落の底）": {"buydown": (0.08, ("B", "C"))},

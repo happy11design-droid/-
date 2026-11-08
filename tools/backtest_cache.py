@@ -11,7 +11,7 @@
   tools/backtest_cache.py build              # インターネットから全部作り直す（約30〜60分）
   tools/backtest_cache.py refresh [--until YYYY-MM-DD]
                                              # 株価を最新に取り直す（until の日を含めない。米国の引け前は今日を入れない）
-  tools/backtest_cache.py save               # 今のデータをGitHubのデータ用ブランチに保存（普通のコミット）
+  tools/backtest_cache.py save               # 今のデータをGitHubのデータ用ブランチに足して保存（普通のコミット。ほかのセッションが保存したものは消さない）
   tools/backtest_cache.py status             # 今のデータの中身（銘柄数・最終日）
   tools/backtest_cache.py keep <ファイル>...  # 計算に時間のかかった結果（OPT_ROLL・OPT_EQDUMP などのjson）を results/ に入れる（次の save で保存される。1つ20MBまで）
 
@@ -183,11 +183,45 @@ def _clone(dst):
     sys.exit(f"GitHubのデータ用ブランチ {DATA_BRANCH} を取れませんでした")
 
 
-IGNORE = shutil.ignore_patterns("*.pkl", "*.new")   # 2026-11-08: long（指数の長い日足）と results（時間のかかった計算の結果）も保存する（ユーザーの指示「全てのセッションで使用できるように保存して」）
+# 2026-11-08: long（指数・経済指標の長い日足）・results（時間のかかった計算の結果）・news（過ぎた期間のニュースの見出し）も保存する
+# （ユーザーの指示「全てのセッションで使用できるように保存して」）。*.pkl・*.new は保存しない（_merge_copy）
+
+
+def _last_day(path):
+    try:
+        rows = json.load(open(path))
+        return rows[-1][0] if rows else ""
+    except Exception:
+        return ""
+
+
+def _merge_copy(src, dst):
+    """src（このセッションのキャッシュ）を dst（ブランチの cache/）に足す。ブランチにだけあるファイルは消さない
+    （2026-11-08: ほかのセッションが先に保存したデータを消さないため）。株価（prices/*.json）は、最終日が新しい方を残す"""
+    n_new = n_upd = n_keep = 0
+    for root, dirs, files in os.walk(src):
+        rel = os.path.relpath(root, src)
+        os.makedirs(os.path.join(dst, rel), exist_ok=True)
+        for f in files:
+            if f.endswith((".pkl", ".new")):
+                continue
+            s_, d_ = os.path.join(root, f), os.path.join(dst, rel, f)
+            if not os.path.exists(d_):
+                n_new += 1
+            elif rel == "prices" and f.endswith(".json") and _last_day(d_) > _last_day(s_):
+                n_keep += 1   # ブランチの方が新しい株価
+                continue
+            elif open(s_, "rb").read() == open(d_, "rb").read():
+                continue
+            else:
+                n_upd += 1
+            shutil.copy2(s_, d_)
+    print(f"足したファイル {n_new}、新しくしたファイル {n_upd}、ブランチの方が新しいので残した株価 {n_keep}")
 
 
 def cmd_save(a):
-    """ファイルのまま（圧縮せず）データ用ブランチに普通のコミットで保存する。強制の上書きはしない（2回目以降は変わった分だけ増える）"""
+    """ファイルのまま（圧縮せず）データ用ブランチに普通のコミットで保存する。強制の上書きはしない（2回目以降は変わった分だけ増える）。
+    2026-11-08: ブランチの今の中身に足す形にした（ほかのセッションが保存したデータを消さない）"""
     for attempt in range(3):
         tmp = tempfile.mkdtemp()
         try:
@@ -197,8 +231,7 @@ def cmd_save(a):
                 subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
                 subprocess.run(["git", "checkout", "-q", "--orphan", "data"], cwd=repo, check=True)
             dst = os.path.join(repo, "cache")
-            shutil.rmtree(dst, ignore_errors=True)
-            shutil.copytree(CACHE, dst, ignore=IGNORE)
+            _merge_copy(CACHE, dst)
             ps = glob.glob(os.path.join(dst, "prices", "*.json"))
             spy = os.path.join(dst, "prices", "SPY.json")
             man = {"saved_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"), "prices": len(ps),
@@ -206,8 +239,8 @@ def cmd_save(a):
             json.dump(man, open(os.path.join(repo, "manifest.json"), "w"), ensure_ascii=False, indent=1)
             open(os.path.join(repo, "README.md"), "w", encoding="utf-8").write(
                 "# バックテストのデータ（`tools/backtest_cache.py` が書くブランチ）\n\n"
-                "`cache/` は ~/.cache/stock_backtest/ の中身（株価・業種・決算日）。戻すのは `python3 tools/backtest_cache.py restore`、"
-                "保存は `save`。手で編集しない。\n")
+                "`cache/` は ~/.cache/stock_backtest/ の中身（株価・業種・決算日・指数の長い日足・ニュースの見出し・計算の結果）。"
+                "戻すのは `python3 tools/backtest_cache.py restore`、保存は `save`（ブランチの中身に足す。ほかのセッションが保存したものは消さない）。手で編集しない。\n")
             g = lambda *c: subprocess.run(["git", *c], cwd=repo, check=True)
             g("add", "-A")
             if subprocess.run(["git", "diff", "--cached", "--quiet"], cwd=repo).returncode == 0:
