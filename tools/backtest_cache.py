@@ -20,6 +20,7 @@
   3. 指数・ETF（^GSPC・^SOX・^NDX・^TNX・SOXX・HYG・IEI・LQD・BKLN・業種ETF）と監視銘柄（テーマ監視銘柄.md）の日足
   4. universe.json にないS&P500の構成銘柄の業種（industry_extra.json。Yahoo から取れたものだけ）
   5. 過去の決算発表日（fetch_earnings_history）
+  6. 恩株ツールの売上（SECの決算データ。backtest_onkabu_features fetch・onkabu_fund_predecessor）
 """
 import argparse
 import datetime as dt
@@ -105,6 +106,8 @@ def cmd_build(a):
     json.dump(extra, open(os.path.join(CACHE, "industry_extra.json"), "w"), ensure_ascii=False, indent=0)
     print(f"universe.json にない構成銘柄 {len(todo)} 銘柄のうち、業種が取れた {len(extra)}", flush=True)
     run([sys.executable, "tools/fetch_earnings_history.py"])
+    run([sys.executable, "tools/backtest_onkabu_features.py", "fetch"])   # 恩株ツールの売上（SECの決算データ、S&P500の構成銘柄）
+    run([sys.executable, "tools/onkabu_fund_predecessor.py"])          # ティッカーを変えた会社の、変更前の売上を足す
     trim_open_day()
     print(f"作り直し {time.time() - t0:.0f}秒", flush=True)
     cmd_status(a)

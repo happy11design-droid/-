@@ -6,6 +6,7 @@
       "open"    翌日の寄り付きで買う
       "dip5"    10取引日以内に、合図の日の終値の−5%まで下がったら買う（指値）。下がらなければ買わない
       "dip10"   20取引日以内に −10%（同上）
+      "dipX_N"  N取引日以内に −X%（同上。2026-11-08 ユーザーの指示「下落したので今からエントリーした方が恩株化できる確率は上がる？」）
       "confirm" 翌日の終値が合図の日の終値より高ければ、その次の日の寄り付きで買う
       "half"    翌日の寄り付きで半分、買値の+10%になったら残り半分（枠は1つ）
   - 1回に買う金額 = （待っている現金＋持っている株の買値の合計）÷ 枠の数
@@ -156,6 +157,9 @@ def simulate(feats, days, sig_by_day, slots=4, stop=None, T=252, rot=None, entry
                 pending.append((s, "limit", c * 0.95, t + 10))
             elif entry == "dip10":
                 pending.append((s, "limit", c * 0.90, t + 20))
+            elif entry.startswith("dip") and "_" in entry:   # 2026-11-08: "dipX_N" = N取引日以内に合図の日の終値の −X% まで下がったら買う（指値）
+                x_, n_ = entry[3:].split("_")
+                pending.append((s, "limit", c * (1 - int(x_) / 100), t + int(n_)))
             elif entry == "confirm":
                 pending.append((s, "confirm", c, t + 1))   # 翌日の終値で判定
             free -= 1
