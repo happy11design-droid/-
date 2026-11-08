@@ -1,0 +1,245 @@
+{
+ "trade_date": "2026-11-06",
+ "run_date": "2026-11-09",
+ "theme_stage": "【ステージ3】（根拠：30週移動平均線が上昇を停止して横ばいとなり、天井圏を形成しているため、第2章 [1]）",
+ "candidates": [
+  {
+   "sym": "DELL",
+   "kind": "逆張り: 急落の底（担当: コナーズ）（指値の2日目）",
+   "pattern": "A",
+   "close": 328.53,
+   "limit": null,
+   "stop_buy": null,
+   "limit_buy": 310.57,
+   "verdict": "様子見",
+   "author": "コナーズ",
+   "hot": false,
+   "rsi14": 28.792886250834812,
+   "s50": -0.0009320746813787917,
+   "rs": 98.22504892367905,
+   "s2_skip": false,
+   "badnews": false,
+   "goodnews": true
+  },
+  {
+   "sym": "CRWD",
+   "kind": "逆張り: 急落の底（担当: コナーズ）（指値の2日目）",
+   "pattern": "A",
+   "close": 216.9,
+   "limit": null,
+   "stop_buy": null,
+   "limit_buy": 212.86,
+   "verdict": "買い",
+   "author": "コナーズ",
+   "hot": false,
+   "rsi14": 35.34347611688588,
+   "s50": 0.0659303356771459,
+   "rs": 97.64383561643835,
+   "s2_skip": false,
+   "badnews": false,
+   "goodnews": false
+  },
+  {
+   "sym": "MU",
+   "kind": "逆張り: 急落の底（担当: コナーズ）（指値の2日目）",
+   "pattern": "A",
+   "close": 690.0,
+   "limit": null,
+   "stop_buy": null,
+   "limit_buy": 643.26,
+   "verdict": "様子見",
+   "author": "コナーズ",
+   "hot": false,
+   "rsi14": 31.27018055117813,
+   "s50": -0.014854931963162454,
+   "rs": 97.06262230919765,
+   "s2_skip": false,
+   "badnews": false,
+   "goodnews": false
+  },
+  {
+   "sym": "HPE",
+   "kind": "逆張り: 急落の底（担当: コナーズ）（指値の2日目）",
+   "pattern": "A",
+   "close": 44.77,
+   "limit": null,
+   "stop_buy": null,
+   "limit_buy": 43.28,
+   "verdict": "買い",
+   "author": "コナーズ",
+   "hot": false,
+   "rsi14": 30.928804829776993,
+   "s50": 0.01864086559016198,
+   "rs": 95.90019569471625,
+   "s2_skip": false,
+   "badnews": false,
+   "goodnews": true
+  },
+  {
+   "sym": "CRM",
+   "kind": "逆張り: ボリンジャー メソッドIII",
+   "pattern": "A",
+   "close": 213.65,
+   "limit": null,
+   "stop_buy": null,
+   "limit_buy": null,
+   "verdict": "買い",
+   "author": "ボリンジャー",
+   "hot": false,
+   "rsi14": 33.77954514054278,
+   "s50": 0.06500266226605711,
+   "rs": 55.409001956947165,
+   "s2_skip": false,
+   "badnews": false,
+   "goodnews": false
+  },
+  {
+   "sym": "PLTR",
+   "kind": "逆張り: ボリンジャー メソッドIII",
+   "pattern": "A",
+   "close": 160.38,
+   "limit": null,
+   "stop_buy": null,
+   "limit_buy": null,
+   "verdict": "買い",
+   "author": "ボリンジャー",
+   "hot": false,
+   "rsi14": 31.169659702853536,
+   "s50": 0.05029732552455757,
+   "rs": 41.26614481409002,
+   "s2_skip": false,
+   "badnews": false,
+   "goodnews": false
+  }
+ ],
+ "holdings": [
+  {
+   "sym": "SNDK",
+   "rule": "ルール外（ユーザーの判断。この日はどのルールの合図もなし）",
+   "buy_date": "2026-10-21",
+   "buy_price": 1371.3,
+   "verdict": "未判定",
+   "author": ""
+  },
+  {
+   "sym": "AMD",
+   "rule": "ボリンジャーIII",
+   "buy_date": "2026-10-21",
+   "buy_price": 549.97,
+   "verdict": "保有継続",
+   "author": "ボリンジャー"
+  }
+ ],
+ "s2": {
+  "on": true,
+  "label": "あり（S2）",
+  "close": 9390.25,
+  "hi60": 13217.8203125,
+  "drop": -0.28957651276892404
+ },
+ "special": {
+  "on": true,
+  "label": "あり（特殊な下げ）",
+  "since": "2026-10-16",
+  "drop": -0.28957651276892404,
+  "n": 3,
+  "A": true,
+  "B": true,
+  "C": true
+ },
+ "group_news": {
+  "半導体": {
+   "n1": 15,
+   "n0": 7,
+   "per": 1.375,
+   "mark": false,
+   "good": 35,
+   "gper": 2.1875,
+   "gmark": false
+  },
+  "半導体製造装置・材料・設計ソフト・計測": {
+   "n1": 1,
+   "n0": 1,
+   "per": 0.2222222222222222,
+   "mark": false,
+   "good": 6,
+   "gper": 0.6666666666666666,
+   "gmark": false
+  },
+  "AIサーバー・ストレージ・メモリ・端末": {
+   "n1": 11,
+   "n0": 3,
+   "per": 1.5555555555555556,
+   "mark": false,
+   "good": 53,
+   "gper": 5.888888888888889,
+   "gmark": true
+  },
+  "光・通信・ネットワーク": {
+   "n1": 13,
+   "n0": 4,
+   "per": 1.8888888888888888,
+   "mark": true,
+   "good": 12,
+   "gper": 1.3333333333333333,
+   "gmark": false
+  },
+  "データセンターの電力・冷却・部品・受託製造・建設": {
+   "n1": 4,
+   "n0": 4,
+   "per": 0.42105263157894735,
+   "mark": false,
+   "good": 21,
+   "gper": 1.105263157894737,
+   "gmark": false
+  },
+  "AIプラットフォーム・クラウド": {
+   "n1": 8,
+   "n0": 8,
+   "per": 1.4545454545454546,
+   "mark": false,
+   "good": 3,
+   "gper": 0.2727272727272727,
+   "gmark": false
+  },
+  "AIソフト・セキュリティ・ITサービス": {
+   "n1": 2,
+   "n0": 3,
+   "per": 0.35714285714285715,
+   "mark": false,
+   "good": 16,
+   "gper": 1.1428571428571428,
+   "gmark": false
+  }
+ },
+ "omitted": [
+  {
+   "sym": "CARR",
+   "kind": "逆張り: ボリンジャー メソッドIII",
+   "pattern": "A",
+   "close": 52.380001068115234,
+   "rs": 11.043052837573386
+  },
+  {
+   "sym": "MPC",
+   "kind": "逆張り: 急落の底（担当: コナーズ）",
+   "pattern": "A",
+   "close": 372.739990234375,
+   "rs": 98.61252446183953
+  }
+ ],
+ "ref_b": [
+  {
+   "sym": "SHOP",
+   "kind": "予約: ボリンジャー メソッドIII（%bが0.05未満に近い）",
+   "close": 148.91000366210938,
+   "rs": 64.5146771037182
+  },
+  {
+   "sym": "TEL",
+   "kind": "予約: ボリンジャー メソッドIII（%bが0.05未満に近い）",
+   "close": 207.00999450683594,
+   "rs": 26.735812133072407
+  }
+ ]
+}
