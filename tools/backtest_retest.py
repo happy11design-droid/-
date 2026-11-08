@@ -578,6 +578,7 @@ def main():
         if os.environ.get("BT_NO_EXTRA87") != "1":   # 2026-10-25 の点検: S&P500 でない監視銘柄（ALAB・ARM・ASML・CRWV・NBIS・SHOP）と上場1年未満の Q が抜けていた
             add_extra87(sorted(W87 - set(data)), ctx, a.cache)
         W87 &= set(data)
+        globals()["W87G"] = W87   # 2026-11-08: opt_stage の主導株（RSの上位10銘柄）で使う
         print(f"テーマ監視銘柄 {len(W87)} 銘柄（データあり）", file=sys.stderr)
         liq = lambda s_, i: s_["vol50"][i] is not None and s_["c"][i] >= 5 and s_["vol50"][i] >= 250_000
         rank10 = {}
@@ -2236,6 +2237,9 @@ def actual_stage(base, data, sim, port, days, ind, watch87, cache):
     print("書き出し", file=sys.stderr)
 
 
+W87G = None   # --watch87 のときのテーマ監視銘柄（main が入れる）
+
+
 def opt_stage(base, data, sim, days, ind, cache, part):
     """直した数え方（--keep-open --overlap）で、年率を上げる形を探す（2026-10-16 ユーザーの指示「年率が下がるならきちんと上がるルールを作って」）。
     part: 1 = 決まりを1つずつ変える、2 = 良かった形の組み合わせ（環境変数 OPT_COMBO に形の名前をカンマ区切り）。
@@ -3038,6 +3042,46 @@ def opt_stage(base, data, sim, days, ind, cache, part):
         SKIPSET["ep" + g_] = set_
         print(f"SOXの下げの種類 {g_}: 警報の日 " + "・".join(d for d, v in EPALERT.items() if v[g_] and d >= "2015-01-01")
               + f"、2015年〜 {sum(1 for d in set_ if d >= '2015-01-01')}日", file=sys.stderr)
+    # 2026-11-08 ユーザーの指示「はいテストして」（7月と今の違い＝ツールが買う強い銘柄そのものが崩れたか）: 主導株＝その日のRSの上位10銘柄
+    # （87銘柄ならテーマ監視銘柄、全業種ならAI関連の業種のS&P500構成銘柄）。L50＝そのうち50日線より下の割合、LDD＝20取引日の高値からの下げの中央値。
+    # 引けで判定。ldr50＝L50が50%以上の日、epldr50＝SOXの下げの間（epall）でL50が50%以上の日、epldd10＝SOXの下げの間でLDDが−10%以下の日
+    _lu = sorted(W87G) if W87G else _ais
+    _lpos = {s_: {d: k for k, d in enumerate(data[s_]["date"])} for s_ in _lu}
+    L50, LDD = {}, {}
+    for d in days:
+        rk_ = []
+        for s_ in _lu:
+            k = _lpos[s_].get(d)
+            if k is None or k < 50 or (not W87G and not _im2(_mem2[s_], d)):
+                continue
+            r_ = data[s_]["rs"][k]
+            if r_ is not None:
+                rk_.append((r_, s_, k))
+        rk_.sort(reverse=True)
+        top_ = rk_[:10]
+        if len(top_) < 10:
+            continue
+        b_, dd_ = 0, []
+        for _, s_, k in top_:
+            c_ = data[s_]["c"]
+            b_ += c_[k] < sum(c_[k - 49:k + 1]) / 50
+            dd_.append(c_[k] / max(c_[k - 19:k + 1]) - 1)
+        L50[d], LDD[d] = b_ / 10, sorted(dd_)[4:6][0] / 2 + sorted(dd_)[4:6][1] / 2
+    SKIPSET["ldr50"] = {d for d, v in L50.items() if v >= 0.5}
+    SKIPSET["epldr50"] = {d for d in SKIPSET["ldr50"] if d in SKIPSET["epall"]}
+    SKIPSET["epldd10"] = {d for d, v in LDD.items() if v <= -0.10 and d in SKIPSET["epall"]}
+    LDRSELL = {}
+    for k_ in ("epldr50", "epldd10"):   # なった日（前の取引日はなっていない）の翌取引日の寄り付きで、持っているテーマ株を売る
+        st_ = [i for i in range(1, len(days)) if days[i] in SKIPSET[k_] and days[i - 1] not in SKIPSET[k_]]
+        LDRSELL[k_] = {days[i + 1] for i in st_ if i + 1 < len(days)}
+    for k_ in ("ldr50", "epldr50", "epldd10"):
+        print(f"主導株 {k_}: 2015年〜 {sum(1 for d in SKIPSET[k_] if d >= '2015-01-01')}日", file=sys.stderr)
+    for d, v in EPALERT.items():
+        if d >= "2015-01-01":
+            k = di[d]
+            w_ = [days[j_] for j_ in (k, k + 5, k + 10, k + 20) if j_ < len(days)]
+            print(f"主導株 警報の日 {d}: L50 " + "・".join(f"{L50.get(x, float('nan')):.0%}" for x in w_)
+                  + "、LDD " + "・".join(f"{LDD.get(x, float('nan')):+.0%}" for x in w_) + "（警報の日・5・10・20取引日後）", file=sys.stderr)
 
     # 市場全体の状態（2026-10-17、見送った候補を今の形で確かめ直す）。S_名前＝その状態の日、T_名前＝その状態に変わった日（前の取引日は違った）。
     # 元: backtest_market_signal.py（MACDの線が0より下・VIX≧20）、backtest_regime_filter.py（S&P500の150日線の局面）、backtest_b3_stopouts.py
@@ -3787,6 +3831,13 @@ def opt_stage(base, data, sim, days, ind, cache, part):
           "下げの種類⑩大きな上げ（+80%）の後の静かな下げの間はテーマを買わない": {"skip": ("epbig80", "theme")},
           "下げの種類⑪大きな上げ（+50%）の後の静かな下げの間は保有2銘柄まで": {"half_in": "epbig50"},
           "下げの種類⑫大きな上げ（+80%）の後の静かな下げの間は保有2銘柄まで": {"half_in": "epbig80"},
+          # 2026-11-08: 主導株（RSの上位10銘柄）が崩れたら
+          "主導株⑬上位10銘柄の半分以上が50日線より下の日はテーマを買わない": {"skip": ("ldr50", "theme")},
+          "主導株⑭SOXの下げの間で上位10銘柄の半分以上が50日線より下の日はテーマを買わない": {"skip": ("epldr50", "theme")},
+          "主導株⑮⑭の日は保有2銘柄まで": {"half_in": "epldr50"},
+          "主導株⑯⑭になった翌日にテーマ株を売り、⑭の日は買わない": {"skip": ("epldr50", "theme"), "ldrsell": "epldr50"},
+          "主導株⑰SOXの下げの間で上位10銘柄の20日の高値からの下げの中央値が−10%以下の日はテーマを買わない": {"skip": ("epldd10", "theme")},
+          "主導株⑱⑰になった翌日にテーマ株を売り、⑰の日は買わない": {"skip": ("epldd10", "theme"), "ldrsell": "epldd10"},
           # 2026-11-03 ユーザーの指示「全て実行して」: 底に近いところで買う
           "買い下がり①合図で半分、終値が買値から5%下げたら残りの半分（押し目・急落の底）": {"buydown": (0.05, ("B", "C"))},
           "買い下がり②合図で半分、終値が買値から8%下げたら残りの半分（押し目・急落の底）": {"buydown": (0.08, ("B", "C"))},
@@ -4110,6 +4161,9 @@ def opt_stage(base, data, sim, days, ind, cache, part):
                 trs = [t for t in trs if not (t["rule"] in rr_ and stock_dn(t["sym"], t["sd"]))]
             else:
                 trs = [t for t in trs if not (t["rule"] in rr_ and t["sd"] in SKIPSET[k_])]
+        if sp.get("ldrsell"):   # 2026-11-08: 主導株が崩れた翌日の寄り付きで、持っているテーマ株を売る（port の sell_on）
+            so_ = LDRSELL[sp["ldrsell"]]
+            trs = [{**t, "sell_on": set(t.get("sell_on", ())) | so_} if ((t["x"] != "out") if sp["outside"] else t["ai"]) else t for t in trs]
         if sp.get("half_in"):   # 2026-11-02: 下げの局面の合図は、保有が2銘柄未満のときだけ買う（port の maxheld）
             trs = [{**t, "maxheld": 2} if t["sd"] in SKIPSET[sp["half_in"]] else t for t in trs]
         if sp.get("deeper"):   # 2026-11-04: 引き金の日は、テーマの押し目・急落の底を、直近20取引日の高値から th 以上下げた銘柄だけ買う（もっと下がってから）
