@@ -3030,7 +3030,7 @@ def opt_stage(base, data, sim, days, ind, cache, part):
             if on_ and _sxl[k] < m_:
                 below_ = True
             if days[k] in EPALERT and EPALERT[days[k]][g_]:
-                on_, below_ = True, _sxl[k] < m_
+                on_, below_ = True, False   # 警報の日の後に50日線を下回ってから（指数で数えたときと同じ）
             elif on_ and _sxl[k] > m_ > mp_ and (below_ or not g_.startswith("big")):
                 on_ = False
             if on_:
