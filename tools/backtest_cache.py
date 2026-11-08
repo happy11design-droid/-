@@ -13,6 +13,7 @@
                                              # 株価を最新に取り直す（until の日を含めない。米国の引け前は今日を入れない）
   tools/backtest_cache.py save               # 今のデータをGitHubのデータ用ブランチに保存（普通のコミット）
   tools/backtest_cache.py status             # 今のデータの中身（銘柄数・最終日）
+  tools/backtest_cache.py keep <ファイル>...  # 計算に時間のかかった結果（OPT_ROLL・OPT_EQDUMP などのjson）を results/ に入れる（次の save で保存される。1つ20MBまで）
 
 作り直す中身（build）:
   1. S&P500の2015年以降の構成銘柄と日足（backtest_lib fetch）＋ SPY・QQQ・^VIX
@@ -153,6 +154,17 @@ def cmd_status(a):
     print(f"データ: {CACHE}  株価 {len(ps)} 銘柄、最終日 {last}、{files}")
 
 
+def cmd_keep(a):
+    d = os.path.join(CACHE, "results")
+    os.makedirs(d, exist_ok=True)
+    for f in a.files:
+        if os.path.getsize(f) > 20 * 1024 * 1024:
+            print(f"大きすぎるので入れない（20MB超）: {f}")
+            continue
+        shutil.copy2(f, os.path.join(d, os.path.basename(f)))
+        print(f"results/ に入れた: {os.path.basename(f)}")
+
+
 def git_url():
     return subprocess.run(["git", "remote", "get-url", "origin"], cwd=ROOT, capture_output=True, text=True).stdout.strip()
 
@@ -171,7 +183,7 @@ def _clone(dst):
     sys.exit(f"GitHubのデータ用ブランチ {DATA_BRANCH} を取れませんでした")
 
 
-IGNORE = shutil.ignore_patterns("*.pkl", "*.new", "long")   # long はその日に取り直す一時データ
+IGNORE = shutil.ignore_patterns("*.pkl", "*.new")   # 2026-11-08: long（指数の長い日足）と results（時間のかかった計算の結果）も保存する（ユーザーの指示「全てのセッションで使用できるように保存して」）
 
 
 def cmd_save(a):
@@ -239,8 +251,10 @@ def main():
     rs = sub.add_parser("restore")
     rs.add_argument("--keep", action="store_true", help="今のデータを消さずに上書きする")
     sub.add_parser("status")
+    k = sub.add_parser("keep")
+    k.add_argument("files", nargs="+")
     a = ap.parse_args()
-    {"build": cmd_build, "refresh": cmd_refresh, "save": cmd_save, "restore": cmd_restore, "status": cmd_status}[a.cmd](a)
+    {"build": cmd_build, "refresh": cmd_refresh, "save": cmd_save, "restore": cmd_restore, "status": cmd_status, "keep": cmd_keep}[a.cmd](a)
 
 
 if __name__ == "__main__":
