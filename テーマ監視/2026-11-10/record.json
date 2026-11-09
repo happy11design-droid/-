@@ -1,0 +1,212 @@
+{
+ "trade_date": "2026-11-09",
+ "run_date": "2026-11-10",
+ "theme_stage": "【ステージ3】（第2章[1]、第4章[2]）",
+ "candidates": [
+  {
+   "sym": "DELL",
+   "kind": "逆張り: 急落の底（担当: コナーズ）（指値の3日目）",
+   "pattern": "A",
+   "close": 346.31,
+   "limit": null,
+   "stop_buy": null,
+   "limit_buy": 310.57,
+   "verdict": "買い",
+   "author": "コナーズ",
+   "hot": false,
+   "rsi14": 32.78658051437017,
+   "s50": -0.011959002378129191,
+   "rs": 98.61252446183953,
+   "s2_skip": false,
+   "badnews": false,
+   "goodnews": true
+  },
+  {
+   "sym": "CRWD",
+   "kind": "逆張り: 急落の底（担当: コナーズ）（指値の3日目）",
+   "pattern": "A",
+   "close": 228.58,
+   "limit": null,
+   "stop_buy": null,
+   "limit_buy": 212.86,
+   "verdict": "買い",
+   "author": "コナーズ",
+   "hot": false,
+   "rsi14": 42.44886328352992,
+   "s50": 0.06013165437914192,
+   "rs": 97.45009784735812,
+   "s2_skip": false,
+   "badnews": false,
+   "goodnews": false
+  },
+  {
+   "sym": "MU",
+   "kind": "逆張り: 急落の底（担当: コナーズ）（指値の3日目）",
+   "pattern": "A",
+   "close": 733.15,
+   "limit": null,
+   "stop_buy": null,
+   "limit_buy": 643.26,
+   "verdict": "様子見",
+   "author": "コナーズ",
+   "hot": false,
+   "rsi14": 36.35794385409502,
+   "s50": -0.02226965557951288,
+   "rs": 97.2563600782779,
+   "s2_skip": false,
+   "badnews": false,
+   "goodnews": false
+  },
+  {
+   "sym": "HPE",
+   "kind": "逆張り: 急落の底（担当: コナーズ）（指値の3日目）",
+   "pattern": "A",
+   "close": 47.54,
+   "limit": null,
+   "stop_buy": null,
+   "limit_buy": 43.28,
+   "verdict": "買い",
+   "author": "コナーズ",
+   "hot": false,
+   "rsi14": 36.604766890850755,
+   "s50": 0.009207145741481071,
+   "rs": 96.67514677103718,
+   "s2_skip": false,
+   "badnews": false,
+   "goodnews": true
+  },
+  {
+   "sym": "MPC",
+   "kind": "逆張り: 急落の底（担当: コナーズ）（指値の2日目）",
+   "pattern": "A",
+   "close": 389.88,
+   "limit": null,
+   "stop_buy": null,
+   "limit_buy": 365.29,
+   "verdict": "買い",
+   "author": "コナーズ",
+   "hot": false,
+   "rsi14": 37.83188979950346,
+   "s50": 0.10629599308859827,
+   "rs": 98.4187866927593,
+   "s2_skip": false,
+   "badnews": false,
+   "goodnews": false
+  }
+ ],
+ "holdings": [
+  {
+   "sym": "SNDK",
+   "rule": "ルール外（ユーザーの判断。この日はどのルールの合図もなし）",
+   "buy_date": "2026-10-21",
+   "buy_price": 1371.3,
+   "verdict": "未判定",
+   "author": ""
+  },
+  {
+   "sym": "AMD",
+   "rule": "ボリンジャーIII",
+   "buy_date": "2026-10-21",
+   "buy_price": 549.97,
+   "verdict": "保有継続",
+   "author": "ボリンジャー"
+  }
+ ],
+ "s2": {
+  "on": true,
+  "label": "あり（S2）",
+  "close": 10033.9326171875,
+  "hi60": 13217.8203125,
+  "drop": -0.24087842170932827
+ },
+ "special": {
+  "on": true,
+  "label": "あり（特殊な下げ）",
+  "since": "2026-10-16",
+  "drop": -0.24087842170932827,
+  "n": 3,
+  "A": true,
+  "B": true,
+  "C": true
+ },
+ "group_news": {
+  "半導体": {
+   "n1": 15,
+   "n0": 11,
+   "per": 1.625,
+   "mark": false,
+   "good": 30,
+   "gper": 1.875,
+   "gmark": false
+  },
+  "半導体製造装置・材料・設計ソフト・計測": {
+   "n1": 1,
+   "n0": 1,
+   "per": 0.2222222222222222,
+   "mark": false,
+   "good": 6,
+   "gper": 0.6666666666666666,
+   "gmark": false
+  },
+  "AIサーバー・ストレージ・メモリ・端末": {
+   "n1": 7,
+   "n0": 7,
+   "per": 1.5555555555555556,
+   "mark": false,
+   "good": 45,
+   "gper": 5.0,
+   "gmark": true
+  },
+  "光・通信・ネットワーク": {
+   "n1": 13,
+   "n0": 6,
+   "per": 2.111111111111111,
+   "mark": true,
+   "good": 11,
+   "gper": 1.2222222222222223,
+   "gmark": false
+  },
+  "データセンターの電力・冷却・部品・受託製造・建設": {
+   "n1": 3,
+   "n0": 5,
+   "per": 0.42105263157894735,
+   "mark": false,
+   "good": 23,
+   "gper": 1.2105263157894737,
+   "gmark": false
+  },
+  "AIプラットフォーム・クラウド": {
+   "n1": 5,
+   "n0": 9,
+   "per": 1.2727272727272727,
+   "mark": false,
+   "good": 2,
+   "gper": 0.18181818181818182,
+   "gmark": false
+  },
+  "AIソフト・セキュリティ・ITサービス": {
+   "n1": 4,
+   "n0": 3,
+   "per": 0.5,
+   "mark": false,
+   "good": 16,
+   "gper": 1.1428571428571428,
+   "gmark": false
+  }
+ },
+ "omitted": [],
+ "ref_b": [
+  {
+   "sym": "PLTR",
+   "kind": "予約: ボリンジャー メソッドIII（%bが0.05未満に近い）",
+   "close": 169.1999969482422,
+   "rs": 50.759295499021526
+  },
+  {
+   "sym": "ADBE",
+   "kind": "予約: ボリンジャー メソッドIII（%bが0.05未満に近い）",
+   "close": 237.32000732421875,
+   "rs": 12.01174168297456
+  }
+ ]
+}
