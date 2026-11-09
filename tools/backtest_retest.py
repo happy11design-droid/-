@@ -3824,6 +3824,13 @@ def opt_stage(base, data, sim, days, ind, cache, part):
           "dh60": lambda t: (0 if t["ai"] else 1, t.get("dh60", 0.0)),
           "dh252": lambda t: (0 if t["ai"] else 1, t.get("dh252", 0.0)),
           "rs80_dh60": lambda t: (0 if t["ai"] else 1, 0 if t["rs"] >= 80 else 1, t.get("dh60", 0.0)),
+          # 2026-11-09 ユーザーの指示「直近の高値から50%以上株価が下落した銘柄を優先した方が利益が見込めるのでは？」→「テストして」:
+          # 高値（60日・52週）から −X% 以上下げた候補を先に、その中とほかはRSの高い順（AI半導体を先にするのは今のルールと同じ）
+          "dd50_60": lambda t: (0 if t["ai"] else 1, 0 if t.get("dh60", 0.0) <= -0.50 else 1, -t["rs"]),
+          "dd30_60": lambda t: (0 if t["ai"] else 1, 0 if t.get("dh60", 0.0) <= -0.30 else 1, -t["rs"]),
+          "dd50_252": lambda t: (0 if t["ai"] else 1, 0 if t.get("dh252", 0.0) <= -0.50 else 1, -t["rs"]),
+          "dd30_252": lambda t: (0 if t["ai"] else 1, 0 if t.get("dh252", 0.0) <= -0.30 else 1, -t["rs"]),
+          "dd50_60_first": lambda t: (0 if t.get("dh60", 0.0) <= -0.50 else 1, 0 if t["ai"] else 1, -t["rs"]),   # AI半導体かどうかより先に
           "rev_dh60": lambda t: (0 if t["ai"] else 1, 0 if t["rule"] in ("B", "C") else 1, t.get("dh60", 0.0) if t["rule"] in ("B", "C") else -t["rs"]),
           # 2026-10-25: AIを先に買うのを合図で切り替える（AIを先に買う形が負けた5年を避けられるか）
           "rs_soxrel": lambda t: (0 if t["ai"] and t["sd"] in SOXREL else 1, -t["rs"]),
@@ -3889,6 +3896,11 @@ def opt_stage(base, data, sim, days, ind, cache, part):
           "決算㉒㉑の20取引日は保有2銘柄まで": {"half_in": "eavg20"},
           "決算㉓㉑になった翌日にテーマ株を売り、20取引日買わない": {"skip": ("eavg20", "theme"), "ldrsell": "eavg20"},
           "決算㉔㉑を60取引日続ける": {"skip": ("eavg60", "theme")},
+          "深い下げ①60日の高値から−50%以上の候補を先に（その中とほかはRSの高い順）": {"prio": "dd50_60"},
+          "深い下げ②60日の高値から−30%以上の候補を先に": {"prio": "dd30_60"},
+          "深い下げ③52週の高値から−50%以上の候補を先に": {"prio": "dd50_252"},
+          "深い下げ④52週の高値から−30%以上の候補を先に": {"prio": "dd30_252"},
+          "深い下げ⑤60日の高値から−50%以上の候補をAI半導体かどうかより先に": {"prio": "dd50_60_first"},
           "決算㉕平均−2%以下なら20取引日は保有2銘柄まで": {"half_in": "eavg2_20"},
           "決算㉖平均−4%以下なら20取引日は保有2銘柄まで": {"half_in": "eavg4_20"},
           "決算㉗平均−3%以下なら10取引日は保有2銘柄まで": {"half_in": "eavg10"},
