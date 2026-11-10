@@ -137,7 +137,9 @@ def main():
             r = rows6.get(c["sym"], {})
             m = re.search(r"勝率(\d+)%・1回平均([+\-]?[\d.]+%)", r.get("ルールの過去の成績", ""))
             wr, avg = (m.group(1) + "%", m.group(2)) if m else ("—", "—")
-            if c.get("pattern") == "A":
+            if c.get("pattern") == "A" and isinstance(c.get("limit_buy"), (int, float)):
+                rv = f"買い（指値 {c['limit_buy']:g}、3取引日まで）"   # 急落の底は 2026-11-03 から前日終値の2%下に指値（案B）
+            elif c.get("pattern") == "A":
                 rv = "買い（翌日の寄り付き）"
             elif c.get("pattern") == "B":
                 px = c.get("stop_buy") or c.get("limit_buy") or c.get("limit")

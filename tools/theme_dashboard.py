@@ -230,8 +230,13 @@ def main():
     if warn:
         cls = "bad" if "出ている" in warn.group(1) and "出ていない" not in warn.group(1) else "good"
         w(f'<div class="row"><span class="label">早めの警告</span><span class="pill {cls}">{html.escape(warn.group(1))}</span></div>')
-    w(f'<div class="row"><span class="label">買い（成行）</span><span class="pill {"good" if orders else ""}">{html.escape(names(orders))}</span></div>')
-    w(f'<div class="row"><span class="label">買い（予約）</span><span class="pill {"good" if reserves else ""}">{html.escape(names(reserves))}</span></div>')
+    # 買い方で分ける（2026-11-10）: 急落の底（コナーズ）は 11/3 から前日終値の2%下に指値（3取引日）、そのほかは翌日の寄り付きの成行。以前は全部「成行」と書いていた
+    lim_ = lambda c: (c.get("limit_buy") is not None) and not c["verdict"].startswith("買い（予約")
+    mkt, lmt_ = [c for c in orders if not lim_(c)], [c for c in orders if lim_(c)]
+    w(f'<div class="row"><span class="label">買い（成行）</span><span class="pill {"good" if mkt else ""}">{html.escape(names(mkt))}</span></div>')
+    w(f'<div class="row"><span class="label">買い（指値）</span><span class="pill {"good" if lmt_ else ""}">{html.escape(names(lmt_))}</span></div>')
+    if reserves:   # 予約（パターンB）は 2026-10-25 から注文しない。古い記録の表示のためだけに残す
+        w(f'<div class="row"><span class="label">買い（予約）</span><span class="pill good">{html.escape(names(reserves))}</span></div>')
     w(f'<div class="row"><span class="label">様子見</span><span class="pill {"warn" if skips else ""}">{html.escape(names(skips))}</span></div>')
     w(f'<div class="row"><span class="label">売り（保有中・著者の判定）</span><span class="pill {"bad" if exits else ""}">{html.escape(names(exits))}</span></div>')
     # 買う順番はこの表1つだけ: 監視銘柄の候補 → テーマの外、成行（A）→ 予約（B）、RSの高い順（tools/theme_summary.py と同じ。2026-10-17 ユーザー決定。
@@ -246,7 +251,7 @@ def main():
     plan = sorted([c for c in orders + reserves if c["sym"] not in held], key=lambda c: (rows.get(c["sym"], {}).get("グループ") == "テーマの外", c not in orders, -rs_(c)))
     free = max(0, SLOTS - len(rec["holdings"]))
     if plan:
-        w(f'<div class="row"><span class="label">買う順番</span><span>RSの高い順（成行A→予約B。テーマの外は後）。空き枠 {free}（同時保有{SLOTS}銘柄まで・保有{len(rec["holdings"])}）。上から空き枠の数までが今日の注文</span></div>')
+        w(f'<div class="row"><span class="label">買う順番</span><span>RSの高い順（成行も指値も同じ順。テーマの外は後）。空き枠 {free}（同時保有{SLOTS}銘柄まで・保有{len(rec["holdings"])}）。上から空き枠の数までが今日の注文</span></div>')
         w('<div class="tablewrap"><table class="plan"><thead><tr><th>順番</th><th>買うもの</th><th>買い方</th><th>株数</th><th>金額</th><th>損切りの逆指値</th></tr></thead><tbody>')
         for k, c in enumerate(plan, 1):
             od = rows.get(c["sym"], {}).get("注文の目安", "")
