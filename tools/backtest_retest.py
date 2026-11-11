@@ -3067,6 +3067,81 @@ def opt_stage(base, data, sim, days, ind, cache, part):
             b_ += c_[k] < sum(c_[k - 49:k + 1]) / 50
             dd_.append(c_[k] / max(c_[k - 19:k + 1]) - 1)
         L50[d], LDD[d] = b_ / 10, sorted(dd_)[4:6][0] / 2 + sorted(dd_)[4:6][1] / 2
+    # 2026-11-11 ユーザーの指示「2バックテストして」（SOXが大きく下げた後に急に戻ったら、戻りの強いテーマ株を買う）:
+    # 引き金＝SOXが直近60取引日の最高値から dd 以下の安値（直近10取引日の最安値）をつけ、nd 取引日以内にその安値から +up 以上戻った日（前の引き金から40取引日以上）。
+    # その日の引けで、テーマの銘柄（87銘柄ならテーマ監視銘柄、全業種ならAI関連の業種のS&P500構成銘柄。株価5ドル以上）を
+    # SOXの安値の日からの上昇率（rank="reb"）かRS（rank="rs"、比べる用）の高い順に ntop 銘柄選び、翌取引日の寄り付きで一番先に買う。
+    # 売り: 日中に買値の −stop で損切り、exit_="ma20"（5取引日たってから終値が20日線の下）・"ma50"（10取引日たってから50日線の下）なら翌日の寄り付き、
+    # "none" なら maxhold 取引日目の寄り付き。最長 maxhold 取引日
+    def _reb_trig(dd_th, up_th, nd):
+        out, last = [], -999
+        for k in range(60, nD - 1):
+            w_ = _sxl[k - 59:k + 1]
+            if None in w_:
+                continue
+            if _sxl[k] / max(w_) - 1 <= dd_th and _sxl[k] == min(x for x in _sxl[max(0, k - 10):k + 1] if x):
+                j = next((j for j in range(k + 1, min(k + 1 + nd, nD)) if _sxl[j] and _sxl[j] >= _sxl[k] * (1 + up_th)), None)
+                if j is not None and k - last > 40:
+                    out.append((k, j))
+                    last = k
+        return out
+    REBT = {"A": _reb_trig(-0.25, 0.10, 3), "B": _reb_trig(-0.20, 0.08, 5), "C": _reb_trig(-0.15, 0.07, 5)}
+    for k_, v_ in REBT.items():
+        print(f"戻りの引き金 {k_}: " + "・".join(days[j] for _, j in v_ if days[j] >= "2015-01-01"), file=sys.stderr)
+    _rebc = {}
+    def rebound_trades(key, ntop, exit_, maxhold, rank="reb", stop=0.15):
+        ck_ = (key, ntop, exit_, maxhold, rank, stop)
+        if ck_ in _rebc:
+            return _rebc[ck_]
+        out_ = []
+        for kl, j in REBT[key]:
+            d, dl = days[j], days[kl]
+            cand = []
+            for s_ in _lu:
+                p_ = _lpos[s_]
+                a_, b_ = p_.get(dl), p_.get(d)
+                if a_ is None or b_ is None or b_ + 1 >= len(data[s_]["date"]) or (not W87G and not _im2(_mem2[s_], d)):
+                    continue
+                c_ = data[s_]["c"]
+                if c_[b_] < 5:
+                    continue
+                m_ = c_[b_] / c_[a_] - 1 if rank == "reb" else (data[s_]["rs"][b_] or 0)
+                cand.append((m_, s_, b_))
+            cand.sort(reverse=True)
+            for m_, s_, b_ in cand[:ntop]:
+                S_ = data[s_]
+                i0 = b_ + 1
+                o0 = S_["o"][i0]
+                if not o0:
+                    continue
+                pv_, out_d, stp = {}, None, False
+                for i in range(i0, min(len(S_["date"]), i0 + maxhold + 1)):
+                    dd_ = S_["date"][i]
+                    if i > i0:
+                        held_ = i - 1 - i0
+                        c20 = sum(S_["c"][i - 20:i]) / 20 if i >= 20 else None
+                        c50 = sum(S_["c"][i - 50:i]) / 50 if i >= 50 else None
+                        ex_ = (exit_ == "ma20" and held_ >= 5 and c20 and S_["c"][i - 1] < c20) or (exit_ == "ma50" and held_ >= 10 and c50 and S_["c"][i - 1] < c50) \
+                            or i == i0 + maxhold
+                        if ex_:
+                            pv_[dd_] = (1 - COST) * S_["o"][i] / o0 * (1 - COST)
+                            out_d = dd_
+                            break
+                    if S_["l"][i] <= o0 * (1 - stop):
+                        px_ = min(S_["o"][i], o0 * (1 - stop)) if i > i0 else o0 * (1 - stop)
+                        pv_[dd_] = (1 - COST) * px_ / o0 * (1 - COST)
+                        out_d, stp = dd_, True
+                        break
+                    pv_[dd_] = (1 - COST) * S_["c"][i] / o0
+                if out_d is None:
+                    out_d = max(pv_)
+                out_.append({"sym": s_, "in": S_["date"][i0], "out": out_d, "path": dict(pv_), "rule": "Y", "ret": pv_[out_d] - 1,
+                             "s50": 0.0, "rs": 999, "ai": True, "first": True, "s2": False, "sd": d, "x": None,
+                             "stopped": stp, "ichi": True, "reg": 0.0, "dh20": 0.0, "dh60": 0.0, "dh252": 0.0})
+        if W87G is not None or True:
+            print(f"戻りの買い {ck_}: " + "、".join(f"{t['in']} {t['sym']} {t['ret'] * 100:+.0f}%" for t in out_ if t["in"] >= "2015-01-01"), file=sys.stderr)
+        _rebc[ck_] = out_
+        return out_
     SKIPSET["ldr50"] = {d for d, v in L50.items() if v >= 0.5}
     SKIPSET["epldr50"] = {d for d in SKIPSET["ldr50"] if d in SKIPSET["epall"]}
     SKIPSET["epldd10"] = {d for d, v in LDD.items() if v <= -0.10 and d in SKIPSET["epall"]}
@@ -3901,6 +3976,13 @@ def opt_stage(base, data, sim, days, ind, cache, part):
           "深い下げ③52週の高値から−50%以上の候補を先に": {"prio": "dd50_252"},
           "深い下げ④52週の高値から−30%以上の候補を先に": {"prio": "dd30_252"},
           "深い下げ⑤60日の高値から−50%以上の候補をAI半導体かどうかより先に": {"prio": "dd50_60_first"},
+          "戻り①SOX−25%から3日で+10%の日に戻りの強い2銘柄（20日線割れで売る）": {"reb": ("A", 2, "ma20", 60, "reb")},
+          "戻り②SOX−20%から5日で+8%の日に戻りの強い2銘柄（20日線割れで売る）": {"reb": ("B", 2, "ma20", 60, "reb")},
+          "戻り③SOX−15%から5日で+7%の日に戻りの強い2銘柄（20日線割れで売る）": {"reb": ("C", 2, "ma20", 60, "reb")},
+          "戻り④②を4銘柄": {"reb": ("B", 4, "ma20", 60, "reb")},
+          "戻り⑤②を50日線割れで売る（最長120日）": {"reb": ("B", 2, "ma50", 120, "reb")},
+          "戻り⑥②を20取引日持つ": {"reb": ("B", 2, "none", 20, "reb")},
+          "戻り⑦（比べる用）②の日にRSの高い2銘柄": {"reb": ("B", 2, "ma20", 60, "rs")},
           "決算㉕平均−2%以下なら20取引日は保有2銘柄まで": {"half_in": "eavg2_20"},
           "決算㉖平均−4%以下なら20取引日は保有2銘柄まで": {"half_in": "eavg4_20"},
           "決算㉗平均−3%以下なら10取引日は保有2銘柄まで": {"half_in": "eavg10"},
@@ -4274,6 +4356,8 @@ def opt_stage(base, data, sim, days, ind, cache, part):
         if sp.get("voltarget"):   # 2026-11-05: ボラティリティ・ターゲティング。合図の日の SOX の20日の値動きの大きさ（年率）が目標を超えるほど、買う金額を減らす（目標÷実際、最小0.25）。残りは現金
             tgt_ = sp["voltarget"]
             trs = [{**t, "szm": max(0.25, min(1.0, tgt_ / SOXVOL[t["sd"]])) if SOXVOL.get(t["sd"]) else 1.0} for t in trs]
+        if sp.get("reb"):   # 2026-11-11: SOXが大きく下げた後に急に戻ったら、戻りの強いテーマ株を一番先に買う
+            trs = trs + rebound_trades(*sp["reb"])
         if sp.get("idx"):   # 2026-11-06: 底の合図（またはコナーズの指数の押し目）で SOXX を1枠買う
             sg_, ex_, mh_, top_ = sp["idx"]
             trs = trs + index_trades(sg_, ex_, mh_, top_)
