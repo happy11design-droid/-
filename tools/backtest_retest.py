@@ -3703,6 +3703,11 @@ def opt_stage(base, data, sim, days, ind, cache, part):
             if lo <= t["in"] and (t["out"] <= hi or (_RF["open_ok"] and t["in"] <= hi)):   # open_ok: 区切りの最後の日に持っている売買も入れる（その日の値段で数える）
                 by_in.setdefault(t["in"], []).append(t)
         idle_ = next((t["idle"] for t in trs if t.get("idle")), None)   # 2026-11-06: 待っている現金を指数ETF（QQQ・SPY）に置く
+        # 2026-11-12 ユーザーの指示「テストして」（以前「惜しかった」信用取引の形を今の土台で試し直す）:
+        # mg_=(倍率 m, 年の金利 r): 資金×(m−1) まで借りて買える（現金がマイナスになる）。借りた分には毎日 r/252 の金利
+        # gm_=(年の金利 r,): 良い合図（t["good"]）は枠が埋まっていても、1つだけ別の枠で借りて買える
+        mg_ = next((t["margin"] for t in trs if t.get("margin")), None)
+        gm_ = next((t["goodm"] for t in trs if t.get("goodm")), None)
         tax_on = TAXON   # 2026-11-07（OPT_TAX=1）: 確定した損益に年ごとの税（20.315%、その年の中で損益を通算）。待っているQQQの売り買いも税の通算と手数料0.132%に入れる
         rz_, yr_, qb_, qh_ = 0.0, None, 0.0, 0.0
         _ig, _ii = IDLE.get(idle_, ({}, {})) if idle_ else ({}, {})
@@ -3736,6 +3741,8 @@ def opt_stage(base, data, sim, days, ind, cache, part):
                 if yr_ is not None and rz_ > 0:
                     cash -= TAX_R * rz_
                 rz_, yr_ = 0.0, d[:4]
+            if (mg_ or gm_) and cash < 0:   # 借りている分の金利
+                cash *= 1 + (mg_[1] if mg_ else gm_[0]) / 252
             if idle_ and cash > 0:   # 前の日の引け→今日の寄り付きの指数ETFの値動き（現金を置いている分）
                 cash *= _ig.get(d, 1.0)
             if pend:   # 前の日の引けで異常と判定した保有を、その日の寄り付きで売る（その日にルールで売る保有はルールのまま）
@@ -3800,7 +3807,8 @@ def opt_stage(base, data, sim, days, ind, cache, part):
                     if len(held) + ghost_n < slots and not (cap and sum(1 for h in held if ind.get(h["t"]["sym"]) == ind.get(t["sym"])) >= cap):
                         ghost_n += 1
                     continue
-                if len(held) + ghost_n >= slots:
+                extra_ = gm_ and t.get("good") and len(held) + ghost_n >= slots and sum(1 for h in held if h.get("extra")) < 1
+                if len(held) + ghost_n >= slots and not extra_:
                     # 乗り換え（2026-10-16）: swap=(ルール, 含み益の下限, RSの下限)。枠が埋まっていて、その合図なら、前日の終値で含み益が下限を超える保有のうち
                     # 一番大きいものを、その日の寄り付きで売って買う（2倍ETFの保有は寄り付きの値動きも2倍）
                     if not (swap and t["rule"] in swap[0] and t["rs"] >= swap[2]):
@@ -3815,7 +3823,8 @@ def opt_stage(base, data, sim, days, ind, cache, part):
                 if cap and sum(1 for h in held if ind.get(h["t"]["sym"]) == ind.get(t["sym"])) >= cap:
                     continue
                 lsm_ = ls_[1] if ls_ and len(ls_hist) >= ls_[0] and all(ls_hist[-ls_[0]:]) and t["rule"] not in ("S", "R") else 1.0
-                size = min(eq / slots * t.get("szm", 1.0) * lsm_, cash)   # szm: ボラティリティ・ターゲティングの金額の倍率（2026-11-05）
+                room_ = cash + (eq * (mg_[0] - 1) if mg_ else 0.0) + (eq / slots if extra_ else 0.0)   # 借りられる分を足した、使える金額
+                size = min(eq / slots * t.get("szm", 1.0) * lsm_, room_)   # szm: ボラティリティ・ターゲティングの金額の倍率（2026-11-05）
                 if size <= 0:
                     break
                 cash -= size
@@ -3829,7 +3838,7 @@ def opt_stage(base, data, sim, days, ind, cache, part):
                     if log is not None:
                         log.append((d, d, "stop" if t.get("stopped") else "rule", t["sym"]))
                     continue
-                held.append({"t": t, "size": size, "v": v0})
+                held.append({"t": t, "size": size, "v": v0, "extra": bool(extra_)})
             if abn and held:
                 n_, x_, mode_ = abn
                 bad_ = sum(1 for h in held if h["v"] <= 1 - x_)
@@ -3983,6 +3992,9 @@ def opt_stage(base, data, sim, days, ind, cache, part):
           "戻り⑤②を50日線割れで売る（最長120日）": {"reb": ("B", 2, "ma50", 120, "reb")},
           "戻り⑥②を20取引日持つ": {"reb": ("B", 2, "none", 20, "reb")},
           "戻り⑦（比べる用）②の日にRSの高い2銘柄": {"reb": ("B", 2, "ma20", 60, "rs")},
+          # 2026-11-12: 以前「惜しかった」信用取引の形（10/10 の古い土台）を今の土台で試し直す。金利は年7%と仮定
+          "信用①6銘柄・信用取引1.5倍（1銘柄は資金の25%のまま）": {"slots": 6, "margin": (1.5, 0.07)},
+          "信用②良い合図（急落の底のうち50日線の傾きが小さい20%）だけ、枠が埋まっていても信用取引で1つ別に買う": {"goodm": (0.07,)},
           "決算㉕平均−2%以下なら20取引日は保有2銘柄まで": {"half_in": "eavg2_20"},
           "決算㉖平均−4%以下なら20取引日は保有2銘柄まで": {"half_in": "eavg4_20"},
           "決算㉗平均−3%以下なら10取引日は保有2銘柄まで": {"half_in": "eavg10"},
@@ -4401,6 +4413,12 @@ def opt_stage(base, data, sim, days, ind, cache, part):
                         pv_ = {d: (1 - COST) * t["path"][d] / b_ for d in ds_[j_:]}
                         out_.append({**t, "sym": t["sym"] + "+", "in": ds_[j_], "path": pv_, "ret": pv_[t["out"]] - 1, "szm": 1.0 - m_, "rs": t["rs"] + 0.5})
             trs = out_
+        if sp.get("margin"):   # 2026-11-12: 信用取引（port で計算）
+            trs = [{**t, "margin": sp["margin"], "szm": t.get("szm", 1.0) * sp["margin"][0]} for t in trs]   # 1銘柄＝資金×倍率÷銘柄数
+        if sp.get("goodm"):   # 2026-11-12: 良い合図＝急落の底のうち、50日線の傾きが2015〜2021年の急落の底の小さい方から20%以内
+            c_s50 = sorted(t["s50"] for t in trs if t["rule"] == "C" and t["sd"] < "2022-01-01")
+            th_ = c_s50[len(c_s50) // 5] if c_s50 else -9
+            trs = [{**t, "goodm": sp["goodm"], "good": t["rule"] == "C" and t["s50"] <= th_} for t in trs]
         if sp.get("idle"):   # 2026-11-06: 待っている現金を指数ETFに置く（port で計算）
             trs = [{**t, "idle": sp["idle"]} for t in trs]
         if sp.get("lossize"):   # 2026-11-06（ミネルヴィニ・オニールの本の回答）: 損が続いたら買う金額を減らす（port で判定）
