@@ -3142,6 +3142,137 @@ def opt_stage(base, data, sim, days, ind, cache, part):
             print(f"戻りの買い {ck_}: " + "、".join(f"{t['in']} {t['sym']} {t['ret'] * 100:+.0f}%" for t in out_ if t["in"] >= "2015-01-01"), file=sys.stderr)
         _rebc[ck_] = out_
         return out_
+    # 2026-11-12 ユーザーの指示「上昇相場だけではなく、上昇相場の時も買うです。また今回のAMDのような一人勝ちを狙うべきです。臨機応変に対応して。
+    # …その時々の状況に応じて最善のルールを選択できるようなルールにしてテストして」: 新しい買いの合図（テーマの銘柄）
+    #   J: 銘柄が上昇相場（終値 > 50日線 > 200日線・50日線が20取引日前より2%以上高い・ADX≧20）に入った日（前の取引日は上昇相場でない）
+    #   Z1: 一人勝ち（逆行高）。SOXが50日線より下の日に、銘柄は50日線より上で50日線が10取引日前より上、終値が20取引日の最高値
+    #   Z2: 一人勝ち（短い期間）。直近10取引日でSOXが0%以下、銘柄が+10%以上かつSOXより15ポイント以上強く、終値が10取引日の最高値
+    # 翌取引日の寄り付きで買う。売り: 日中に買値の−15%で損切り、J・Z1は終値が50日線の下（5取引日たってから）、Z2は20日線の下で翌日の寄り付き。最長120取引日
+    _sxs = [sum(x for x in _sxl[max(0, k - 49):k + 1] if x) / 50 if k >= 49 and None not in _sxl[k - 49:k + 1] else None for k in range(nD)]
+    _sigc = {}
+    def sig_trades(kind, prio_hi=True):
+        ck_ = (kind, prio_hi)
+        if ck_ in _sigc:
+            return _sigc[ck_]
+        out_ = []
+        for s_ in _lu:
+            S_ = data[s_]
+            c_, n_ = S_["c"], len(S_["c"])
+            cs_ = [0.0]
+            for x in c_:
+                cs_.append(cs_[-1] + (x or 0.0))
+            ma = lambda k, n: (cs_[k + 1] - cs_[k + 1 - n]) / n if k + 1 - n >= 0 else None
+            adx_ = S_.get("adx14") or [None] * n_
+            def up_(k):
+                if k < 220:
+                    return False
+                m50, m200, m50p = ma(k, 50), ma(k, 200), ma(k - 20, 50)
+                return c_[k] > m50 > m200 and m50 >= m50p * 1.02 and (adx_[k] is None or adx_[k] >= 20)
+            busy = -1
+            for k in range(221, n_ - 1):
+                if k <= busy:
+                    continue
+                d = S_["date"][k]
+                kd = di.get(d)
+                if kd is None or d < "2014-06-01" or c_[k] < 5 or (not W87G and not _im2(_mem2[s_], d)):
+                    continue
+                if kind == "J":
+                    hit = up_(k) and not up_(k - 1)
+                elif kind == "Z1":
+                    hit = _sxs[kd] is not None and _sxl[kd] < _sxs[kd] and c_[k] > ma(k, 50) > ma(k - 10, 50) and c_[k] >= max(c_[k - 19:k + 1])
+                else:
+                    if kd < 10 or not _sxl[kd] or not _sxl[kd - 10]:
+                        continue
+                    sx10, st10 = _sxl[kd] / _sxl[kd - 10] - 1, c_[k] / c_[k - 10] - 1
+                    hit = sx10 <= 0 and st10 >= 0.10 and st10 - sx10 >= 0.15 and c_[k] >= max(c_[k - 9:k + 1])
+                if not hit:
+                    continue
+                i0 = k + 1
+                o0 = S_["o"][i0]
+                if not o0:
+                    continue
+                pv_, out_d, stp = {}, None, False
+                for i in range(i0, min(n_, i0 + 121)):
+                    dd_ = S_["date"][i]
+                    if i > i0:
+                        held_ = i - 1 - i0
+                        mm = ma(i - 1, 20 if kind == "Z2" else 50)
+                        if (held_ >= 5 and mm and c_[i - 1] < mm) or i == i0 + 120:
+                            pv_[dd_] = (1 - COST) * S_["o"][i] / o0 * (1 - COST)
+                            out_d = dd_
+                            break
+                    if S_["l"][i] <= o0 * 0.85:
+                        px_ = min(S_["o"][i], o0 * 0.85) if i > i0 else o0 * 0.85
+                        pv_[dd_] = (1 - COST) * px_ / o0 * (1 - COST)
+                        out_d, stp = dd_, True
+                        break
+                    pv_[dd_] = (1 - COST) * c_[i] / o0
+                if out_d is None:
+                    out_d = max(pv_)
+                busy = S_["date"].index(out_d) if out_d in S_["date"][i0:i0 + 125] else k
+                out_.append({"sym": s_, "in": S_["date"][i0], "out": out_d, "path": dict(pv_), "rule": {"J": "J", "Z1": "Z", "Z2": "Z"}[kind], "ret": pv_[out_d] - 1,
+                             "s50": 0.0, "rs": (999 if prio_hi else (S_["rs"][k] or 0)), "ai": True if prio_hi else (ind.get(s_) in AI), "first": True, "s2": False,
+                             "sd": d, "x": None, "stopped": stp, "ichi": True, "reg": 0.0, "dh20": 0.0, "dh60": 0.0, "dh252": 0.0})
+        rr_ = [t["ret"] for t in out_ if t["sd"] >= "2015-01-01"]
+        print(f"新しい合図 {kind}: 2015年〜 {len(rr_)}件、勝ち {sum(1 for x in rr_ if x > 0)}、1回平均 {sum(rr_) / max(1, len(rr_)) * 100:+.2f}%", file=sys.stderr)
+        _sigc[ck_] = out_
+        return out_
+    # 状況に応じてルールを選ぶ（後知恵なし: その合図の日より前に売り終わった売買だけを使う）。合図の日のSOXの局面＝50日線より上か下 × 50日線が10取引日前より上か下
+    def sox_reg(d):
+        k = di.get(d)
+        if k is None or k < 60 or _sxs[k] is None or _sxs[k - 10] is None or not _sxl[k]:
+            return "?"
+        return ("上" if _sxl[k] > _sxs[k] else "下") + ("↑" if _sxs[k] > _sxs[k - 10] else "↓")
+    def adapt_filter(trs, mode, n_, keep_prio=False):
+        """mode="roll": そのルールの、合図の日より前の n_ 取引日に売り終わった売買の平均がプラスなら買う（10件未満なら買う）。
+        mode="reg": そのルールの、同じSOXの局面で出て合図の日より前に売り終わった全部の売買の平均がプラスなら買う（n_ 件未満なら買う）。
+        keep_prio=True なら買うのは止めず、平均の高いルールを先に買う（t["aprio"]）"""
+        import bisect as _bs
+        hist = {}
+        for t in trs:
+            if t.get("ghost") or t["rule"] in ("S", "R"):
+                continue
+            key = (t["rule"], sox_reg(t["sd"])) if mode == "reg" else t["rule"]
+            hist.setdefault(key, []).append((t["out"], t["ret"]))
+        if mode == "reg" and not _sigc.get("_regshown"):   # 確かめる用: ルール×SOXの局面ごとの、2015年〜の合図の1回平均（全部の期間。後知恵ありの表示だけ）
+            _sigc["_regshown"] = True
+            rows_ = {}
+            for (r_, g_), v in hist.items():
+                vv = [x for o, x in v if o >= "2015-01-01"]
+                if vv:
+                    rows_.setdefault(r_, {})[g_] = (len(vv), sum(vv) / len(vv))
+            print("ルール×SOXの局面（上・下＝50日線より上・下、↑↓＝50日線の向き）の1回平均: " + "／".join(
+                f"{r_}: " + "、".join(f"{g_} {m_ * 100:+.1f}%（{n_}件）" for g_, (n_, m_) in sorted(v.items())) for r_, v in sorted(rows_.items())), file=sys.stderr)
+        cum = {}
+        for key, v in hist.items():
+            v.sort()
+            outs = [o for o, _ in v]
+            cs = [0.0]
+            for _, r_ in v:
+                cs.append(cs[-1] + r_)
+            cum[key] = (outs, cs)
+        res = []
+        for t in trs:
+            if t["rule"] in ("S", "R"):
+                res.append(t)
+                continue
+            key = (t["rule"], sox_reg(t["sd"])) if mode == "reg" else t["rule"]   # 約定しなかった指値（ghost）も同じ判定で注文を出すかを決める
+            outs, cs = cum.get(key, ([], [0.0]))
+            j = _bs.bisect_left(outs, t["sd"])   # 合図の日より前に売り終わった売買
+            if mode == "roll":
+                k0 = di.get(t["sd"], 0)
+                lo_d = days[max(0, k0 - n_)]
+                i = _bs.bisect_left(outs, lo_d)
+                cnt, sm = j - i, cs[j] - cs[i]
+                ok = cnt < 10 or sm > 0
+            else:
+                cnt, sm = j, cs[j]
+                ok = cnt < n_ or sm > 0
+            if keep_prio:
+                res.append({**t, "aprio": -(sm / cnt) if cnt else 0.0})
+            elif ok:
+                res.append(t)
+        return res
     SKIPSET["ldr50"] = {d for d, v in L50.items() if v >= 0.5}
     SKIPSET["epldr50"] = {d for d in SKIPSET["ldr50"] if d in SKIPSET["epall"]}
     SKIPSET["epldd10"] = {d for d, v in LDD.items() if v <= -0.10 and d in SKIPSET["epall"]}
@@ -3910,6 +4041,7 @@ def opt_stage(base, data, sim, days, ind, cache, part):
           "rs80_dh60": lambda t: (0 if t["ai"] else 1, 0 if t["rs"] >= 80 else 1, t.get("dh60", 0.0)),
           # 2026-11-09 ユーザーの指示「直近の高値から50%以上株価が下落した銘柄を優先した方が利益が見込めるのでは？」→「テストして」:
           # 高値（60日・52週）から −X% 以上下げた候補を先に、その中とほかはRSの高い順（AI半導体を先にするのは今のルールと同じ）
+          "adapt": lambda t: (0 if t["ai"] else 1, t.get("aprio", 0.0), -t["rs"]),   # 2026-11-12: 直近の成績の良いルールを先に
           "dd50_60": lambda t: (0 if t["ai"] else 1, 0 if t.get("dh60", 0.0) <= -0.50 else 1, -t["rs"]),
           "dd30_60": lambda t: (0 if t["ai"] else 1, 0 if t.get("dh60", 0.0) <= -0.30 else 1, -t["rs"]),
           "dd50_252": lambda t: (0 if t["ai"] else 1, 0 if t.get("dh252", 0.0) <= -0.50 else 1, -t["rs"]),
@@ -3992,6 +4124,19 @@ def opt_stage(base, data, sim, days, ind, cache, part):
           "戻り⑤②を50日線割れで売る（最長120日）": {"reb": ("B", 2, "ma50", 120, "reb")},
           "戻り⑥②を20取引日持つ": {"reb": ("B", 2, "none", 20, "reb")},
           "戻り⑦（比べる用）②の日にRSの高い2銘柄": {"reb": ("B", 2, "ma20", 60, "rs")},
+          # 2026-11-12: 上昇相場の時も買う・一人勝ちを狙う・状況に応じてルールを選ぶ
+          "新しい買い①上昇相場に入った日に買う（空き枠だけ）": {"newsig": ("J_lo",)},
+          "新しい買い②上昇相場に入った日に買う（一番先に）": {"newsig": ("J",)},
+          "新しい買い③一人勝ち（SOXが50日線の下で、上向きの50日線の上・20日の高値）を一番先に": {"newsig": ("Z1",)},
+          "新しい買い④一人勝ち（10日でSOXが下げ、銘柄は+10%以上かつSOXより15pt強く10日の高値）を一番先に": {"newsig": ("Z2",)},
+          "状況で選ぶ①直近60取引日に売り終わった売買の平均がプラスのルールだけ買う": {"adapt": ("roll", 60, False)},
+          "状況で選ぶ②直近120取引日の平均がプラスのルールだけ買う": {"adapt": ("roll", 120, False)},
+          "状況で選ぶ③同じSOXの局面での過去の平均がプラスのルールだけ買う": {"adapt": ("reg", 30, False)},
+          "状況で選ぶ④直近60取引日の平均が高いルールを先に買う（止めない）": {"adapt": ("roll", 60, True), "prio": "adapt"},
+          "状況で選ぶ⑤同じSOXの局面での過去の平均が高いルールを先に買う（止めない）": {"adapt": ("reg", 30, True), "prio": "adapt"},
+          "全部入り①新しい買い①③④と戻り⑤を足し、同じSOXの局面での過去の平均がプラスのルールだけ買う": {"newsig": ("J_lo", "Z1", "Z2"), "reb": ("B", 2, "ma50", 120, "reb"), "adapt": ("reg", 30, False)},
+          "全部入り②新しい買い①③④と戻り⑤を足し、直近120取引日の平均がプラスのルールだけ買う": {"newsig": ("J_lo", "Z1", "Z2"), "reb": ("B", 2, "ma50", 120, "reb"), "adapt": ("roll", 120, False)},
+          "全部入り③新しい買い①③④と戻り⑤を足すだけ": {"newsig": ("J_lo", "Z1", "Z2"), "reb": ("B", 2, "ma50", 120, "reb")},
           # 2026-11-12: 以前「惜しかった」信用取引の形（10/10 の古い土台）を今の土台で試し直す。金利は年7%と仮定
           "信用①6銘柄・信用取引1.5倍（1銘柄は資金の25%のまま）": {"slots": 6, "margin": (1.5, 0.07)},
           "信用②良い合図（急落の底のうち50日線の傾きが小さい20%）だけ、枠が埋まっていても信用取引で1つ別に買う": {"goodm": (0.07,)},
@@ -4370,8 +4515,13 @@ def opt_stage(base, data, sim, days, ind, cache, part):
         if sp.get("voltarget"):   # 2026-11-05: ボラティリティ・ターゲティング。合図の日の SOX の20日の値動きの大きさ（年率）が目標を超えるほど、買う金額を減らす（目標÷実際、最小0.25）。残りは現金
             tgt_ = sp["voltarget"]
             trs = [{**t, "szm": max(0.25, min(1.0, tgt_ / SOXVOL[t["sd"]])) if SOXVOL.get(t["sd"]) else 1.0} for t in trs]
+        for k_ in sp.get("newsig", ()):   # 2026-11-12: 上昇相場に入った日（J）・一人勝ち（Z1・Z2）。末尾 "_lo" は空き枠だけ（RSの順で最後）
+            trs = trs + sig_trades(k_.replace("_lo", ""), prio_hi=not k_.endswith("_lo"))
         if sp.get("reb"):   # 2026-11-11: SOXが大きく下げた後に急に戻ったら、戻りの強いテーマ株を一番先に買う
             trs = trs + rebound_trades(*sp["reb"])
+        if sp.get("adapt"):   # 2026-11-12: 状況に応じてルールを選ぶ（合図の日より前に売り終わった売買の成績で、使うルール・順番を決める）
+            md_, n_, kp_ = sp["adapt"]
+            trs = adapt_filter(trs, md_, n_, kp_)
         if sp.get("idx"):   # 2026-11-06: 底の合図（またはコナーズの指数の押し目）で SOXX を1枠買う
             sg_, ex_, mh_, top_ = sp["idx"]
             trs = trs + index_trades(sg_, ex_, mh_, top_)
