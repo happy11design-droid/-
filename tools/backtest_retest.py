@@ -4042,6 +4042,8 @@ def opt_stage(base, data, sim, days, ind, cache, part):
           "局面に沿う①下落相場の銘柄は押し目・急落の底で買わない": {"rskip": ("down", "rev")},
           "局面に沿う②下落相場の銘柄は全部のルールで買わない": {"rskip": ("down", "all")},
           "局面に沿う③上昇相場は全部・レンジは押し目と急落の底だけ・下落相場は買わない": {"rskip": ("down", "match")},
+          "局面に沿う④上昇相場の銘柄だけ買う": {"rskip": ("uponly", "all")},
+          "局面に沿う⑤上昇相場か上げ（50日線より上で線が上向き）の銘柄だけ買う": {"rskip": ("upish", "all")},
           "局面に沿う④下落相場の銘柄の戻り売り（RSI2が90以上で空売り）": {"rshort": "rally"},
           "局面に沿う⑤下落相場の銘柄の安値割れの空売り": {"rshort": "breakdown"},
           "機関投資家①買った株と同じ金額のSOXXをいつも空売り（市場の下げを打ち消す）": {"hedge": "always"},
@@ -4428,7 +4430,21 @@ def opt_stage(base, data, sim, days, ind, cache, part):
             trs = trs + short_trades(k_, n_, l_)
         if sp.get("rskip"):   # 2026-11-05: 銘柄の局面に沿う。rskip=(局面, "rev"|"all"|"match")
             k_, who_ = sp["rskip"]
-            if who_ == "match":   # 上昇相場は全部のルール、レンジは押し目・急落の底だけ、下落相場は買わない
+            if k_ in ("uponly", "upish"):   # 2026-11-12 ユーザーの指示「上昇相場の銘柄を購入した方が年率は上がらないのか？」→「テストして」
+                # uponly: 合図の日に上昇相場（stock_regime の up）の銘柄だけ買う。upish: 上昇相場か「上げ」（終値が50日線より上で、50日線が10取引日前より上か20日線が5取引日前より上）だけ
+                def _upish(sym, d):
+                    if stock_regime(sym, d) == "up":
+                        return True
+                    s_ = data.get(sym)
+                    k = _spos.setdefault(sym, {x: i for i, x in enumerate(s_["date"])}).get(d) if s_ else None
+                    if k is None or k < 70:
+                        return False
+                    c_ = s_["c"]
+                    m50, m50p = sum(c_[k - 49:k + 1]) / 50, sum(c_[k - 59:k - 9]) / 50
+                    return c_[k] > m50 and (m50 > m50p or sum(c_[k - 19:k + 1]) > sum(c_[k - 24:k - 4]))
+                f_ = (lambda sym, d: stock_regime(sym, d) == "up") if k_ == "uponly" else _upish
+                trs = [t for t in trs if t["rule"] not in ("B", "C", "M", "V", "W") or f_(t["sym"], t["sd"])]
+            elif who_ == "match":   # 上昇相場は全部のルール、レンジは押し目・急落の底だけ、下落相場は買わない
                 trs = [t for t in trs if t["rule"] in ("S", "R") or (lambda g_: g_ == "up" or (g_ == "range" and t["rule"] in ("B", "C")))(stock_regime(t["sym"], t["sd"]))]
             else:
                 rr_ = ("B", "C") if who_ == "rev" else ("B", "C", "M", "V", "W")
