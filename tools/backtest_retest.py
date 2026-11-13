@@ -3369,7 +3369,10 @@ def opt_stage(base, data, sim, days, ind, cache, part):
             from backtest_lib import load_members as _lm
             for x in data:
                 data[x]["ind"] = ind.get(x)
-            _IR.update(_bi.industry_ranks(data, _lm(cache)))
+            mem_ = dict(_lm(cache))
+            for x in data:   # 2026-11-12: --watch87 で足した S&P500 でない銘柄（ALAB など）は構成銘柄でないとして数える（KeyError を直した）
+                mem_.setdefault(x, [])
+            _IR.update(_bi.industry_ranks(data, mem_))
         r = _IR.get(d, {}).get(ind.get(sym))
         return 9.9 if r is None else r
 
@@ -4402,6 +4405,10 @@ def opt_stage(base, data, sim, days, ind, cache, part):
         V1[f"底を待つ: {lab_}"] = {"skip": ("wait_" + k_, "theme")}
         V1[f"底の後40日は2倍ETF: {lab_}"] = {"etf": "boost_" + k_}
         V1[f"底でSOXXを1枠: {lab_}"] = {"idx": (k_, "ma50", 120, True)}
+    if os.environ.get("OPT_LISTFORMS"):   # 2026-11-12: 全部の形の名前を書き出して終わる（古い・甘い検証のやり直し用）
+        json.dump(list(V1), open(os.environ["OPT_LISTFORMS"], "w"), ensure_ascii=False)
+        print(f"形の数 {len(V1)}", file=sys.stderr)
+        return
     combos = [x for x in os.environ.get("OPT_COMBO", "").split(";") if x]
     forms = list(V1.items()) if part == 1 else [("今のルール（傾きの小さい順）", {})] + [
         (c, {k: v for nm in c.split("＋") for k, v in V1[nm].items()}) for c in combos]
