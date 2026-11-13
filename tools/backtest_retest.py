@@ -3149,7 +3149,7 @@ def opt_stage(base, data, sim, days, ind, cache, part):
     #   Z2: 一人勝ち（短い期間）。直近10取引日でSOXが0%以下、銘柄が+10%以上かつSOXより15ポイント以上強く、終値が10取引日の最高値
     # 翌取引日の寄り付きで買う。売り: 日中に買値の−15%で損切り、J・Z1は終値が50日線の下（5取引日たってから）、Z2は20日線の下で翌日の寄り付き。最長120取引日
     _sxs = [sum(x for x in _sxl[max(0, k - 49):k + 1] if x) / 50 if k >= 49 and None not in _sxl[k - 49:k + 1] else None for k in range(nD)]
-    _sigc = {}
+    _sigc, _BOOK = {}, {}
     def sig_trades(kind, prio_hi=True):
         ck_ = (kind, prio_hi)
         if ck_ in _sigc:
@@ -3322,6 +3322,116 @@ def opt_stage(base, data, sim, days, ind, cache, part):
                           ("eavg10", EAVG, 10), ("eavg40", EAVG, 40)):
         SKIPSET[nm_] = {days[j_] for d in src_ for j_ in range(di[d], min(len(days), di[d] + n_))}
         LDRSELL[nm_] = {days[di[d] + 1] for d in src_ if di[d] + 1 < len(days)}
+    # 2026-11-13 ユーザーの指示「上昇相場でRSIとMACDの関係、MACDだけ、これに良いニュースを混ぜた時にどうなるか…ニュースも業界全体か個別銘柄かで影響力が違う」→「お願いします」:
+    # 合図の日の引けの状況（13の切り口）。どれも合図の日の引けまでに分かる値
+    _B4 = sorted((sz_[-1][0], sum(r_[2] for r_ in sz_) / len(sz_)) for sz_ in _seas if len({r_[1] for r_ in sz_}) >= 3)
+    _B4d = [x[0] for x in _B4]
+    _fc, _ec = {}, {}
+    def _arrs(sym):
+        if sym in _fc:
+            return _fc[sym]
+        S_ = data[sym]
+        c_, h_, l_, v_ = S_["c"], S_["h"], S_["l"], S_.get("v") or [0] * len(S_["c"])
+        n_ = len(c_)
+        cs_ = [0.0]
+        for x in c_:
+            cs_.append(cs_[-1] + (x or 0.0))
+        ma = lambda k, n: (cs_[k + 1] - cs_[k + 1 - n]) / n if k + 1 - n >= 0 else None
+        def ema(x, n):
+            out, a, e = [None] * len(x), 2 / (n + 1), None
+            for i, y in enumerate(x):
+                if y is None:
+                    continue
+                e = y if e is None else e + a * (y - e)
+                out[i] = e
+            return out
+        e12, e26 = ema(c_, 12), ema(c_, 26)
+        mac = [a - b if a is not None and b is not None else None for a, b in zip(e12, e26)]
+        sig = ema(mac, 9)
+        tr, pdm, mdm = [0.0], [0.0], [0.0]
+        for i in range(1, n_):
+            tr.append(max(h_[i] - l_[i], abs(h_[i] - c_[i - 1]), abs(l_[i] - c_[i - 1])))
+            up, dn = h_[i] - h_[i - 1], l_[i - 1] - l_[i]
+            pdm.append(up if up > dn and up > 0 else 0.0)
+            mdm.append(dn if dn > up and dn > 0 else 0.0)
+        adx = [None] * n_
+        if n_ > 30:
+            atr, pp, mm, dxs = sum(tr[1:15]), sum(pdm[1:15]), sum(mdm[1:15]), []
+            for i in range(15, n_):
+                atr, pp, mm = atr - atr / 14 + tr[i], pp - pp / 14 + pdm[i], mm - mm / 14 + mdm[i]
+                pdi, mdi = (100 * pp / atr, 100 * mm / atr) if atr else (0, 0)
+                dxs.append(100 * abs(pdi - mdi) / (pdi + mdi) if pdi + mdi else 0)
+                if len(dxs) >= 14:
+                    adx[i] = sum(dxs[-14:]) / 14
+        vs_ = [0.0]
+        for x in v_:
+            vs_.append(vs_[-1] + (x or 0.0))
+        ev_ = {}
+        S2 = {d: k for k, d in enumerate(S_["date"])}
+        for d0, _ in _ej.get(sym, []):
+            k = S2.get(d0)
+            if k is not None and 1 <= k < n_ - 1 and c_[k - 1]:
+                ev_[k + 1] = c_[k + 1] / c_[k - 1] - 1   # 決算の日の前日の終値→翌日の終値（引け後・寄り付き前のどちらの発表も入る）
+        _fc[sym] = (c_, ma, mac, sig, _rsi(c_, 2), _rsi(c_, 14), adx, vs_, S2, sorted(ev_.items()))
+        return _fc[sym]
+    def trade_feats(sym, d):
+        key = (sym, d)
+        if key in _ec:
+            return _ec[key]
+        c_, ma, mac, sig, r2, r14, adx, vs_, S2, ev_ = _arrs(sym)
+        k = S2.get(d)
+        f = {}
+        if k is None or k < 220:
+            _ec[key] = None
+            return None
+        m50, m200, m50p20, m50p10 = ma(k, 50), ma(k, 200), ma(k - 20, 50), ma(k - 10, 50)
+        a_ = adx[k]
+        if c_[k] > m50 > m200 and m50 >= m50p20 * 1.02 and (a_ or 0) >= 20:
+            f["PH"] = "上昇相場"
+        elif c_[k] < m50 < m200 and m50 <= m50p20 * 0.98 and (a_ or 0) >= 20:
+            f["PH"] = "下落相場"
+        else:
+            t20, t20p = ma(k, 20), ma(k - 5, 20)
+            f["PH"] = "上げ" if c_[k] > m50 and (m50 > m50p10 or t20 > t20p) else "下げ" if c_[k] < m50 and (m50 < m50p10 or t20 < t20p) else "レンジ"
+        f["SX"] = sox_reg(d)
+        x = r2[k] or 50
+        f["R2"] = "≦10" if x <= 10 else "10〜30" if x <= 30 else "30〜70" if x < 70 else "70〜90" if x < 90 else "≧90"
+        x = r14[k] or 50
+        f["R14"] = "<30" if x < 30 else "30〜50" if x < 50 else "50〜70" if x < 70 else "≧70"
+        mc, sg = mac[k], sig[k]
+        f["MACD"] = ("シグナルの上" if mc > sg else "シグナルの下") + ("・0の上" if mc > 0 else "・0の下")
+        f["MX"] = "3日以内に上抜け" if any(mac[j] > sig[j] and mac[j - 1] <= sig[j - 1] for j in range(k - 2, k + 1)) else "上抜けなし"
+        f["HIST"] = "ヒストグラムが増えた" if (mc - sg) > (mac[k - 1] - sig[k - 1]) else "ヒストグラムが減った"
+        e_ = [(kk, r_) for kk, r_ in ev_ if k - 10 <= kk <= k]
+        f["EARN"] = "なし" if not e_ else ("良い決算（+5%以上）" if e_[-1][1] >= 0.05 else "悪い決算（−5%以下）" if e_[-1][1] <= -0.05 else "決算後（普通）")
+        va = (vs_[k - 2] - vs_[k - 52]) / 50 if k >= 52 else None
+        mv = ""
+        for j in range(k - 2, k + 1):
+            vj = vs_[j + 1] - vs_[j]
+            if va and vj >= 3 * va and c_[j - 1]:
+                rj = c_[j] / c_[j - 1] - 1
+                if rj >= 0.05:
+                    mv = "個別の材料で急騰（出来高3倍）"
+                elif rj <= -0.05:
+                    mv = "個別の材料で急落（出来高3倍）"
+        f["VOL"] = mv or "なし"
+        kd = di.get(d)
+        sx1 = _sxl[kd] / _sxl[kd - 1] - 1 if kd and _sxl[kd] and _sxl[kd - 1] else 0.0
+        sx5 = _sxl[kd] / _sxl[kd - 5] - 1 if kd and kd >= 5 and _sxl[kd] and _sxl[kd - 5] else 0.0
+        f["IND1"] = "業界の急騰（SOX +3%以上）" if sx1 >= 0.03 else "業界の急落（SOX −3%以下）" if sx1 <= -0.03 else "業界は普通"
+        f["IND5"] = "業界が5日で+5%以上" if sx5 >= 0.05 else "業界が5日で−5%以下" if sx5 <= -0.05 else "業界の5日は普通"
+        import bisect as _bs2
+        j = _bs2.bisect_right(_B4d, d) - 1
+        f["BIG4"] = "大手4社の決算なし"
+        if j >= 0 and di.get(_B4d[j]) is not None and kd is not None and kd - di[_B4d[j]] <= 20:
+            f["BIG4"] = "大手4社の決算が良い（平均+2%以上）" if _B4[j][1] >= 0.02 else "大手4社の決算が悪い（平均−2%以下）" if _B4[j][1] <= -0.02 else "大手4社の決算は普通"
+        vx = VIXC.get(d) or 0.0
+        vx5 = VIXC.get(days[kd - 5]) if kd and kd >= 5 else None
+        f["VIX"] = "VIXが5日で+30%以上" if vx5 and vx >= vx5 * 1.3 else "VIX 30以上" if vx >= 30 else "VIXは普通"
+        w_ = [v for v in hy[max(0, kd - 19):kd + 1] if v] if kd else []
+        f["CRED"] = "信用の悪化（HYG/IEI −1.5%）" if w_ and len(w_) == 20 and hy[kd] / max(w_) - 1 <= -0.015 else "信用は普通"
+        _ec[key] = f
+        return f
     print("大手4社の決算の平均 −2%以下: " + "・".join(sorted(d for d in EAVGT[0.02] if d >= "2015-01-01")) + "、−4%以下: "
           + "・".join(sorted(d for d in EAVGT[0.04] if d >= "2015-01-01")), file=sys.stderr)
     print("大手4社の決算: 2社以上−5% " + "・".join(sorted(d for d in E2N if d >= "2015-01-01")) + "、平均−3%以下 "
@@ -4140,6 +4250,13 @@ def opt_stage(base, data, sim, days, ind, cache, part):
           "全部入り①新しい買い①③④と戻り⑤を足し、同じSOXの局面での過去の平均がプラスのルールだけ買う": {"newsig": ("J_lo", "Z1", "Z2"), "reb": ("B", 2, "ma50", 120, "reb"), "adapt": ("reg", 30, False)},
           "全部入り②新しい買い①③④と戻り⑤を足し、直近120取引日の平均がプラスのルールだけ買う": {"newsig": ("J_lo", "Z1", "Z2"), "reb": ("B", 2, "ma50", 120, "reb"), "adapt": ("roll", 120, False)},
           "全部入り③新しい買い①③④と戻り⑤を足すだけ": {"newsig": ("J_lo", "Z1", "Z2"), "reb": ("B", 2, "ma50", 120, "reb")},
+          # 2026-11-13: 局面×指標×ニュースの組み合わせで、2015〜2021年の成績だけで作った決まり（tools/combo_search.py。OPT_BOOK=決まりのjson）
+          "両方の期間で良かった①SOXが下向きの50日線の下の日は押し目を一番先に": {"regprio": ("B", "下↓")},
+          "両方の期間で良かった②SOXが50日線の下で線が上向きの日に一人勝ち（逆行高）を足す": {"regadd": ("Z1", "下↑")},
+          "組み合わせの決まり①見送るだけ": {"book": (os.environ.get("OPT_BOOK", ""), ("skip",))},
+          "組み合わせの決まり②先に買うだけ": {"book": (os.environ.get("OPT_BOOK", ""), ("prio",))},
+          "組み合わせの決まり③良い状況で新しい買い（上昇相場に入った日・一人勝ち）を足すだけ": {"book": (os.environ.get("OPT_BOOK", ""), ("add",))},
+          "組み合わせの決まり④見送る・先に買う・足すの全部": {"book": (os.environ.get("OPT_BOOK", ""), ("skip", "prio", "add"))},
           # 2026-11-12: 以前「惜しかった」信用取引の形（10/10 の古い土台）を今の土台で試し直す。金利は年7%と仮定
           "信用①6銘柄・信用取引1.5倍（1銘柄は資金の25%のまま）": {"slots": 6, "margin": (1.5, 0.07)},
           "信用②良い合図（急落の底のうち50日線の傾きが小さい20%）だけ、枠が埋まっていても信用取引で1つ別に買う": {"goodm": (0.07,)},
@@ -4526,6 +4643,26 @@ def opt_stage(base, data, sim, days, ind, cache, part):
             trs = trs + sig_trades(k_.replace("_lo", ""), prio_hi=not k_.endswith("_lo"))
         if sp.get("reb"):   # 2026-11-11: SOXが大きく下げた後に急に戻ったら、戻りの強いテーマ株を一番先に買う
             trs = trs + rebound_trades(*sp["reb"])
+        if sp.get("book"):   # 2026-11-13: 状況の組み合わせで作った決まり（2015〜2021年の成績だけで作ったもの）。skip=見送る、prio=先に買う、add=新しい買い（J・Z）を足す状況
+            bk_ = _BOOK.setdefault(sp["book"][0], json.load(open(sp["book"][0])))
+            use_ = sp["book"][1]
+            def _hit(t, lst):
+                f_ = trade_feats(t["sym"], t["sd"])
+                if not f_:
+                    return False
+                return any((r_ == "*" or r_ == t["rule"]) and all(f_.get(k_) == v_ for k_, v_ in zip(ks_, vs_)) for r_, ks_, vs_ in lst)
+            if "add" in use_:
+                trs = trs + [t for k_ in ("J", "Z1", "Z2") for t in sig_trades(k_, prio_hi=False) if _hit(t, bk_["add"])]
+            if "skip" in use_:
+                trs = [t for t in trs if t["rule"] in ("S", "R", "Y") or not _hit(t, bk_["skip"])]
+            if "prio" in use_:
+                trs = [{**t, "rs": t["rs"] + 1000} if t["rule"] not in ("S", "R") and _hit(t, bk_["prio"]) else t for t in trs]
+        if sp.get("regprio"):   # 2026-11-13: そのSOXの局面の日は、そのルールの合図を一番先に買う（組み合わせ検証で両方の期間に良かった形。後知恵あり）
+            r_, g_ = sp["regprio"]
+            trs = [{**t, "rs": t["rs"] + 1000, "ai": True} if t["rule"] == r_ and sox_reg(t["sd"]) == g_ else t for t in trs]
+        if sp.get("regadd"):   # 2026-11-13: そのSOXの局面の日だけ、新しい買い（J・Z1・Z2）を足す（空き枠で、RSの順）
+            k_, g_ = sp["regadd"]
+            trs = trs + [t for t in sig_trades(k_, prio_hi=False) if sox_reg(t["sd"]) == g_]
         if sp.get("adapt"):   # 2026-11-12: 状況に応じてルールを選ぶ（合図の日より前に売り終わった売買の成績で、使うルール・順番を決める）
             md_, n_, kp_ = sp["adapt"]
             trs = adapt_filter(trs, md_, n_, kp_)
@@ -4682,6 +4819,18 @@ def opt_stage(base, data, sim, days, ind, cache, part):
             print(f"{lab}: 合計 {f([x['total'] for x in xs])}（確定した分 {f([x['real'] for x in xs])}、含み損の分 {f([x['unreal'] for x in xs])}）、"
                   f"その間の損切り {_st.median([x['stops'] for x in xs]):.0f}回。乱数1通り目: {xs[0]['peak']}→{xs[0]['trough']} "
                   f"合計 {xs[0]['total'] * 100:+.1f}%（確定 {xs[0]['real'] * 100:+.1f}%・含み損 {xs[0]['unreal'] * 100:+.1f}%、損切り {xs[0]['stops']}回）", file=sys.stderr)
+        return
+    if os.environ.get("OPT_FEATDUMP"):   # 2026-11-13: OPT_REF の形の合図（約定しなかった指値を除く）と新しい買い（J・Z1・Z2）に状況を付けて書き出して終わる
+        trs, sp = make(dict(forms)[os.environ.get("OPT_REF", forms[-1][0])])
+        extra_ = [(k_, t) for k_ in ("J", "Z1", "Z2") for t in sig_trades(k_, prio_hi=False)]
+        rows_ = []
+        for nm_, t in [("今", t) for t in trs if not t.get("ghost") and t["rule"] not in ("S", "R")] + extra_:
+            f_ = trade_feats(t["sym"], t["sd"])
+            if f_:
+                rows_.append({"src": nm_, "rule": t["rule"] if nm_ == "今" else nm_, "x": t.get("x") or "", "sym": t["sym"], "sd": t["sd"], "out": t["out"],
+                              "ret": round(t["ret"], 5), "stopped": bool(t.get("stopped")), **f_})
+        json.dump(rows_, open(os.environ["OPT_FEATDUMP"], "w"), ensure_ascii=False)
+        print(f"合図と状況を書き出し {len(rows_)}件", file=sys.stderr)
         return
     if os.environ.get("OPT_ROLL"):   # 2026-11-05 ユーザーの指示「エントリーする日付を変えたり、乱数で検証しないと意味ないから検証して。たまたま損切りしなかっただけでは？」
         # 始める日をずらし（2015年〜、OPT_ROLL_STEP 取引日ごと）、それぞれ空の枠から OPT_ROLL_WIN 取引日運用した成績を形ごとに書き出す。
