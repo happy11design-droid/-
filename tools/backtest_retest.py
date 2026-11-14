@@ -3926,7 +3926,7 @@ def opt_stage(base, data, sim, days, ind, cache, part):
                 e = max(0.0, e * (1 + 2 * (t["path"][d] / pr - 1)) * (1 - fee))
                 pr = t["path"][d]
                 pv[d] = e
-            out.append({**t, "path": pv, "L": 2})
+            out.append({**t, "path": pv, "L": 2, "path0": t["path"]})
         return out
 
     pos_ = {}
@@ -3952,6 +3952,16 @@ def opt_stage(base, data, sim, days, ind, cache, part):
         # gm_=(年の金利 r,): 良い合図（t["good"]）は枠が埋まっていても、1つだけ別の枠で借りて買える
         mg_ = next((t["margin"] for t in trs if t.get("margin")), None)
         gm_ = next((t["goodm"] for t in trs if t.get("goodm")), None)
+        # 2026-11-14 ユーザーの指示「バックテストして」（Fableの次の策）: 策1 税の払い方（taxmode: "sale"＝売るたびに引かれる（源泉徴収あり）、
+        # "yearend"＝年末にまとめて（今までの前提）、"march"＝翌年3月15日に払う（源泉徴収なし・確定申告）、carry＝損の繰越の年数、harvest＝年末の損出し）、
+        # 策2 待っているQQQの手数料（qfee）。taxmode を指定した形は、最後の日に、その年の分と払っていない分を精算して数える（形どうしを公平に比べるため）
+        tm_set_ = next((t["taxmode"] for t in trs if t.get("taxmode")), None)
+        tm_ = tm_set_ or "yearend"
+        carry_ = next((t["carry"] for t in trs if t.get("carry")), 0)
+        hv_ = any(t.get("harvest") for t in trs)
+        qf_ = next((t["qfee"] for t in trs if t.get("qfee")), QFEE)
+        hc_ = next((t["hcost"] for t in trs if t.get("hcost")), COST)
+        loss_, due_, wh_, due_day_ = [], 0.0, 0.0, ""
         tax_on = TAXON   # 2026-11-07（OPT_TAX=1）: 確定した損益に年ごとの税（20.315%、その年の中で損益を通算）。待っているQQQの売り買いも税の通算と手数料0.132%に入れる
         rz_, yr_, qb_, qh_ = 0.0, None, 0.0, 0.0
         _ig, _ii = IDLE.get(idle_, ({}, {})) if idle_ else ({}, {})
@@ -3982,9 +3992,30 @@ def opt_stage(base, data, sim, days, ind, cache, part):
         for d in dd:
             ghost_n = 0   # 約定しなかった指値の注文（その日だけ枠を使う）
             if tax_on and d[:4] != yr_:   # 年が変わった: 前の年の確定した利益に税
-                if yr_ is not None and rz_ > 0:
-                    cash -= TAX_R * rz_
-                rz_, yr_ = 0.0, d[:4]
+                if yr_ is not None:
+                    taxable_ = rz_
+                    if carry_:   # 損の繰越（確定申告）: 損の年は損を残し、利益の年は直近 carry_ 年の損を古い順に使う
+                        if rz_ < 0:
+                            loss_.append([int(yr_), -rz_])
+                            taxable_ = 0.0
+                        else:
+                            for L_ in loss_:
+                                if int(yr_) - L_[0] <= carry_ and L_[1] > 0 and taxable_ > 0:
+                                    u_ = min(L_[1], taxable_)
+                                    L_[1] -= u_
+                                    taxable_ -= u_
+                    tax_ = TAX_R * max(0.0, taxable_)
+                    if tm_ == "yearend":
+                        cash -= tax_
+                    elif tm_ == "march":
+                        due_ += tax_
+                    else:   # "sale": 引かれた分（wh_）との差を3月に精算（繰越がなければ差は0）
+                        due_ += tax_ - wh_
+                rz_, yr_, wh_ = 0.0, d[:4], 0.0
+                due_day_ = d[:4] + "-03-15"
+            if tax_on and due_ and d >= due_day_:
+                cash -= due_
+                due_ = 0.0
             if (mg_ or gm_) and cash < 0:   # 借りている分の金利
                 cash *= 1 + (mg_[1] if mg_ else gm_[0]) / 252
             if idle_ and cash > 0:   # 前の日の引け→今日の寄り付きの指数ETFの値動き（現金を置いている分）
@@ -4013,7 +4044,7 @@ def opt_stage(base, data, sim, days, ind, cache, part):
                 if h["t"]["out"] == d:
                     cash += h["size"] * h["v"]
                     if tax_on:
-                        rz_ += h["size"] * (h["v"] - 1)
+                        rz_ += h["size"] * (h["v"] - h.get("basis", 1.0))
                     if log is not None:
                         log.append((h["t"]["in"], d, "stop" if h["t"].get("stopped") else "rule", h["t"]["sym"]))
                     if ls_ and h["t"]["rule"] not in ("S", "R"):
@@ -4098,11 +4129,22 @@ def opt_stage(base, data, sim, days, ind, cache, part):
                     f_ = min(1.0, -flow_ / h_exp)
                     rz_ += f_ * (h_exp - qb_)
                     qb_ *= (1 - f_)
-                    cash -= QFEE * (-flow_)
+                    cash -= qf_ * (-flow_)
                 elif flow_ > 1e-9:
                     qb_ += flow_
-                    cash -= QFEE * flow_
+                    cash -= qf_ * flow_
                 qh_ = max(cash, 0.0)
+            if tax_on and hv_ and (di[d] + 1 >= len(days) or days[di[d] + 1][:4] != d[:4]):   # 年末の損出し: 含み損の保有を引けで売り、翌日に買い直す（売り買いの手数料）
+                for h in held:
+                    b_ = h.get("basis", 1.0)
+                    if h["v"] < b_:
+                        rz_ += h["size"] * (h["v"] - b_)
+                        cash -= h["size"] * h["v"] * 2 * hc_
+                        h["basis"] = h["v"]
+            if tax_on and tm_ == "sale":   # 源泉徴収あり: その年の確定した利益（通算後）の20.315%が引かれている状態にそろえる（損が出れば戻る）
+                tg_ = TAX_R * max(0.0, rz_)
+                cash -= tg_ - wh_
+                wh_ = tg_
             eq = cash + sum(h["size"] * h["v"] for h in held)
             peak = max(peak, eq)
             mdd = max(mdd, 1 - eq / peak)
@@ -4117,10 +4159,38 @@ def opt_stage(base, data, sim, days, ind, cache, part):
         if log is not None:
             for h in held:
                 log.append((h["t"]["in"], None, "open", h["t"]["sym"]))
+        if tax_on and tm_set_:   # 最後の日に精算: その年の確定した利益の税（繰越の後）と、まだ払っていない分（形どうしを公平に比べるため）
+            taxable_ = rz_
+            if carry_ and rz_ > 0:
+                for L_ in loss_:
+                    if int(dd[-1][:4]) - L_[0] <= carry_ and L_[1] > 0 and taxable_ > 0:
+                        u_ = min(L_[1], taxable_)
+                        taxable_ -= u_
+            st_ = TAX_R * max(0.0, taxable_) - (wh_ if tm_ == "sale" else 0.0) + due_
+            eq -= st_
+            if log is not None:
+                for j_ in range(len(log) - 1, -1, -1):
+                    if log[j_][0] == "eq":
+                        log[j_] = ("eq", log[j_][1], eq)
+                        break
         yrs = (dt.date.fromisoformat(dd[-1]) - dt.date.fromisoformat(dd[0])).days / 365.25
         return eq ** (1 / yrs) - 1, mdd
 
+    _REVG = {}
+    def revg(sym, d):   # 2026-11-14 策5: 合図の日に分かっている直近の四半期の売上の前年同期比（恩株ツールのSECのデータ。ない銘柄は0）
+        if sym not in _REVG:
+            import onkabu_lib as _ol
+            rows_ = _ol.load_rev_rows(sym, cache)
+            if rows_ and sym in data:
+                rv_, _ = _ol.rev_by_day(data[sym]["date"], rows_)
+                _REVG[sym] = {x: (0.0 if v != v else float(v)) for x, v in zip(data[sym]["date"], rv_)}
+            else:
+                _REVG[sym] = {}
+        return _REVG[sym].get(d, 0.0)
     PR = {"slope": lambda t: (0 if t["ai"] else 1, t["s50"]),
+          "rs_rev10": lambda t: (0 if t["ai"] else 1, -int(t["rs"] // 10), -revg(t["sym"], t["sd"])),
+          "rs_rev5": lambda t: (0 if t["ai"] else 1, -int(t["rs"] // 5), -revg(t["sym"], t["sd"])),
+          "rs_rev20": lambda t: (0 if t["ai"] else 1, -int(t["rs"] // 20), -revg(t["sym"], t["sd"])),
           "rs": lambda t: (0 if t["ai"] else 1, -t["rs"]),
           "rs_noai": lambda t: -t["rs"],
           "grp63": lambda t: (grank(t["sym"], t["sd"], 63), -t["rs"]),   # 2026-11-04: 直近3か月で強いグループの候補から
@@ -4174,6 +4244,22 @@ def opt_stage(base, data, sim, days, ind, cache, part):
     # 形: 名前 → 決まり（変えない項目は今のルール）
     BASE = {"rules": ("B", "C", "M", "V"), "prio": "slope", "streak": None, "slots": 4, "cap": 2, "etf": "reg", "stop": STOP, "rel8": False, "swap": None, "xsell": None, "s2": False, "close_stop": False, "hotwait": False, "c10": False, "kx": None, "kb": None, "bsect": False, "indtop": None, "tstop": None, "pstop": None, "m30": False, "c15": False, "lim2": False, "hadd": None, "ichi": False, "outside": False, "abn": None, "gem": None, "resv": None, "stg": None, "rr": None, "bmid": False, "c20": False, "vixrev": None}
     V1 = {"今のルール（傾きの小さい順）": {},
+          # 2026-11-14 Fableの次の策（`新分析ツール/Fableの提案_2026-11-13.md` 9節）
+          "策1 税: 年末にまとめて払う（今までの前提・最後の日に精算）": {"taxmode": "yearend"},
+          "策1 税: 売るたびに引かれる（源泉徴収あり＝今の口座）": {"taxmode": "sale"},
+          "策1 税: 源泉徴収あり＋確定申告で損を3年繰り越す": {"taxmode": "sale", "carry": 3},
+          "策1 税: 源泉徴収あり＋繰越＋年末の損出し": {"taxmode": "sale", "carry": 3, "harvest": True},
+          "策1 税: 翌年3月に払う（源泉徴収なし）": {"taxmode": "march"},
+          "策1 税: 翌年3月＋損を3年繰り越す": {"taxmode": "march", "carry": 3},
+          "策1 税: 翌年3月＋繰越＋年末の損出し": {"taxmode": "march", "carry": 3, "harvest": True},
+          "策2 手数料: ベーシック（片道0.132%）": {"cost": 0.00132, "qfee": 0.00132},
+          "策2 手数料: アドバンス（1回3,000ドル、片道約0.08%）": {"cost": 0.0008, "qfee": 0.0008},
+          "策2 手数料: アドバンス（1回10,000ドル、片道約0.035%）": {"cost": 0.00035, "qfee": 0.00035},
+          "策3 2倍ETFの代わりに信用買い（金利4.5%）": {"marg": 0.045},
+          "策3 2倍ETFの代わりに信用買い（金利6.5%）": {"marg": 0.065},
+          "策5 買う順番: RSを10刻み、同じ中は売上の伸びの大きい順": {"prio": "rs_rev10"},
+          "策5 買う順番: RSを5刻み、同じ中は売上の伸びの大きい順": {"prio": "rs_rev5"},
+          "策5 買う順番: RSを20刻み、同じ中は売上の伸びの大きい順": {"prio": "rs_rev20"},
           "買う順番: RSの高い順": {"prio": "rs"},
           "買う順番: RSの高い順、同じ銘柄の2ルールは急落の底で買う": {"prio": "rs_dupC"},
           "買う順番: RSの高い順、同じ銘柄の2ルールは押し目で買う": {"prio": "rs_dupB"},
@@ -4765,6 +4851,27 @@ def opt_stage(base, data, sim, days, ind, cache, part):
             else:
                 trs = [{**t, "prio": (1 if t["x"] == "out" else 0,) + (t["prio"] if isinstance(t["prio"], tuple) else (t["prio"],))} for t in trs]
         trs = lev(trs, sp["etf"])
+        if sp.get("marg"):   # 2026-11-14 策3: 2倍ETFで買う売買を、元の株の信用買い（自分の資金1＋借りる1、2倍を合わせ直さない）に置き換える。
+            # 資金 = 2×(1−費用)×株の値上がり率 − 1 − 金利（年 r、360日で日割り、暦の日数）。売るときの費用は2単位分（path0 の最後の日に入っている）
+            r_ = sp["marg"]
+            out_ = []
+            for t in trs:
+                if t.get("L") != 2 or not t.get("path0"):
+                    out_.append(t)
+                    continue
+                d0_ = dt.date.fromisoformat(t["in"])
+                pv_ = {}
+                for d in sorted(t["path0"]):
+                    x_ = t["path0"][d] / (1 - COST)
+                    i_ = (1 + r_ / 360) ** (dt.date.fromisoformat(d) - d0_).days - 1
+                    pv_[d] = max(0.0, 2 * (1 - COST) * x_ - 1 - i_)
+                out_.append({**t, "path": pv_, "margin2x": True})
+            trs = out_
+        if sp.get("cost") is not None:   # 2026-11-14 策2: 株・2倍ETFの片道の費用を cost にする（買いの費用は全部の日に、売りの費用は売った日に掛ける）
+            k_ = (1 - sp["cost"]) / (1 - COST)
+            trs = [t if t.get("ghost") else {**t, "path": {d: v * k_ * (k_ if d == t["out"] else 1.0) for d, v in t["path"].items()}, "hcost": sp["cost"]} for t in trs]
+        if sp.get("taxmode") or sp.get("qfee") is not None:   # 2026-11-14 策1・策2（port で計算）
+            trs = [{**t, "taxmode": sp.get("taxmode"), "carry": sp.get("carry", 0), "harvest": sp.get("harvest", False), "qfee": sp.get("qfee")} for t in trs]
         if sp.get("buydown"):   # 2026-11-03 ユーザーの指示: 買い下がり。合図で枠の半分を買い、終値が買値から x 以上下げた日の引けで残りの半分を買う（押し目・急落の底）
             x_, rr_ = sp["buydown"]
             out_ = []
