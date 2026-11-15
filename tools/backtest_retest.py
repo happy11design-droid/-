@@ -3942,7 +3942,7 @@ def opt_stage(base, data, sim, days, ind, cache, part):
     def lev(trs, mode):
         out = []
         for t in trs:
-            if t.get("ghost") or t["sym"] not in HAS or (not t.get("force2x") and (mode == "none" or (mode == "reg" and prev(t["in"]) not in up))) \
+            if t.get("ghost") or t.get("no2x") or t["sym"] not in HAS or (not t.get("force2x") and (mode == "none" or (mode == "reg" and prev(t["in"]) not in up))) \
                     or (mode.startswith("boost_") and prev(t["in"]) not in up and t["sd"] not in SKIPSET[mode]) \
                     or (mode == "reg_season" and (prev(t["in"]) not in up or int(t["in"][5:7]) in (5, 6, 7, 8, 9, 10))) \
                     or (mode == "reg_sox" and (prev(t["in"]) not in up or prev(t["in"]) not in up_sox)) \
@@ -4251,6 +4251,30 @@ def opt_stage(base, data, sim, days, ind, cache, part):
         return val
     def rs_noise(t, n):   # でたらめ: 今のRSに ±10 の一様な乱数を足す（形ごと・銘柄・日で決まる）
         return t["rs"] + random.Random(f"{n}|{t['sym']}|{t['in']}").uniform(-10, 10)
+    _RSI14 = {}
+    def no2x_hit(t, conds):   # 手4: 合図の日（sd）の引けで分かる条件
+        s_ = data[t["sym"]]
+        i_ = _pos(t["sym"], t["sd"])
+        if i_ is None:
+            return False
+        for c_ in conds:
+            if c_ == "hot" and t["rule"] in ("M", "V"):   # 過熱: 終値が+2σより上かつRSI(14)>70（record.json の hot と同じ）
+                if t["sym"] not in _RSI14:
+                    _RSI14[t["sym"]] = rsi_wilder(s_["c"], 14)
+                r14_ = _RSI14[t["sym"]][i_]
+                if s_["bb_up"][i_] is not None and r14_ is not None and s_["c"][i_] > s_["bb_up"][i_] and r14_ > 70:
+                    return True
+            elif c_.startswith("earn") and earn_soon(t["sym"], t["sd"], int(c_[4:])):   # 次の決算まで N 営業日以内
+                return True
+            elif c_ == "down" and t["rule"] in ("B", "C") and i_ >= 10:   # 逆張りで、終値が50日線より下・50日線が10取引日前より下
+                m_, m10_ = s_["ma50"][i_], s_["ma50"][i_ - 10]
+                if m_ is not None and m10_ is not None and s_["c"][i_] < m_ and m_ < m10_:
+                    return True
+            elif c_.startswith("rand"):   # でたらめ: rand<n>_<割合>。2倍ETFになりうる売買を、その割合だけ乱数で元の株にする
+                n_, f_ = c_[4:].split("_")
+                if t["sym"] in HAS and prev(t["in"]) in up and random.Random(f"{n_}|{t['sym']}|{t['in']}").random() < float(f_):
+                    return True
+        return False
     _REVG = {}
     def revg(sym, d):   # 2026-11-14 策5: 合図の日に分かっている直近の四半期の売上の前年同期比（恩株ツールのSECのデータ。ない銘柄は0）
         if sym not in _REVG:
@@ -4698,6 +4722,14 @@ def opt_stage(base, data, sim, days, ind, cache, part):
     for k_ in (5, 10, 20):   # 2026-11-15 手2（Fableの提案 4節）
         V1[f"手2 RS: 逆張りは{k_}取引日前のRSで並べる"] = {"prio": f"rs_pre{k_}"}
     V1["手2 RS: テーマと市場に連れた分を除いたRSで並べる"] = {"prio": "rs_resid"}
+    V1["手4 元の株: 過熱した順張り（①）"] = {"no2x": ("hot",)}   # 2026-11-15 手4（Fableの提案 5節）
+    for n_ in (3, 5, 10):
+        V1[f"手4 元の株: 決算まで{n_}営業日以内（②）"] = {"no2x": (f"earn{n_}",)}
+    V1["手4 元の株: 50日線より下で下向きの逆張り（④）"] = {"no2x": ("down",)}
+    V1["手4 元の株: ①②④（決算は5営業日）"] = {"no2x": ("hot", "earn5", "down")}
+    for f_ in ("0.10", "0.20", "0.30", "0.40"):
+        for n_ in range(20):
+            V1[f"手4 でたらめ: 2倍ETFの売買の{f_}を元の株に{n_}"] = {"no2x": (f"rand{n_}_{f_}",)}
     for n_ in range(200):
         V1[f"手2 でたらめ: RSに±10の乱数{n_}"] = {"prio": f"rs_noise{n_}"}
     if os.environ.get("OPT_LISTFORMS"):   # 2026-11-12: 全部の形の名前を書き出して終わる（古い・甘い検証のやり直し用）
@@ -4942,6 +4974,10 @@ def opt_stage(base, data, sim, days, ind, cache, part):
                 trs = [{**t, "prio": (0 if (t["x"] == "out") == (t["sd"] in WARN) else 1,) + (t["prio"] if isinstance(t["prio"], tuple) else (t["prio"],))} for t in trs]
             else:
                 trs = [{**t, "prio": (1 if t["x"] == "out" else 0,) + (t["prio"] if isinstance(t["prio"], tuple) else (t["prio"],))} for t in trs]
+        if sp.get("no2x"):   # 2026-11-15 手4（Fableの提案 5節）: 合図ごとの条件で、上昇の局面でも2倍ETFを使わず元の株で買う
+            trs = [{**t, "no2x": True} if not t.get("ghost") and no2x_hit(t, sp["no2x"]) else t for t in trs]
+            el_ = [t for t in trs if not t.get("ghost") and t["sym"] in HAS and prev(t["in"]) in up]
+            print("手4 2倍ETFになりうる売買", len(el_), "元の株にした", sum(1 for t in el_ if t.get("no2x")), sp["no2x"], file=sys.stderr)
         trs = lev(trs, sp["etf"])
         if sp.get("marg"):   # 2026-11-14 策3: 2倍ETFで買う売買を、元の株の信用買い（自分の資金1＋借りる1、2倍を合わせ直さない）に置き換える。
             # 資金 = 2×(1−費用)×株の値上がり率 − 1 − 金利（年 r、360日で日割り、暦の日数）。売るときの費用は2単位分（path0 の最後の日に入っている）
