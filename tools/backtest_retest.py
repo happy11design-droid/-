@@ -4205,6 +4205,52 @@ def opt_stage(base, data, sim, days, ind, cache, part):
         yrs = (dt.date.fromisoformat(dd[-1]) - dt.date.fromisoformat(dd[0])).days / 365.25
         return eq ** (1 / yrs) - 1, mdd
 
+    # 2026-11-15 手2（Fableの提案 4節）: RSの測り方を変える形と、でたらめな順番
+    _POSX = {}
+    def _pos(sym, d):
+        if sym not in _POSX:
+            _POSX[sym] = {x: k for k, x in enumerate(data[sym]["date"])}
+        return _POSX[sym].get(d)
+    def rs_at(t, k):   # 合図の日（買う日の前の取引日）の k 取引日前のRS
+        i0_ = _pos(t["sym"], t["in"])
+        if i0_ is None or i0_ - 1 - k < 0:
+            return t["rs"]
+        return data[t["sym"]]["rs"][i0_ - 1 - k] or 0
+    _IDXR = {}
+    def _idx_ret(name):
+        if name not in _IDXR:
+            import json as _jx
+            rows_ = _jx.load(open(os.path.join(cache, "long", "index", name + ".json")))
+            m_ = {r[0]: r[2] for r in rows_}
+            ds_ = sorted(m_)
+            _IDXR[name] = {ds_[k]: m_[ds_[k]] / m_[ds_[k - 1]] - 1 for k in range(1, len(ds_)) if m_[ds_[k - 1]]}
+        return _IDXR[name]
+    _RES = {}
+    def resid(t):   # テーマ（SOX）と市場（S&P500）に連れた分を除いた強さ（残差モメンタム、Blitz・Huij・Martens 2011）
+        key_ = (t["sym"], t["in"])
+        if key_ in _RES:
+            return _RES[key_]
+        import numpy as _np
+        s_ = data[t["sym"]]
+        i_ = (_pos(t["sym"], t["in"]) or 0) - 1
+        val = -9.0
+        if i_ >= 272:
+            lo_ = max(1, i_ - 503)
+            ds_ = s_["date"][lo_:i_ + 1]
+            c_ = s_["c"]
+            r_ = _np.array([c_[k] / c_[k - 1] - 1 for k in range(lo_, i_ + 1)])
+            sx_, sp_ = _idx_ret("^SOX"), _idx_ret("^GSPC")
+            X_ = _np.array([[1.0, sx_.get(d, 0.0), sp_.get(d, 0.0)] for d in ds_])
+            if len(r_) >= 252:
+                b_, *_ = _np.linalg.lstsq(X_, r_, rcond=None)
+                u_ = r_ - b_[1] * X_[:, 1] - b_[2] * X_[:, 2]
+                w_ = u_[-252:-21] if len(u_) >= 252 else u_[:-21]
+                sd_ = float(_np.std(w_, ddof=1)) if len(w_) > 2 else 0.0
+                val = float(_np.sum(w_)) / (sd_ * (len(w_) ** 0.5)) if sd_ > 0 else 0.0
+        _RES[key_] = val
+        return val
+    def rs_noise(t, n):   # でたらめ: 今のRSに ±10 の一様な乱数を足す（形ごと・銘柄・日で決まる）
+        return t["rs"] + random.Random(f"{n}|{t['sym']}|{t['in']}").uniform(-10, 10)
     _REVG = {}
     def revg(sym, d):   # 2026-11-14 策5: 合図の日に分かっている直近の四半期の売上の前年同期比（恩株ツールのSECのデータ。ない銘柄は0）
         if sym not in _REVG:
@@ -4217,6 +4263,10 @@ def opt_stage(base, data, sim, days, ind, cache, part):
                 _REVG[sym] = {}
         return _REVG[sym].get(d, 0.0)
     PR = {"slope": lambda t: (0 if t["ai"] else 1, t["s50"]),
+          "rs_pre5": lambda t: (0 if t["ai"] else 1, -(rs_at(t, 5) if t["rule"] in ("B", "C") else t["rs"])),
+          "rs_pre10": lambda t: (0 if t["ai"] else 1, -(rs_at(t, 10) if t["rule"] in ("B", "C") else t["rs"])),
+          "rs_pre20": lambda t: (0 if t["ai"] else 1, -(rs_at(t, 20) if t["rule"] in ("B", "C") else t["rs"])),
+          "rs_resid": lambda t: (0 if t["ai"] else 1, -resid(t)),
           "rs_rev10": lambda t: (0 if t["ai"] else 1, -int(t["rs"] // 10), -revg(t["sym"], t["sd"])),
           "rs_rev5": lambda t: (0 if t["ai"] else 1, -int(t["rs"] // 5), -revg(t["sym"], t["sd"])),
           "rs_rev20": lambda t: (0 if t["ai"] else 1, -int(t["rs"] // 20), -revg(t["sym"], t["sd"])),
@@ -4270,6 +4320,8 @@ def opt_stage(base, data, sim, days, ind, cache, part):
           "rs_recent": lambda t: (0 if t["ai"] and t.get("ai_good") else 1, -t["rs"]),
           # 2026-10-31: 早めの警告・S2の日は、AI以外を先に買う（ふだんはAIを先に）
           "rs_warn_out": lambda t: (0 if (t["ai"] if t["sd"] not in WARN else not t["ai"]) else 1, -t["rs"])}
+    for _n in range(200):   # 2026-11-15 手2のでたらめな順番（200通り）
+        PR[f"rs_noise{_n}"] = (lambda n: (lambda t: (0 if t["ai"] else 1, -rs_noise(t, n))))(_n)
     # 形: 名前 → 決まり（変えない項目は今のルール）
     BASE = {"rules": ("B", "C", "M", "V"), "prio": "slope", "streak": None, "slots": 4, "cap": 2, "etf": "reg", "stop": STOP, "rel8": False, "swap": None, "xsell": None, "s2": False, "close_stop": False, "hotwait": False, "c10": False, "kx": None, "kb": None, "bsect": False, "indtop": None, "tstop": None, "pstop": None, "m30": False, "c15": False, "lim2": False, "hadd": None, "ichi": False, "outside": False, "abn": None, "gem": None, "resv": None, "stg": None, "rr": None, "bmid": False, "c20": False, "vixrev": None}
     V1 = {"今のルール（傾きの小さい順）": {},
@@ -4643,6 +4695,11 @@ def opt_stage(base, data, sim, days, ind, cache, part):
         V1[f"底を待つ: {lab_}"] = {"skip": ("wait_" + k_, "theme")}
         V1[f"底の後40日は2倍ETF: {lab_}"] = {"etf": "boost_" + k_}
         V1[f"底でSOXXを1枠: {lab_}"] = {"idx": (k_, "ma50", 120, True)}
+    for k_ in (5, 10, 20):   # 2026-11-15 手2（Fableの提案 4節）
+        V1[f"手2 RS: 逆張りは{k_}取引日前のRSで並べる"] = {"prio": f"rs_pre{k_}"}
+    V1["手2 RS: テーマと市場に連れた分を除いたRSで並べる"] = {"prio": "rs_resid"}
+    for n_ in range(200):
+        V1[f"手2 でたらめ: RSに±10の乱数{n_}"] = {"prio": f"rs_noise{n_}"}
     if os.environ.get("OPT_LISTFORMS"):   # 2026-11-12: 全部の形の名前を書き出して終わる（古い・甘い検証のやり直し用）
         json.dump(list(V1), open(os.environ["OPT_LISTFORMS"], "w"), ensure_ascii=False)
         print(f"形の数 {len(V1)}", file=sys.stderr)
