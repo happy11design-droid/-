@@ -876,7 +876,11 @@ def main():
         # 過熱（終値が+2σより上かつRSI(14)が70超え）。記録だけ（record.json）で、判定・表示には使わない（2026-10-10 ユーザーの指示。傾向を見てから採用を検討）
         hot_ = bool(d["bb_up"][i] is not None and d["c"][i] > d["bb_up"][i] and r14_ is not None and r14_ > 70)
         base = {"sym": s, "group": grp, "outside": is_out, "close": d["c"][i], "rs": rs, "chg": d["c"][i] / d["c"][i - 1] - 1, "s50": s50_, "hot": hot_, "rsi14": r14_,
-                "regime": stock_phase(i, d)}
+                "regime": stock_phase(i, d),
+                # 2026-11-15 手6（Fableの提案、ユーザーの指示「項目を足して」）: 記録だけ（record.json）。判定・表示には使わない
+                "below50": bool(d["ma50"][i] is not None and d["c"][i] < d["ma50"][i]),
+                "down50": bool(d["ma50"][i] is not None and i >= 10 and d["ma50"][i - 10] is not None and d["c"][i] < d["ma50"][i] < d["ma50"][i - 10]),
+                "vol_ratio": (d["v"][i] / d["vol50"][i]) if d.get("vol50") and d["vol50"][i] else None}
         pb, ii = d["pctb"][i], d["ii21"][i]
         lvl05 = d["bb_dn"][i] + 0.05 * (d["bb_up"][i] - d["bb_dn"][i])
         if bs.O_method3(i, d):
@@ -1131,8 +1135,18 @@ def main():
     open(a.out, "w").write(text)
     # 候補ごとの過熱の記録（theme_review.py record が record.json に移す。レポート・レビューには出さない）
     # S2（テーマ全体の急落）の記録: S2の日の順張りの候補は「S2で順張りの新しい買いを止める形なら見送る」（2026-10-14）
+    def _bdays(sym):   # 2026-11-15 手6: 次の決算までの営業日（Yahooの予定の日。取れなければ None）
+        try:
+            m_ = re.match(r"(\d{4}-\d{2}-\d{2})", str(eds.get(sym, "")))
+            if not m_:
+                return None
+            a_, b_ = dt.date.fromisoformat(day), dt.date.fromisoformat(m_.group(1))
+            return sum(1 for k_ in range((b_ - a_).days) if (a_ + dt.timedelta(days=k_)).weekday() < 5) if b_ >= a_ else -1
+        except Exception:
+            return None
     meta = {x["sym"]: {"hot": x.get("hot"), "rsi14": x.get("rsi14"), "s50": x.get("s50"), "rs": x.get("rs"),
-                       "s2_skip": bool(s2.get("on")) and x["kind"].startswith(("順張り", "予約: ミネルヴィニ", "予約: 新高値"))} for x in cands}
+                       "s2_skip": bool(s2.get("on")) and x["kind"].startswith(("順張り", "予約: ミネルヴィニ", "予約: 新高値")),
+                       "below50": x.get("below50"), "down50": x.get("down50"), "vol_ratio": x.get("vol_ratio"), "days_to_earn": _bdays(x["sym"])} for x in cands}
     meta["_s2"] = s2
     meta["_special"] = {k: v for k, v in spc.items() if k in ("on", "label", "since", "drop", "n", "A", "B", "C")}   # 特殊な下げの記録（2026-11-03）
     if gnews:   # グループごとの悪いニュースの流れ（2026-11-04）。候補ごとに印のグループかどうか

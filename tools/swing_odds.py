@@ -107,32 +107,33 @@ def arr(x):
 # ---------- 1銘柄の数値 ----------
 
 def earn_arrays(dates, ev):
-    """決算の反応日（寄り付き前の発表はその日、引け後はその次の取引日、記載なしは発表日とその次の日の窓の大きい方）"""
+    """決算の反応日（寄り付き前の発表はその日、引け後はその次の取引日）。
+    2026-11-15 直した（点検 2026-10-16 の2・3、Fableの提案 手8）: 時刻の分からない発表は、発表日と次の取引日の両方を反応日にする
+    （以前は翌日の窓の大きさで1日を選んでいた＝その日の引けではまだ分からない値を使う先読み）。
+    また、データの最終日より後の発表（これからの予定）も、営業日で数えた位置 ann に残す（毎日の表示の「次の決算が5日以内」に使う）"""
     n = len(dates)
     react = np.zeros(n, bool)
     surprise_at = {}
+    ann = []   # 発表日の位置（取引日の番号。最終日より後は営業日で延ばした番号）
     for day, tm, sp in ev or []:
         k = bisect.bisect_left(dates, day)
         if k >= n:
+            ann.append(n - 1 + int(np.busday_count(dates[-1], day)))
             continue
-        if tm == "after" or (dates[k] != day and tm != "pre"):
-            k = k + 1 if dates[k] == day else k
-        react[min(k, n - 1)] = True
-        surprise_at[min(k, n - 1)] = sp
-    return react, surprise_at
-
-
-def fix_unknown(react, surprise_at, ev, dates, gapabs):
-    """時間帯の記載がない発表: 発表日と次の取引日の窓の大きい方を反応日にする"""
-    for day, tm, sp in ev or []:
-        if tm != "?":
-            continue
-        k = bisect.bisect_left(dates, day)
-        if k + 1 >= len(dates) or dates[k] != day:
-            continue
-        if gapabs[k + 1] > gapabs[k] and react[k]:
-            react[k], react[k + 1] = False, True
-            surprise_at[k + 1] = surprise_at.pop(k, sp)
+        ann.append(k)
+        if tm == "pre" and dates[k] == day:
+            ks = [k]
+        elif tm == "after":
+            ks = [k + 1] if dates[k] == day else [k]
+        elif dates[k] != day:   # 休みの日の発表: 次の取引日
+            ks = [k]
+        else:   # 時刻が分からない: 発表日と次の取引日の両方
+            ks = [k, k + 1]
+        for j in ks:
+            if j < n:
+                react[j] = True
+                surprise_at[j] = sp
+    return react, surprise_at, sorted(ann)
 
 
 def stock_features(s, spy_c_by_date, ev):
@@ -169,8 +170,7 @@ def stock_features(s, spy_c_by_date, ev):
     for k in ("vr", "bwr", "udvr"):
         f[k][~np.isfinite(f[k])] = np.nan
     gapabs = np.abs(np.nan_to_num(f["gap"]))
-    react, sur = earn_arrays(s["date"], ev)
-    fix_unknown(react, sur, ev, s["date"], gapabs)
+    react, sur, ann = earn_arrays(s["date"], ev)
     since, surprise, earn_react, soon = np.full(n, np.nan), np.full(n, np.nan), np.full(n, np.nan), np.zeros(n)
     last = None
     react_idx = np.flatnonzero(react)
@@ -182,8 +182,8 @@ def stock_features(s, spy_c_by_date, ev):
             sp = sur.get(last)
             surprise[i] = np.clip(sp, -50, 50) if sp is not None else 0.0
             earn_react[i] = (c[last] - pc[last]) / atr[last] if atr[last] else np.nan
-        k = np.searchsorted(react_idx, i + 1)
-        soon[i] = float(k < len(react_idx) and react_idx[k] - i <= 5)
+        k = bisect.bisect_left(ann, i + 1)   # 次の決算の発表が5取引日以内（これからの予定も入る。2026-11-15 直した）
+        soon[i] = float(k < len(ann) and ann[k] - i <= 5)
     if ev:   # 決算の記録がある銘柄だけ。記録のない銘柄は「前回から70日」「サプライズ0」とみなす
         f["since_earn"], f["surprise"], f["earn_react"] = np.nan_to_num(since, nan=70), np.nan_to_num(surprise), np.nan_to_num(earn_react)
     else:

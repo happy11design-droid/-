@@ -616,6 +616,25 @@ def main():
             j += 1
         return None
 
+    def b3_exit_nl(t):   # 2026-11-15 手5: 上部バンドの指値を外した押し目の手じまい（引けで %b≧1 なら翌日の寄り付き、損切り・60日は同じ）
+        s, sym = data[t["sym"]], t["sym"]
+        o, h, l, c = s["o"], s["h"], s["l"], s["c"]
+        i0, n, px = idx(sym, t["in"]), len(c), t["px"]
+        if i0 >= n - 1:
+            return None
+        floor, pend, j = px * (1 - STOP), False, i0
+        while j < n:
+            if pend:
+                return j, o[j]
+            if l[j] <= floor:
+                return j, min(o[j] if j > i0 else px, floor)
+            if j + 1 >= n:
+                return (j, c[j]) if bl.KEEP_OPEN else None
+            if j - i0 >= bs.MAX_HOLD or (s["pctb"][j] is not None and s["pctb"][j] >= 1.0):
+                pend = True
+            j += 1
+        return None
+
     old, bs.STOP_MAX = bs.STOP_MAX, STOP
     try:
         b3_raw = bs.simulate(data, members, bs.O_method3, bs.X_upper_band, cb.START, end, ok=ctx["ok_rot"])
@@ -1103,6 +1122,7 @@ def main():
         return
     if a.stage in ("opt1", "opt2"):
         sim.b3x = b3_exit
+        sim.b3x_nl = b3_exit_nl
         if not (a.keep_open and a.overlap):
             sys.exit("opt は --keep-open --overlap で動かす")
         return opt_stage(base, data, sim, days, ind, a.cache, int(a.stage[-1]))
@@ -3724,8 +3744,8 @@ def opt_stage(base, data, sim, days, ind, cache, part):
         return None
 
     def stock_trades(stop, rel8=False, xsell=None, close_stop=False, hotwait=False, c10=False, kx=None, tstop=None, pstop=None, m30=False, lim2=False, hadd=None, gem=None, stg=None, rr=None,
-                     bmid=False, c20=False, delay=None):
-        key_ = (stop, rel8, xsell, close_stop, hotwait, c10, kx, tstop, pstop, m30, lim2, hadd, gem, stg, rr, bmid, c20, delay)
+                     bmid=False, c20=False, delay=None, nosell=()):
+        key_ = (stop, rel8, xsell, close_stop, hotwait, c10, kx, tstop, pstop, m30, lim2, hadd, gem, stg, rr, bmid, c20, delay, tuple(nosell))
         if key_ in cache_tr:
             return cache_tr[key_]
         out = []
@@ -3881,7 +3901,16 @@ def opt_stage(base, data, sim, days, ind, cache, part):
                   "evening": _xsig.evening_star, "bear": _rb.big_bear, "macddc": _rb.macd_dc, "mfi": mfi_div, "obv": obv_div, "chikou": chikou_down,
                   "c3": xc.c3, "c2": xc.c2}
             br_ = b["rule"] not in ("G", "U", "K", "L")   # 足した合図のうち、元の計算で出来高2倍の大陰線の売りがなかったもの
-            if xsell:
+            # 2026-11-15 手5（Fableの提案）: 採用済みの売り方の部品を外す。"lim"＝押し目の上部バンドの指値、"half"＝順張りの反転の合図で半分売り、
+            # "dc"＝順張りのかぶせ線で全部売り、"bear"＝逆張りの出来高2倍の大陰線で全部売り
+            if "lim" in nosell and b["rule"] == "B":
+                x_ = sim.b3x_nl({"sym": b["sym"], "in": s["date"][b["i0"]], "px": b["px"]})
+                if not x_:
+                    continue
+                b = {**b, "i1": x_[0], "xp": x_[1]}
+            if nosell and not xsell:
+                p = sim(b, half=(None if "half" in nosell else xc.c1), full_dc="dc" not in nosell, bear_rev=br_ and "bear" not in nosell)
+            elif xsell:
                 nms_, rr_ = (xsell, ("M", "V")) if isinstance(xsell, str) else xsell
                 nms_ = (nms_,) if isinstance(nms_, str) else nms_
                 p = sim(b, half=xc.c1, extra=tuple(XF[n_] for n_ in nms_), extra_rules=rr_, bear_rev=br_)
@@ -3913,7 +3942,7 @@ def opt_stage(base, data, sim, days, ind, cache, part):
     def lev(trs, mode):
         out = []
         for t in trs:
-            if t.get("ghost") or t["sym"] not in HAS or (not t.get("force2x") and (mode == "none" or (mode == "reg" and prev(t["in"]) not in up))) \
+            if t.get("ghost") or t.get("no2x") or t["sym"] not in HAS or (not t.get("force2x") and (mode == "none" or (mode == "reg" and prev(t["in"]) not in up))) \
                     or (mode.startswith("boost_") and prev(t["in"]) not in up and t["sd"] not in SKIPSET[mode]) \
                     or (mode == "reg_season" and (prev(t["in"]) not in up or int(t["in"][5:7]) in (5, 6, 7, 8, 9, 10))) \
                     or (mode == "reg_sox" and (prev(t["in"]) not in up or prev(t["in"]) not in up_sox)) \
@@ -3926,7 +3955,7 @@ def opt_stage(base, data, sim, days, ind, cache, part):
                 e = max(0.0, e * (1 + 2 * (t["path"][d] / pr - 1)) * (1 - fee))
                 pr = t["path"][d]
                 pv[d] = e
-            out.append({**t, "path": pv, "L": 2})
+            out.append({**t, "path": pv, "L": 2, "path0": t["path"]})
         return out
 
     pos_ = {}
@@ -3952,6 +3981,16 @@ def opt_stage(base, data, sim, days, ind, cache, part):
         # gm_=(年の金利 r,): 良い合図（t["good"]）は枠が埋まっていても、1つだけ別の枠で借りて買える
         mg_ = next((t["margin"] for t in trs if t.get("margin")), None)
         gm_ = next((t["goodm"] for t in trs if t.get("goodm")), None)
+        # 2026-11-14 ユーザーの指示「バックテストして」（Fableの次の策）: 策1 税の払い方（taxmode: "sale"＝売るたびに引かれる（源泉徴収あり）、
+        # "yearend"＝年末にまとめて（今までの前提）、"march"＝翌年3月15日に払う（源泉徴収なし・確定申告）、carry＝損の繰越の年数、harvest＝年末の損出し）、
+        # 策2 待っているQQQの手数料（qfee）。taxmode を指定した形は、最後の日に、その年の分と払っていない分を精算して数える（形どうしを公平に比べるため）
+        tm_set_ = next((t["taxmode"] for t in trs if t.get("taxmode")), None)
+        tm_ = tm_set_ or "yearend"
+        carry_ = next((t["carry"] for t in trs if t.get("carry")), 0)
+        hv_ = any(t.get("harvest") for t in trs)
+        qf_ = next((t["qfee"] for t in trs if t.get("qfee")), QFEE)
+        hc_ = next((t["hcost"] for t in trs if t.get("hcost")), COST)
+        loss_, due_, wh_, due_day_ = [], 0.0, 0.0, ""
         tax_on = TAXON   # 2026-11-07（OPT_TAX=1）: 確定した損益に年ごとの税（20.315%、その年の中で損益を通算）。待っているQQQの売り買いも税の通算と手数料0.132%に入れる
         rz_, yr_, qb_, qh_ = 0.0, None, 0.0, 0.0
         _ig, _ii = IDLE.get(idle_, ({}, {})) if idle_ else ({}, {})
@@ -3982,9 +4021,30 @@ def opt_stage(base, data, sim, days, ind, cache, part):
         for d in dd:
             ghost_n = 0   # 約定しなかった指値の注文（その日だけ枠を使う）
             if tax_on and d[:4] != yr_:   # 年が変わった: 前の年の確定した利益に税
-                if yr_ is not None and rz_ > 0:
-                    cash -= TAX_R * rz_
-                rz_, yr_ = 0.0, d[:4]
+                if yr_ is not None:
+                    taxable_ = rz_
+                    if carry_:   # 損の繰越（確定申告）: 損の年は損を残し、利益の年は直近 carry_ 年の損を古い順に使う
+                        if rz_ < 0:
+                            loss_.append([int(yr_), -rz_])
+                            taxable_ = 0.0
+                        else:
+                            for L_ in loss_:
+                                if int(yr_) - L_[0] <= carry_ and L_[1] > 0 and taxable_ > 0:
+                                    u_ = min(L_[1], taxable_)
+                                    L_[1] -= u_
+                                    taxable_ -= u_
+                    tax_ = TAX_R * max(0.0, taxable_)
+                    if tm_ == "yearend":
+                        cash -= tax_
+                    elif tm_ == "march":
+                        due_ += tax_
+                    else:   # "sale": 引かれた分（wh_）との差を3月に精算（繰越がなければ差は0）
+                        due_ += tax_ - wh_
+                rz_, yr_, wh_ = 0.0, d[:4], 0.0
+                due_day_ = d[:4] + "-03-15"
+            if tax_on and due_ and d >= due_day_:
+                cash -= due_
+                due_ = 0.0
             if (mg_ or gm_) and cash < 0:   # 借りている分の金利
                 cash *= 1 + (mg_[1] if mg_ else gm_[0]) / 252
             if idle_ and cash > 0:   # 前の日の引け→今日の寄り付きの指数ETFの値動き（現金を置いている分）
@@ -4013,7 +4073,7 @@ def opt_stage(base, data, sim, days, ind, cache, part):
                 if h["t"]["out"] == d:
                     cash += h["size"] * h["v"]
                     if tax_on:
-                        rz_ += h["size"] * (h["v"] - 1)
+                        rz_ += h["size"] * (h["v"] - h.get("basis", 1.0))
                     if log is not None:
                         log.append((h["t"]["in"], d, "stop" if h["t"].get("stopped") else "rule", h["t"]["sym"]))
                     if ls_ and h["t"]["rule"] not in ("S", "R"):
@@ -4098,11 +4158,22 @@ def opt_stage(base, data, sim, days, ind, cache, part):
                     f_ = min(1.0, -flow_ / h_exp)
                     rz_ += f_ * (h_exp - qb_)
                     qb_ *= (1 - f_)
-                    cash -= QFEE * (-flow_)
+                    cash -= qf_ * (-flow_)
                 elif flow_ > 1e-9:
                     qb_ += flow_
-                    cash -= QFEE * flow_
+                    cash -= qf_ * flow_
                 qh_ = max(cash, 0.0)
+            if tax_on and hv_ and (di[d] + 1 >= len(days) or days[di[d] + 1][:4] != d[:4]):   # 年末の損出し: 含み損の保有を引けで売り、翌日に買い直す（売り買いの手数料）
+                for h in held:
+                    b_ = h.get("basis", 1.0)
+                    if h["v"] < b_:
+                        rz_ += h["size"] * (h["v"] - b_)
+                        cash -= h["size"] * h["v"] * 2 * hc_
+                        h["basis"] = h["v"]
+            if tax_on and tm_ == "sale":   # 源泉徴収あり: その年の確定した利益（通算後）の20.315%が引かれている状態にそろえる（損が出れば戻る）
+                tg_ = TAX_R * max(0.0, rz_)
+                cash -= tg_ - wh_
+                wh_ = tg_
             eq = cash + sum(h["size"] * h["v"] for h in held)
             peak = max(peak, eq)
             mdd = max(mdd, 1 - eq / peak)
@@ -4117,10 +4188,119 @@ def opt_stage(base, data, sim, days, ind, cache, part):
         if log is not None:
             for h in held:
                 log.append((h["t"]["in"], None, "open", h["t"]["sym"]))
+        if tax_on and tm_set_:   # 最後の日に精算: その年の確定した利益の税（繰越の後）と、まだ払っていない分（形どうしを公平に比べるため）
+            taxable_ = rz_
+            if carry_ and rz_ > 0:
+                for L_ in loss_:
+                    if int(dd[-1][:4]) - L_[0] <= carry_ and L_[1] > 0 and taxable_ > 0:
+                        u_ = min(L_[1], taxable_)
+                        taxable_ -= u_
+            st_ = TAX_R * max(0.0, taxable_) - (wh_ if tm_ == "sale" else 0.0) + due_
+            eq -= st_
+            if log is not None:
+                for j_ in range(len(log) - 1, -1, -1):
+                    if log[j_][0] == "eq":
+                        log[j_] = ("eq", log[j_][1], eq)
+                        break
         yrs = (dt.date.fromisoformat(dd[-1]) - dt.date.fromisoformat(dd[0])).days / 365.25
         return eq ** (1 / yrs) - 1, mdd
 
+    # 2026-11-15 手2（Fableの提案 4節）: RSの測り方を変える形と、でたらめな順番
+    _POSX = {}
+    def _pos(sym, d):
+        if sym not in _POSX:
+            _POSX[sym] = {x: k for k, x in enumerate(data[sym]["date"])}
+        return _POSX[sym].get(d)
+    def rs_at(t, k):   # 合図の日（買う日の前の取引日）の k 取引日前のRS
+        i0_ = _pos(t["sym"], t["in"])
+        if i0_ is None or i0_ - 1 - k < 0:
+            return t["rs"]
+        return data[t["sym"]]["rs"][i0_ - 1 - k] or 0
+    _IDXR = {}
+    def _idx_ret(name):
+        if name not in _IDXR:
+            import json as _jx
+            rows_ = _jx.load(open(os.path.join(cache, "long", "index", name + ".json")))
+            m_ = {r[0]: r[2] for r in rows_}
+            ds_ = sorted(m_)
+            _IDXR[name] = {ds_[k]: m_[ds_[k]] / m_[ds_[k - 1]] - 1 for k in range(1, len(ds_)) if m_[ds_[k - 1]]}
+        return _IDXR[name]
+    _RES = {}
+    def resid(t):   # テーマ（SOX）と市場（S&P500）に連れた分を除いた強さ（残差モメンタム、Blitz・Huij・Martens 2011）
+        key_ = (t["sym"], t["in"])
+        if key_ in _RES:
+            return _RES[key_]
+        import numpy as _np
+        s_ = data[t["sym"]]
+        i_ = (_pos(t["sym"], t["in"]) or 0) - 1
+        val = -9.0
+        if i_ >= 272:
+            lo_ = max(1, i_ - 503)
+            ds_ = s_["date"][lo_:i_ + 1]
+            c_ = s_["c"]
+            r_ = _np.array([c_[k] / c_[k - 1] - 1 for k in range(lo_, i_ + 1)])
+            sx_, sp_ = _idx_ret("^SOX"), _idx_ret("^GSPC")
+            X_ = _np.array([[1.0, sx_.get(d, 0.0), sp_.get(d, 0.0)] for d in ds_])
+            if len(r_) >= 252:
+                b_, *_ = _np.linalg.lstsq(X_, r_, rcond=None)
+                u_ = r_ - b_[1] * X_[:, 1] - b_[2] * X_[:, 2]
+                w_ = u_[-252:-21] if len(u_) >= 252 else u_[:-21]
+                sd_ = float(_np.std(w_, ddof=1)) if len(w_) > 2 else 0.0
+                val = float(_np.sum(w_)) / (sd_ * (len(w_) ** 0.5)) if sd_ > 0 else 0.0
+        _RES[key_] = val
+        return val
+    def rs_noise(t, n):   # でたらめ: 今のRSに ±10 の一様な乱数を足す（形ごと・銘柄・日で決まる）
+        return t["rs"] + random.Random(f"{n}|{t['sym']}|{t['in']}").uniform(-10, 10)
+    _RSI14 = {}
+    def no2x_hit(t, conds):   # 手4: 合図の日（sd）の引けで分かる条件
+        s_ = data[t["sym"]]
+        i_ = _pos(t["sym"], t["sd"])
+        if i_ is None:
+            return False
+        for c_ in conds:
+            if c_ == "hot" and t["rule"] in ("M", "V"):   # 過熱: 終値が+2σより上かつRSI(14)>70（record.json の hot と同じ）
+                if t["sym"] not in _RSI14:
+                    _RSI14[t["sym"]] = rsi_wilder(s_["c"], 14)
+                r14_ = _RSI14[t["sym"]][i_]
+                if s_["bb_up"][i_] is not None and r14_ is not None and s_["c"][i_] > s_["bb_up"][i_] and r14_ > 70:
+                    return True
+            elif c_.startswith("earn") and earn_soon(t["sym"], t["sd"], int(c_[4:])):   # 次の決算まで N 営業日以内
+                return True
+            elif c_ == "down" and t["rule"] in ("B", "C") and i_ >= 10:   # 逆張りで、終値が50日線より下・50日線が10取引日前より下
+                m_, m10_ = s_["ma50"][i_], s_["ma50"][i_ - 10]
+                if m_ is not None and m10_ is not None and s_["c"][i_] < m_ and m_ < m10_:
+                    return True
+            elif c_.startswith("meta"):   # 2026-11-15 M2（メタラベリング）: 毎年作り直した点数で「損で終わりやすい」合図（tools/meta_label_check.py --dump）
+                if "meta" not in _RSI14:
+                    import json as _jm
+                    _RSI14["meta"] = _jm.load(open(os.path.join(cache, "results", "meta_flags.json")))
+                lst_ = _RSI14.setdefault(("metaset", c_), set(_RSI14["meta"].get(os.environ.get("OPT_META_WATCH", "free"), {}).get(c_[4:], [])))
+                if f"{t['sym']}|{t['sd']}|{t['rule']}" in lst_:
+                    return True
+            elif c_.startswith("rand"):   # でたらめ: rand<n>_<割合>。2倍ETFになりうる売買を、その割合だけ乱数で元の株にする
+                n_, f_ = c_[4:].split("_")
+                if t["sym"] in HAS and prev(t["in"]) in up and random.Random(f"{n_}|{t['sym']}|{t['in']}").random() < float(f_):
+                    return True
+        return False
+    _REVG = {}
+    def revg(sym, d):   # 2026-11-14 策5: 合図の日に分かっている直近の四半期の売上の前年同期比（恩株ツールのSECのデータ。ない銘柄は0）
+        if sym not in _REVG:
+            import onkabu_lib as _ol
+            rows_ = _ol.load_rev_rows(sym, cache)
+            if rows_ and sym in data:
+                rv_, _ = _ol.rev_by_day(data[sym]["date"], rows_)
+                _REVG[sym] = {x: (0.0 if v != v else float(v)) for x, v in zip(data[sym]["date"], rv_)}
+            else:
+                _REVG[sym] = {}
+        return _REVG[sym].get(d, 0.0)
     PR = {"slope": lambda t: (0 if t["ai"] else 1, t["s50"]),
+          "rs_pre5": lambda t: (0 if t["ai"] else 1, -(rs_at(t, 5) if t["rule"] in ("B", "C") else t["rs"])),
+          "rs_pre10": lambda t: (0 if t["ai"] else 1, -(rs_at(t, 10) if t["rule"] in ("B", "C") else t["rs"])),
+          "rs_pre20": lambda t: (0 if t["ai"] else 1, -(rs_at(t, 20) if t["rule"] in ("B", "C") else t["rs"])),
+          "rs_resid": lambda t: (0 if t["ai"] else 1, -resid(t)),
+          "rs_rev10": lambda t: (0 if t["ai"] else 1, -int(t["rs"] // 10), -revg(t["sym"], t["sd"])),
+          "rs_rev5": lambda t: (0 if t["ai"] else 1, -int(t["rs"] // 5), -revg(t["sym"], t["sd"])),
+          "rs_rev20": lambda t: (0 if t["ai"] else 1, -int(t["rs"] // 20), -revg(t["sym"], t["sd"])),
           "rs": lambda t: (0 if t["ai"] else 1, -t["rs"]),
           "rs_noai": lambda t: -t["rs"],
           "grp63": lambda t: (grank(t["sym"], t["sd"], 63), -t["rs"]),   # 2026-11-04: 直近3か月で強いグループの候補から
@@ -4171,9 +4351,33 @@ def opt_stage(base, data, sim, days, ind, cache, part):
           "rs_recent": lambda t: (0 if t["ai"] and t.get("ai_good") else 1, -t["rs"]),
           # 2026-10-31: 早めの警告・S2の日は、AI以外を先に買う（ふだんはAIを先に）
           "rs_warn_out": lambda t: (0 if (t["ai"] if t["sd"] not in WARN else not t["ai"]) else 1, -t["rs"])}
+    for _n in range(200):   # 2026-11-15 手2のでたらめな順番（200通り）
+        PR[f"rs_noise{_n}"] = (lambda n: (lambda t: (0 if t["ai"] else 1, -rs_noise(t, n))))(_n)
     # 形: 名前 → 決まり（変えない項目は今のルール）
     BASE = {"rules": ("B", "C", "M", "V"), "prio": "slope", "streak": None, "slots": 4, "cap": 2, "etf": "reg", "stop": STOP, "rel8": False, "swap": None, "xsell": None, "s2": False, "close_stop": False, "hotwait": False, "c10": False, "kx": None, "kb": None, "bsect": False, "indtop": None, "tstop": None, "pstop": None, "m30": False, "c15": False, "lim2": False, "hadd": None, "ichi": False, "outside": False, "abn": None, "gem": None, "resv": None, "stg": None, "rr": None, "bmid": False, "c20": False, "vixrev": None}
     V1 = {"今のルール（傾きの小さい順）": {},
+          # 2026-11-14 Fableの次の策（`新分析ツール/Fableの提案_2026-11-13.md` 9節）
+          "策1 税: 年末にまとめて払う（今までの前提・最後の日に精算）": {"taxmode": "yearend"},
+          "策1 税: 売るたびに引かれる（源泉徴収あり＝今の口座）": {"taxmode": "sale"},
+          "策1 税: 源泉徴収ありで確定申告し損を3年繰り越す": {"taxmode": "sale", "carry": 3},
+          "策1 税: 源泉徴収あり・繰越・年末の損出し": {"taxmode": "sale", "carry": 3, "harvest": True},
+          "策1 税: 翌年3月に払う（源泉徴収なし）": {"taxmode": "march"},
+          "策1 税: 翌年3月・損を3年繰り越す": {"taxmode": "march", "carry": 3},
+          "策1 税: 翌年3月・繰越・年末の損出し": {"taxmode": "march", "carry": 3, "harvest": True},
+          "策2 手数料: ベーシック（片道0.132%）": {"cost": 0.00132, "qfee": 0.00132},
+          "策2 手数料: アドバンス（1回3,000ドル、片道約0.08%）": {"cost": 0.0008, "qfee": 0.0008},
+          "策2 手数料: アドバンス（1回10,000ドル、片道約0.035%）": {"cost": 0.00035, "qfee": 0.00035},
+          "策3 2倍ETFの代わりに信用買い（金利4.5%）": {"marg": 0.045},
+          "策3 2倍ETFの代わりに信用買い（金利6.5%）": {"marg": 0.065},
+          "策5 買う順番: RSを10刻み、同じ中は売上の伸びの大きい順": {"prio": "rs_rev10"},
+          "策5 買う順番: RSを5刻み、同じ中は売上の伸びの大きい順": {"prio": "rs_rev5"},
+          "策5 買う順番: RSを20刻み、同じ中は売上の伸びの大きい順": {"prio": "rs_rev20"},
+          # 2026-11-15 手5（Fableの提案 `Fableの提案_未解決の課題_2026-11-15.md` 6節）: 採用済みの売り方の部品を外す
+          "手5 売り方: 押し目の上部バンドの指値を外す": {"nosell": ("lim",)},
+          "手5 売り方: 順張りの反転の合図で半分売りを外す": {"nosell": ("half",)},
+          "手5 売り方: 順張りのかぶせ線を外す": {"nosell": ("dc",)},
+          "手5 売り方: 逆張りの大陰線を外す": {"nosell": ("bear",)},
+          "手5 売り方: 4つとも外す": {"nosell": ("lim", "half", "dc", "bear")},
           "買う順番: RSの高い順": {"prio": "rs"},
           "買う順番: RSの高い順、同じ銘柄の2ルールは急落の底で買う": {"prio": "rs_dupC"},
           "買う順番: RSの高い順、同じ銘柄の2ルールは押し目で買う": {"prio": "rs_dupB"},
@@ -4522,6 +4726,21 @@ def opt_stage(base, data, sim, days, ind, cache, part):
         V1[f"底を待つ: {lab_}"] = {"skip": ("wait_" + k_, "theme")}
         V1[f"底の後40日は2倍ETF: {lab_}"] = {"etf": "boost_" + k_}
         V1[f"底でSOXXを1枠: {lab_}"] = {"idx": (k_, "ma50", 120, True)}
+    for k_ in (5, 10, 20):   # 2026-11-15 手2（Fableの提案 4節）
+        V1[f"手2 RS: 逆張りは{k_}取引日前のRSで並べる"] = {"prio": f"rs_pre{k_}"}
+    V1["手2 RS: テーマと市場に連れた分を除いたRSで並べる"] = {"prio": "rs_resid"}
+    V1["手4 元の株: 過熱した順張り（①）"] = {"no2x": ("hot",)}   # 2026-11-15 手4（Fableの提案 5節）
+    for n_ in (3, 5, 10):
+        V1[f"手4 元の株: 決算まで{n_}営業日以内（②）"] = {"no2x": (f"earn{n_}",)}
+    V1["手4 元の株: 50日線より下で下向きの逆張り（④）"] = {"no2x": ("down",)}
+    V1["手4 元の株: ①②④（決算は5営業日）"] = {"no2x": ("hot", "earn5", "down")}
+    for q_ in (20, 30, 40):   # 2026-11-15 M2 の2段目（OPT_META_WATCH=87 か free を付けて動かす）
+        V1[f"M2 元の株: メタラベルの点数の上位{q_}%（毎年作り直し）"] = {"no2x": (f"meta{q_}",)}
+    for f_ in ("0.10", "0.20", "0.30", "0.40"):
+        for n_ in range(20):
+            V1[f"手4 でたらめ: 2倍ETFの売買の{f_}を元の株に{n_}"] = {"no2x": (f"rand{n_}_{f_}",)}
+    for n_ in range(200):
+        V1[f"手2 でたらめ: RSに±10の乱数{n_}"] = {"prio": f"rs_noise{n_}"}
     if os.environ.get("OPT_LISTFORMS"):   # 2026-11-12: 全部の形の名前を書き出して終わる（古い・甘い検証のやり直し用）
         json.dump(list(V1), open(os.environ["OPT_LISTFORMS"], "w"), ensure_ascii=False)
         print(f"形の数 {len(V1)}", file=sys.stderr)
@@ -4533,7 +4752,7 @@ def opt_stage(base, data, sim, days, ind, cache, part):
     def make(spec):
         sp = {**BASE, **spec}
         trs = [t for t in stock_trades(sp["stop"], sp["rel8"], sp["xsell"], sp["close_stop"], sp["hotwait"], sp["c10"], sp["kx"], sp["tstop"], sp["pstop"], sp["m30"],
-                                       sp["lim2"], sp["hadd"], sp["gem"], sp["stg"], sp["rr"], sp["bmid"], sp["c20"], delay=sp.get("delay"))
+                                       sp["lim2"], sp["hadd"], sp["gem"], sp["stg"], sp["rr"], sp["bmid"], sp["c20"], delay=sp.get("delay"), nosell=sp.get("nosell", ()))
                if t["rule"] in sp["rules"] and (not t["x"] or (t["x"] == "c15" and sp["c15"]) or (t["x"] == "out" and sp["outside"])
                                                  or (t["x"] == "resv" and sp["resv"] and t["rule"] in sp["resv"]))]
         if sp["vixrev"]:   # 逆張りは市場の恐怖が大きい日だけ買う（2026-10-26、ちょる子氏の Fear & Greed 20未満の代わりにVIX）: 合図の日のVIXの終値が thr 以上の日だけ
@@ -4764,7 +4983,32 @@ def opt_stage(base, data, sim, days, ind, cache, part):
                 trs = [{**t, "prio": (0 if (t["x"] == "out") == (t["sd"] in WARN) else 1,) + (t["prio"] if isinstance(t["prio"], tuple) else (t["prio"],))} for t in trs]
             else:
                 trs = [{**t, "prio": (1 if t["x"] == "out" else 0,) + (t["prio"] if isinstance(t["prio"], tuple) else (t["prio"],))} for t in trs]
+        if sp.get("no2x"):   # 2026-11-15 手4（Fableの提案 5節）: 合図ごとの条件で、上昇の局面でも2倍ETFを使わず元の株で買う
+            trs = [{**t, "no2x": True} if not t.get("ghost") and no2x_hit(t, sp["no2x"]) else t for t in trs]
+            el_ = [t for t in trs if not t.get("ghost") and t["sym"] in HAS and prev(t["in"]) in up]
+            print("手4 2倍ETFになりうる売買", len(el_), "元の株にした", sum(1 for t in el_ if t.get("no2x")), sp["no2x"], file=sys.stderr)
         trs = lev(trs, sp["etf"])
+        if sp.get("marg"):   # 2026-11-14 策3: 2倍ETFで買う売買を、元の株の信用買い（自分の資金1＋借りる1、2倍を合わせ直さない）に置き換える。
+            # 資金 = 2×(1−費用)×株の値上がり率 − 1 − 金利（年 r、360日で日割り、暦の日数）。売るときの費用は2単位分（path0 の最後の日に入っている）
+            r_ = sp["marg"]
+            out_ = []
+            for t in trs:
+                if t.get("L") != 2 or not t.get("path0"):
+                    out_.append(t)
+                    continue
+                d0_ = dt.date.fromisoformat(t["in"])
+                pv_ = {}
+                for d in sorted(t["path0"]):
+                    x_ = t["path0"][d] / (1 - COST)
+                    i_ = (1 + r_ / 360) ** (dt.date.fromisoformat(d) - d0_).days - 1
+                    pv_[d] = max(0.0, 2 * (1 - COST) * x_ - 1 - i_)
+                out_.append({**t, "path": pv_, "margin2x": True})
+            trs = out_
+        if sp.get("cost") is not None:   # 2026-11-14 策2: 株・2倍ETFの片道の費用を cost にする（買いの費用は全部の日に、売りの費用は売った日に掛ける）
+            k_ = (1 - sp["cost"]) / (1 - COST)
+            trs = [t if t.get("ghost") else {**t, "path": {d: v * k_ * (k_ if d == t["out"] else 1.0) for d, v in t["path"].items()}, "hcost": sp["cost"]} for t in trs]
+        if sp.get("taxmode") or sp.get("qfee") is not None:   # 2026-11-14 策1・策2（port で計算）
+            trs = [{**t, "taxmode": sp.get("taxmode"), "carry": sp.get("carry", 0), "harvest": sp.get("harvest", False), "qfee": sp.get("qfee")} for t in trs]
         if sp.get("buydown"):   # 2026-11-03 ユーザーの指示: 買い下がり。合図で枠の半分を買い、終値が買値から x 以上下げた日の引けで残りの半分を買う（押し目・急落の底）
             x_, rr_ = sp["buydown"]
             out_ = []
