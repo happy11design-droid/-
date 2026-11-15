@@ -65,11 +65,80 @@ def verdicts(d):
     return out
 
 
+REASON_TAGS = [   # 2026-11-15 手6（Fableの提案）: 著者の回答の「あり」の行にある言葉で選ぶ。Claudeが理由を推測しない（言葉がなければ「その他」）
+    ("決算が近い", re.compile(r"決算")),
+    ("過熱・高値から離れすぎ", re.compile(r"過熱|離れ|乖離|買われすぎ|伸びきり|伸びすぎ|追随")),
+    ("出来高が足りない", re.compile(r"出来高")),
+    ("トレンドが崩れている", re.compile(r"下降|下向き|崩れ|割れ|割り込|50日線.*下|200日線.*下|30週線.*下|トレンドの終")),
+    ("悪いニュース・材料", re.compile(r"悪材料|ニュース|格下げ|不祥事|スキャンダル|訴訟|下方修正")),
+    ("市場・テーマの局面", re.compile(r"市場全体|地合い|局面|テーマ|ステージ|相場")),
+    ("本の条件を満たしていない", re.compile(r"条件|満たさ|満たしていない|禁じ|規定外|該当しない")),
+]
+
+
+def reasons(d):
+    """answers/1_*.txt から {(銘柄, 保有中か): (止める理由の区分, 著者の文)}。「止める理由の確認」の「｜あり｜」の行だけを使う"""
+    out = {}
+    for f in sorted(glob.glob(os.path.join(d, "answers", "1_*.txt"))):
+        sym, hold = None, False
+        for line in open(f, encoding="utf-8"):
+            m = re.match(r"^##\s*([A-Z][A-Z.]*)", line)
+            if m:
+                sym, hold = m.group(1), "保有" in line
+                continue
+            if not sym or "｜あり｜" not in line:
+                continue
+            body = line.split("｜あり｜", 1)[1].strip().strip("|｜ ")
+            body = re.sub(r"\s*\[[0-9, \-]+\]", "", body)
+            pos = "。".join(x for x in re.split(r"[。]", body) if x and not re.search(r"規定なし|規定がない|規定はない|該当しない|該当なし|当てはまらない", x))   # 「決算の規定はない」などの否定の文は区分に使わない
+            tags = [t for t, rx in REASON_TAGS if rx.search(pos)] or ["その他"]
+            tg, tx = out.get((sym, hold), ([], []))
+            out[(sym, hold)] = (sorted(set(tg + tags), key=[t for t, _ in REASON_TAGS].__add__(["その他"]).index), tx + [body])
+    return out
+
+
+SHOCK_TYPES = [   # 2026-11-15 手7（Fableの提案）: 天気予報の「天気」と「値動きの材料」の見出しにある言葉で選ぶ
+    ("信用", re.compile(r"信用|社債|CDS|格下げ|デフォルト|資金調達|クレジット")),
+    ("決算", re.compile(r"決算")),
+    ("政策・規制", re.compile(r"規制|関税|輸出|制裁|政策|選挙|大統領|法案")),
+    ("金利", re.compile(r"金利|利回り|FOMC|利上げ|利下げ|インフレ|物価|CPI")),
+    ("供給・競合", re.compile(r"増産|競合|供給|価格競争|シェア|新製品")),
+]
+
+
+def shock_of(d, run_date):
+    """その朝の相場天気予報から、材料の種類と広がり（記録だけ）。広がりは指数の騰落率で決める:
+    S&P500 が −1%以下なら「市場全体」、SOX が −2%以下なら「テーマ全体」、それ以外で下げの材料があれば「1社・1つのグループ」"""
+    cands_ = [os.path.join(d, "..", "..", "相場天気予報", run_date + ".md"), os.path.join(d, "..", "相場天気予報", run_date + ".md")]
+    f = next((x for x in cands_ if os.path.exists(x)), None)
+    if not f:
+        return None
+    t = open(f, encoding="utf-8").read()
+    wl = re.search(r"^weather:\s*(.+)$", t, re.M)
+    heads = re.findall(r"^- \*\*([^*]+)\*\*", t, re.M)
+    text = (wl.group(1) if wl else "") + " " + " ".join(heads)
+    types = [k for k, rx in SHOCK_TYPES if rx.search(text)]
+    def pctof(name):
+        m = re.search(name + r"[^（]*（([+\-−]?[0-9.]+)%", t)
+        return float(m.group(1).replace("−", "-")) / 100 if m else None
+    sp, sx = pctof("S&P500"), pctof("SOX指数")
+    scope = "なし"
+    if sp is not None and sp <= -0.01:
+        scope = "市場全体"
+    elif sx is not None and sx <= -0.02:
+        scope = "テーマ全体"
+    elif re.search(r"下落|急落|安|下げ", text):
+        scope = "1社・1つのグループ"
+    return {"shock_type": types or ["なし"], "shock_scope": scope, "shock_heads": heads[:3], "sp500_chg": sp, "sox_chg": sx,
+            "weather": wl.group(1).strip() if wl else None}
+
+
 def cmd_record(a):
     d = a.dir
     scan = open(os.path.join(d, "scan.md"), encoding="utf-8").read()
     trade_date = re.search(r"（(\d{4}-\d{2}-\d{2})の引け時点）", scan).group(1)
     v = verdicts(d)
+    rz = reasons(d)
     stage = ""
     f0 = glob.glob(os.path.join(d, "answers", "0_*.txt"))
     if f0:
@@ -87,7 +156,9 @@ def cmd_record(a):
         cands.append({"sym": r["銘柄"], "kind": r["種類"], "pattern": r.get("パターン", "A"), "close": float(r["終値"]),
                       "limit": float(lim.group(1)) if lim else None,
                       "stop_buy": float(stp.group(1)) if stp else None, "limit_buy": float(lmt.group(1)) if lmt else None,
-                      "verdict": vv[0], "author": vv[1]})
+                      "verdict": vv[0], "author": vv[1],
+                      # 2026-11-15 手6: 止める理由の区分と、著者の文（「止める理由の確認」の「あり」の行）
+                      "reason_tags": rz.get((r["銘柄"], False), ([], []))[0], "reason_text": " / ".join(rz.get((r["銘柄"], False), ([], []))[1])})
     # 過熱（+2σより上かつRSI(14)>70）の記録。theme_scan が書く cands_meta.json から移す（レビューには出さない。2026-10-10 ユーザーの指示）
     mp = os.path.join(d, "cands_meta.json")
     if os.path.exists(mp):
@@ -98,6 +169,8 @@ def cmd_record(a):
             c["s2_skip"] = m_.get("s2_skip")
             c["badnews"] = m_.get("badnews")   # 悪いニュースが続いているグループの候補か（2026-11-04）
             c["goodnews"] = m_.get("goodnews")   # 良いニュースが多いグループの候補か（2026-11-05）
+            for k_ in ("below50", "down50", "vol_ratio", "days_to_earn"):   # 2026-11-15 手6: 合図の日の事実（記録だけ）
+                c[k_] = m_.get(k_)
     holds = []
     cand_syms = {c["sym"] for c in cands}
     for r in table_rows(scan, "## 5."):
@@ -114,6 +187,10 @@ def cmd_record(a):
            "omitted": (json.load(open(mp, encoding="utf-8")).get("_omitted", []) if os.path.exists(mp) else []),
            # 参考の表示だけの予約（B）の候補（2026-10-25〜 注文しない）
            "ref_b": (json.load(open(mp, encoding="utf-8")).get("_ref_b", []) if os.path.exists(mp) else [])}
+    try:   # 2026-11-15 手7: その朝の天気予報の材料の種類と広がり（記録だけ）
+        rec["shock"] = shock_of(d, rec["run_date"])
+    except Exception as e_:
+        rec["shock"] = {"error": f"{type(e_).__name__}: {e_}"}
     path = os.path.join(d, "record.json")
     json.dump(rec, open(path, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
     print(path)
@@ -258,6 +335,10 @@ def cmd_review(a):
         else:
             w(f"| {x['date']} | {x['sym']} | {x['kind']} | {x['verdict']} | | | | {x['status']} |")
 
+    try:
+        same_day(rows, w)
+    except Exception as e_:   # 週次レビューを止めない
+        w(f"\n（同じ日どうしの比べは計算できなかった: {type(e_).__name__}: {e_}）")
     w("\n## 3. 保有銘柄で【売り】（旧【早めに手じまう】）となったもの\n")
     w("その日の翌日の寄り付きで手じまった場合と、ルールどおり持ち続けた場合の比較。\n")
     w("| 日 | 銘柄 | ルール | 翌日の寄り付きで手じまい | ルールどおり（手じまい日・価格・理由） | 差（早めの手じまい − ルール） |")
@@ -284,6 +365,11 @@ def cmd_review(a):
         weather_check(a.dir, rows, w)
     except Exception as e_:   # 週次レビューを止めない
         w(f"\n## 5. 天気予報とニュースの答え合わせ\n\n計算できなかった（{type(e_).__name__}: {e_}）")
+    for fn_, nm_ in ((seq_tests, "6. 逐次の判断"), (monitor, "7. 効き目の見張り")):   # 2026-11-15 M3・M4（Fableの提案、ユーザーの指示「項目を足して」）
+        try:
+            fn_(rows, w)
+        except Exception as e_:   # 週次レビューを止めない
+            w(f"\n## {nm_}\n\n計算できなかった（{type(e_).__name__}: {e_}）")
     slip_text, alert = slippage(a.dir)
     if a.slip_out:
         open(a.slip_out, "w", encoding="utf-8").write(slip_text)     # 記録はいつも残す
@@ -293,6 +379,132 @@ def cmd_review(a):
     if a.out:
         open(a.out, "w", encoding="utf-8").write(text)
     print(text)
+
+
+def _done(x):
+    return "ret" in x and "保有中" not in x.get("status", "") and "期間中" not in x.get("status", "")
+
+
+def same_day(rows, w):
+    """2026-11-15 手6（Fableの提案）: 【買い】と【様子見】の両方があった日だけを取り、日ごとに D ＝【買い】の平均 −【様子見】の平均。
+    D がプラスなら、著者が【様子見】にした候補は同じ日の【買い】より悪かった（＝損を避けた）。売り終わった候補だけ"""
+    by = {}
+    for x in rows:
+        if not _done(x):
+            continue
+        g = "買い" if x["verdict"].startswith("買い") else "様子見" if x["verdict"] == "様子見" else None
+        if g:
+            by.setdefault(x["date"], {}).setdefault(g, []).append(x["ret"])
+    ds = [(d, sum(v["買い"]) / len(v["買い"]) - sum(v["様子見"]) / len(v["様子見"]), len(v["買い"]), len(v["様子見"]))
+          for d, v in sorted(by.items()) if v.get("買い") and v.get("様子見")]
+    w("\n### 2-2. 同じ日どうしの比べ（著者の【様子見】は損を避けたか。売り終わった候補だけ。記録だけ）\n")
+    if not ds:
+        w("両方の結論があった日はまだない。")
+        return
+    w("| 合図の日 | D（【買い】−【様子見】） | 【買い】の件数 | 【様子見】の件数 |\n|---|---|---|---|")
+    for d, v, nb, nw in ds:
+        w(f"| {d} | {v * 100:+.2f}% | {nb} | {nw} |")
+    w(f"\n- {len(ds)}日で D の平均 {sum(x[1] for x in ds) / len(ds) * 100:+.2f}%、D がプラスの日 {sum(1 for x in ds if x[1] > 0)}日（プラスなら【様子見】が損を避けた）")
+
+
+SPRT = {"a": 0.3365, "b": -0.5108, "up": 2.079, "dn": -1.504, "max": 52}   # プラスの週50%（効いていない）と70%（効いている）、誤り10%・20%（Wald 1945）
+
+
+def seq_tests(rows, w):
+    """2026-11-15 M3（Fableの提案 3節）: 週ごとに2つの群の差 D_週 を出し、ワルドの逐次確率比検定で判断する（記録だけ。売買のルールは変えない）。
+    一度「効いている」「効いていない」が出たら、その週で判断を止める（後から都合の良い所で見直さない）"""
+    def week(d):
+        y, k, _ = dt.date.fromisoformat(d).isocalendar()
+        return f"{y}-W{k:02d}"
+    def run(Dw):
+        sc, wn, ln, dec = 0.0, 0, 0, None
+        for wk_, v in Dw:
+            if v > 0:
+                wn += 1
+            elif v < 0:
+                ln += 1
+            else:
+                continue
+            sc = SPRT["a"] * wn + SPRT["b"] * ln
+            if dec is None and sc >= SPRT["up"]:
+                dec = ("効いている", wk_, wn + ln)
+            elif dec is None and sc <= SPRT["dn"]:
+                dec = ("効いていない", wk_, wn + ln)
+            if dec:
+                break
+        if dec is None and wn + ln >= SPRT["max"]:
+            dec = ("差は小さい（52週で決まらず。効いていない扱い）", Dw[-1][0], wn + ln)
+        need = 0
+        while SPRT["a"] * (wn + need) + SPRT["b"] * ln < SPRT["up"] and need < 60:
+            need += 1
+        return wn, ln, sc, dec, need
+    done = [x for x in rows if _done(x)]
+    # 著者の判定
+    byw = {}
+    for x in done:
+        g = "買い" if x["verdict"].startswith("買い") else "様子見" if x["verdict"] == "様子見" else None
+        if g:
+            byw.setdefault(week(x["date"]), {}).setdefault(x["date"], {}).setdefault(g, []).append(x["ret"])
+    Da = []
+    for wk_, dd in sorted(byw.items()):
+        v = [sum(g["買い"]) / len(g["買い"]) - sum(g["様子見"]) / len(g["様子見"]) for g in dd.values() if g.get("買い") and g.get("様子見")]
+        if v:
+            Da.append((wk_, sum(v) / len(v)))
+    # 過熱した合図（順張りの候補で、過熱でない − 過熱）
+    byh = {}
+    for x in done:
+        if ("ミネルヴィニ" in x["kind"] or "新高値" in x["kind"]) and x.get("hot") is not None:
+            byh.setdefault(week(x["date"]), {}).setdefault(bool(x["hot"]), []).append(x["ret"])
+    Dh = [(wk_, sum(g[False]) / len(g[False]) - sum(g[True]) / len(g[True])) for wk_, g in sorted(byh.items()) if g.get(False) and g.get(True)]
+    w("\n## 6. 逐次の判断（記録だけ。売買のルールは変えない）\n")
+    w("週ごとに2つの群の差 D_週 を出し、プラスの週 w・マイナスの週 l から 点数 ＝ 0.3365×w − 0.5108×l。+2.079 以上で「効いている」、−1.504 以下で「効いていない」、"
+      "その間は続ける（Fableの提案 `Fableの提案_確かめ方_2026-11-15.md` 3節）。「効いている」は採用ではなく、バックテストと合わせて検討を始める合図。売り終わった候補だけ。\n")
+    w("| 対象 | D_週（プラスなら効いている向き） | 数えた週 | プラスの週 | マイナスの週 | 点数 | 判断 | D_週の平均 | 「効いている」まで、あとプラスの週 |")
+    w("|---|---|---|---|---|---|---|---|---|")
+    for nm, Dw, defi in (("著者の判定", Da, "【買い】−【様子見】"), ("過熱した合図", Dh, "過熱でない順張り − 過熱の順張り")):
+        wn, ln, sc, dec, need = run(Dw)
+        avg = f"{sum(v for _, v in Dw) / len(Dw) * 100:+.2f}%" if Dw else "—"
+        jd = f"**{dec[0]}**（{dec[1]}、{dec[2]}週目）" if dec else "続ける"
+        w(f"| {nm} | {defi} | {wn + ln} | {wn} | {ln} | {sc:+.3f} | {jd} | {avg} | {need if not dec else '—'} |")
+    w("\n- 下げの理由（手1）は1段目で通らなかったので数えない。ショックの広がり（手7）は record.json の shock がたまってから足す。")
+
+
+def monitor(rows, w):
+    """2026-11-15 M4（Fableの提案 4節）: 急落の底の、指数（SOX）の分を除いた損益を、売った月ごとに見張る（CUSUM。知らせるだけ）"""
+    bp = os.path.join(TOOLS, "..", "新分析ツール", "見張りの基準.json")
+    base = json.load(open(bp, encoding="utf-8"))
+    b = base["急落の底_指数の分を除いた損益"]["87銘柄_SOX"]
+    sox = fetch_daily("^SOX")
+    sd = sox["date"]
+    def px(d):
+        k = max((j for j, x in enumerate(sd) if x <= d), default=None)
+        return sox["c"][k] if k is not None else None
+    by = {}
+    for x in rows:
+        if _done(x) and "急落の底" in x["kind"] and x.get("exit_date"):
+            p0, p1 = px(x["date"]), px(x["exit_date"])
+            if p0 and p1:
+                by.setdefault(x["exit_date"][:7], []).append(x["ret"] - b["beta"] * (p1 / p0 - 1))
+    vals = [(m, sum(v) / len(v), len(v)) for m, v in sorted(by.items()) if len(v) >= 2]
+    w("\n## 7. 効き目の見張り（知らせるだけ。売買のルールは変えない）\n")
+    w(f"急落の底の、指数（SOX）の分を除いた損益（損益 − {b['beta']:.2f}×同じ期間のSOXの騰落率）を、売った月ごとに平均し（2件以上の月）、"
+      f"2015〜2020年のバックテストの基準（月の平均 {b['mean'] * 100:+.2f}%・ばらつき {b['sd'] * 100:.2f}%）と比べる（CUSUM。Fableの提案 4節。基準は `新分析ツール/見張りの基準.json`）。\n")
+    if not vals:
+        w("まだ数えられる月がない（売り終わった急落の底の候補が2件以上の月がない）。")
+        return
+    w("| 売った月 | 件数 | 指数の分を除いた1回平均 | 大きな崩れ用のたまり（h=3） | ゆっくり用のたまり（h=6） |\n|---|---|---|---|---|")
+    S1 = S2 = 0.0
+    al = []
+    for m, v, n in vals:
+        z = max(-3.0, min(3.0, (v - b["mean"]) / b["sd"]))
+        S1 = max(0.0, S1 - z - 0.5)
+        S2 = max(0.0, S2 - z - 0.15)
+        f1, f2 = S1 >= 3, S2 >= 6
+        if f1 or f2:
+            al.append(m)
+        w(f"| {m} | {n} | {v * 100:+.2f}% | {S1:.2f}{' **知らせ**' if f1 else ''} | {S2:.2f}{' **知らせ**' if f2 else ''} |")
+        S1, S2 = (0.0 if f1 else S1), (0.0 if f2 else S2)
+    w(f"\n- 知らせ: {'、'.join(al) + '（その月がSOXの急落の時期かも見る。過去の知らせは底の近くだった。ルールを変えるかはユーザーが決める）' if al else 'なし（今の成績の悪さは、いつものばらつきの範囲）'}")
 
 
 SHOCK_WORDS = re.compile(r"ショック|CDS|社債|信用不安|信用スプレッド|デフォルト|格下げ|資金調達不安|債務")
