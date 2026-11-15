@@ -44,6 +44,16 @@ def nw_t(x, lag=20):
     return m / se, se
 
 
+def lab(n, base, w=70):
+    """表の形の名前: 今のルールと同じ始まりを除く（「＋QQQ＋ステージ2」と「＋ステージ2」を見分けるため）"""
+    i = 0
+    while i < min(len(n), len(base)) and n[i] == base[i]:
+        i += 1
+    j = n.rfind("＋", 0, i + 1) if i < len(n) else -1
+    t = n[j + 1:] if 0 <= j and i < len(n) else n.split("＋")[-1]
+    return t[:w]
+
+
 def chance_max_t(K, reps=20000, seed=0):
     if K <= 0:
         return None, None
@@ -154,7 +164,7 @@ def run_eq(a):
         w(f"- まとめての検定（一番良い形の t値 {tmax:.2f}）: ホワイトの形 p={pw:.3f}、ハンセンの形 p={ph:.3f}")
     w("\n| 形 | 毎日の差の t値 | 年あたりの差 |\n|---|---|---|")
     for k in np.argsort(ts)[::-1]:
-        w(f"| {cand[k].split('＋')[-1][:70]} | {ts[k]:.2f} | {X[k].mean() * 252 * 100:+.1f}pt |")
+        w(f"| {lab(cand[k], base)} | {ts[k]:.2f} | {X[k].mean() * 252 * 100:+.1f}pt |")
     return "\n".join(out)
 
 
@@ -200,10 +210,10 @@ def run_roll(a):
     if K <= 40:
         w("\n| 形 | 重ならない区切りの t値（取り方の平均） |\n|---|---|")
         for k in np.argsort(tmean)[::-1]:
-            w(f"| {cand[k].split('＋')[-1][:70]} | {tmean[k]:.2f} |")
+            w(f"| {lab(cand[k], base, 90)} | {tmean[k]:.2f} |")
     else:
         top = np.argsort(tmean)[::-1][:5]
-        w("- t値の上位5つ: " + "、".join(f"{cand[k].split('＋')[-1][:40]} {tmean[k]:.2f}" for k in top))
+        w("- t値の上位5つ: " + "、".join(f"{lab(cand[k], base, 50)} {tmean[k]:.2f}" for k in top))
     return "\n".join(out)
 
 
