@@ -4270,6 +4270,13 @@ def opt_stage(base, data, sim, days, ind, cache, part):
                 m_, m10_ = s_["ma50"][i_], s_["ma50"][i_ - 10]
                 if m_ is not None and m10_ is not None and s_["c"][i_] < m_ and m_ < m10_:
                     return True
+            elif c_.startswith("meta"):   # 2026-11-15 M2（メタラベリング）: 毎年作り直した点数で「損で終わりやすい」合図（tools/meta_label_check.py --dump）
+                if "meta" not in _RSI14:
+                    import json as _jm
+                    _RSI14["meta"] = _jm.load(open(os.path.join(cache, "results", "meta_flags.json")))
+                lst_ = _RSI14.setdefault(("metaset", c_), set(_RSI14["meta"].get(os.environ.get("OPT_META_WATCH", "free"), {}).get(c_[4:], [])))
+                if f"{t['sym']}|{t['sd']}|{t['rule']}" in lst_:
+                    return True
             elif c_.startswith("rand"):   # でたらめ: rand<n>_<割合>。2倍ETFになりうる売買を、その割合だけ乱数で元の株にする
                 n_, f_ = c_[4:].split("_")
                 if t["sym"] in HAS and prev(t["in"]) in up and random.Random(f"{n_}|{t['sym']}|{t['in']}").random() < float(f_):
@@ -4727,6 +4734,8 @@ def opt_stage(base, data, sim, days, ind, cache, part):
         V1[f"手4 元の株: 決算まで{n_}営業日以内（②）"] = {"no2x": (f"earn{n_}",)}
     V1["手4 元の株: 50日線より下で下向きの逆張り（④）"] = {"no2x": ("down",)}
     V1["手4 元の株: ①②④（決算は5営業日）"] = {"no2x": ("hot", "earn5", "down")}
+    for q_ in (20, 30, 40):   # 2026-11-15 M2 の2段目（OPT_META_WATCH=87 か free を付けて動かす）
+        V1[f"M2 元の株: メタラベルの点数の上位{q_}%（毎年作り直し）"] = {"no2x": (f"meta{q_}",)}
     for f_ in ("0.10", "0.20", "0.30", "0.40"):
         for n_ in range(20):
             V1[f"手4 でたらめ: 2倍ETFの売買の{f_}を元の株に{n_}"] = {"no2x": (f"rand{n_}_{f_}",)}
