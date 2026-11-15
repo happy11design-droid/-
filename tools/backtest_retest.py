@@ -616,6 +616,25 @@ def main():
             j += 1
         return None
 
+    def b3_exit_nl(t):   # 2026-11-15 手5: 上部バンドの指値を外した押し目の手じまい（引けで %b≧1 なら翌日の寄り付き、損切り・60日は同じ）
+        s, sym = data[t["sym"]], t["sym"]
+        o, h, l, c = s["o"], s["h"], s["l"], s["c"]
+        i0, n, px = idx(sym, t["in"]), len(c), t["px"]
+        if i0 >= n - 1:
+            return None
+        floor, pend, j = px * (1 - STOP), False, i0
+        while j < n:
+            if pend:
+                return j, o[j]
+            if l[j] <= floor:
+                return j, min(o[j] if j > i0 else px, floor)
+            if j + 1 >= n:
+                return (j, c[j]) if bl.KEEP_OPEN else None
+            if j - i0 >= bs.MAX_HOLD or (s["pctb"][j] is not None and s["pctb"][j] >= 1.0):
+                pend = True
+            j += 1
+        return None
+
     old, bs.STOP_MAX = bs.STOP_MAX, STOP
     try:
         b3_raw = bs.simulate(data, members, bs.O_method3, bs.X_upper_band, cb.START, end, ok=ctx["ok_rot"])
@@ -1103,6 +1122,7 @@ def main():
         return
     if a.stage in ("opt1", "opt2"):
         sim.b3x = b3_exit
+        sim.b3x_nl = b3_exit_nl
         if not (a.keep_open and a.overlap):
             sys.exit("opt は --keep-open --overlap で動かす")
         return opt_stage(base, data, sim, days, ind, a.cache, int(a.stage[-1]))
@@ -3724,8 +3744,8 @@ def opt_stage(base, data, sim, days, ind, cache, part):
         return None
 
     def stock_trades(stop, rel8=False, xsell=None, close_stop=False, hotwait=False, c10=False, kx=None, tstop=None, pstop=None, m30=False, lim2=False, hadd=None, gem=None, stg=None, rr=None,
-                     bmid=False, c20=False, delay=None):
-        key_ = (stop, rel8, xsell, close_stop, hotwait, c10, kx, tstop, pstop, m30, lim2, hadd, gem, stg, rr, bmid, c20, delay)
+                     bmid=False, c20=False, delay=None, nosell=()):
+        key_ = (stop, rel8, xsell, close_stop, hotwait, c10, kx, tstop, pstop, m30, lim2, hadd, gem, stg, rr, bmid, c20, delay, tuple(nosell))
         if key_ in cache_tr:
             return cache_tr[key_]
         out = []
@@ -3881,7 +3901,16 @@ def opt_stage(base, data, sim, days, ind, cache, part):
                   "evening": _xsig.evening_star, "bear": _rb.big_bear, "macddc": _rb.macd_dc, "mfi": mfi_div, "obv": obv_div, "chikou": chikou_down,
                   "c3": xc.c3, "c2": xc.c2}
             br_ = b["rule"] not in ("G", "U", "K", "L")   # 足した合図のうち、元の計算で出来高2倍の大陰線の売りがなかったもの
-            if xsell:
+            # 2026-11-15 手5（Fableの提案）: 採用済みの売り方の部品を外す。"lim"＝押し目の上部バンドの指値、"half"＝順張りの反転の合図で半分売り、
+            # "dc"＝順張りのかぶせ線で全部売り、"bear"＝逆張りの出来高2倍の大陰線で全部売り
+            if "lim" in nosell and b["rule"] == "B":
+                x_ = sim.b3x_nl({"sym": b["sym"], "in": s["date"][b["i0"]], "px": b["px"]})
+                if not x_:
+                    continue
+                b = {**b, "i1": x_[0], "xp": x_[1]}
+            if nosell and not xsell:
+                p = sim(b, half=(None if "half" in nosell else xc.c1), full_dc="dc" not in nosell, bear_rev=br_ and "bear" not in nosell)
+            elif xsell:
                 nms_, rr_ = (xsell, ("M", "V")) if isinstance(xsell, str) else xsell
                 nms_ = (nms_,) if isinstance(nms_, str) else nms_
                 p = sim(b, half=xc.c1, extra=tuple(XF[n_] for n_ in nms_), extra_rules=rr_, bear_rev=br_)
@@ -4260,6 +4289,12 @@ def opt_stage(base, data, sim, days, ind, cache, part):
           "策5 買う順番: RSを10刻み、同じ中は売上の伸びの大きい順": {"prio": "rs_rev10"},
           "策5 買う順番: RSを5刻み、同じ中は売上の伸びの大きい順": {"prio": "rs_rev5"},
           "策5 買う順番: RSを20刻み、同じ中は売上の伸びの大きい順": {"prio": "rs_rev20"},
+          # 2026-11-15 手5（Fableの提案 `Fableの提案_未解決の課題_2026-11-15.md` 6節）: 採用済みの売り方の部品を外す
+          "手5 売り方: 押し目の上部バンドの指値を外す": {"nosell": ("lim",)},
+          "手5 売り方: 順張りの反転の合図で半分売りを外す": {"nosell": ("half",)},
+          "手5 売り方: 順張りのかぶせ線を外す": {"nosell": ("dc",)},
+          "手5 売り方: 逆張りの大陰線を外す": {"nosell": ("bear",)},
+          "手5 売り方: 4つとも外す": {"nosell": ("lim", "half", "dc", "bear")},
           "買う順番: RSの高い順": {"prio": "rs"},
           "買う順番: RSの高い順、同じ銘柄の2ルールは急落の底で買う": {"prio": "rs_dupC"},
           "買う順番: RSの高い順、同じ銘柄の2ルールは押し目で買う": {"prio": "rs_dupB"},
@@ -4619,7 +4654,7 @@ def opt_stage(base, data, sim, days, ind, cache, part):
     def make(spec):
         sp = {**BASE, **spec}
         trs = [t for t in stock_trades(sp["stop"], sp["rel8"], sp["xsell"], sp["close_stop"], sp["hotwait"], sp["c10"], sp["kx"], sp["tstop"], sp["pstop"], sp["m30"],
-                                       sp["lim2"], sp["hadd"], sp["gem"], sp["stg"], sp["rr"], sp["bmid"], sp["c20"], delay=sp.get("delay"))
+                                       sp["lim2"], sp["hadd"], sp["gem"], sp["stg"], sp["rr"], sp["bmid"], sp["c20"], delay=sp.get("delay"), nosell=sp.get("nosell", ()))
                if t["rule"] in sp["rules"] and (not t["x"] or (t["x"] == "c15" and sp["c15"]) or (t["x"] == "out" and sp["outside"])
                                                  or (t["x"] == "resv" and sp["resv"] and t["rule"] in sp["resv"]))]
         if sp["vixrev"]:   # 逆張りは市場の恐怖が大きい日だけ買う（2026-10-26、ちょる子氏の Fear & Greed 20未満の代わりにVIX）: 合図の日のVIXの終値が thr 以上の日だけ
