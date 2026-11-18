@@ -1,0 +1,194 @@
+{
+ "trade_date": "2026-11-18",
+ "run_date": "2026-11-19",
+ "theme_stage": "【ステージ3】（急騰後に30週線が横ばい化し指数が下回る天井圏。第2章 [1]）",
+ "candidates": [
+  {
+   "sym": "SMCI",
+   "kind": "逆張り: 急落の底（担当: コナーズ）（指値の2日目）",
+   "pattern": "A",
+   "close": 24.37,
+   "limit": null,
+   "stop_buy": null,
+   "limit_buy": 23.66,
+   "verdict": "様子見",
+   "author": "コナーズ",
+   "hot": false,
+   "rsi14": 32.47893451698147,
+   "s50": -0.08131757832457642,
+   "rs": 2.712328767123288,
+   "s2_skip": false,
+   "badnews": false,
+   "goodnews": true
+  },
+  {
+   "sym": "ACN",
+   "kind": "逆張り: ボリンジャー メソッドIII",
+   "pattern": "A",
+   "close": 227.49,
+   "limit": null,
+   "stop_buy": null,
+   "limit_buy": null,
+   "verdict": "買い",
+   "author": "ボリンジャー",
+   "hot": false,
+   "rsi14": 41.70742623009586,
+   "s50": 0.14566486753638896,
+   "rs": 80.01369863013699,
+   "s2_skip": false,
+   "badnews": false,
+   "goodnews": false
+  },
+  {
+   "sym": "IBM",
+   "kind": "逆張り: ボリンジャー メソッドIII",
+   "pattern": "A",
+   "close": 228.53,
+   "limit": null,
+   "stop_buy": null,
+   "limit_buy": null,
+   "verdict": "買い",
+   "author": "ボリンジャー",
+   "hot": false,
+   "rsi14": 36.63603065568871,
+   "s50": 0.02483183622514562,
+   "rs": 23.24853228962818,
+   "s2_skip": false,
+   "badnews": false,
+   "goodnews": false
+  },
+  {
+   "sym": "INTU",
+   "kind": "逆張り: ボリンジャー メソッドIII",
+   "pattern": "A",
+   "close": 313.24,
+   "limit": null,
+   "stop_buy": null,
+   "limit_buy": null,
+   "verdict": "買い",
+   "author": "ボリンジャー",
+   "hot": false,
+   "rsi14": 40.01257797853608,
+   "s50": -0.007530570651817392,
+   "rs": 6.5870841487279845,
+   "s2_skip": false,
+   "badnews": false,
+   "goodnews": false
+  }
+ ],
+ "holdings": [
+  {
+   "sym": "SNDK",
+   "rule": "ルール外（ユーザーの判断。この日はどのルールの合図もなし）",
+   "buy_date": "2026-10-21",
+   "buy_price": 1371.3,
+   "verdict": "未判定",
+   "author": ""
+  },
+  {
+   "sym": "AMD",
+   "rule": "ボリンジャーIII",
+   "buy_date": "2026-10-21",
+   "buy_price": 549.97,
+   "verdict": "保有継続",
+   "author": "ボリンジャー"
+  }
+ ],
+ "s2": {
+  "on": true,
+  "label": "あり（S2）",
+  "close": 9652.796875,
+  "hi60": 13217.8203125,
+  "drop": -0.2697134136502508
+ },
+ "special": {
+  "on": true,
+  "label": "あり（特殊な下げ）",
+  "since": "2026-10-16",
+  "drop": -0.2697134136502508,
+  "n": 2,
+  "A": true,
+  "B": false,
+  "C": true
+ },
+ "group_news": {
+  "半導体": {
+   "n1": 27,
+   "n0": 13,
+   "per": 2.5,
+   "mark": true,
+   "good": 27,
+   "gper": 1.6875,
+   "gmark": false
+  },
+  "半導体製造装置・材料・設計ソフト・計測": {
+   "n1": 0,
+   "n0": 1,
+   "per": 0.1111111111111111,
+   "mark": false,
+   "good": 5,
+   "gper": 0.5555555555555556,
+   "gmark": false
+  },
+  "AIサーバー・ストレージ・メモリ・端末": {
+   "n1": 8,
+   "n0": 0,
+   "per": 0.8888888888888888,
+   "mark": false,
+   "good": 17,
+   "gper": 1.8888888888888888,
+   "gmark": true
+  },
+  "光・通信・ネットワーク": {
+   "n1": 5,
+   "n0": 12,
+   "per": 1.8888888888888888,
+   "mark": false,
+   "good": 13,
+   "gper": 1.4444444444444444,
+   "gmark": false
+  },
+  "データセンターの電力・冷却・部品・受託製造・建設": {
+   "n1": 2,
+   "n0": 0,
+   "per": 0.10526315789473684,
+   "mark": false,
+   "good": 12,
+   "gper": 0.631578947368421,
+   "gmark": false
+  },
+  "AIプラットフォーム・クラウド": {
+   "n1": 10,
+   "n0": 5,
+   "per": 1.3636363636363635,
+   "mark": false,
+   "good": 2,
+   "gper": 0.18181818181818182,
+   "gmark": false
+  },
+  "AIソフト・セキュリティ・ITサービス": {
+   "n1": 1,
+   "n0": 0,
+   "per": 0.07142857142857142,
+   "mark": false,
+   "good": 5,
+   "gper": 0.35714285714285715,
+   "gmark": false
+  }
+ },
+ "omitted": [],
+ "ref_b": [
+  {
+   "sym": "SHOP",
+   "kind": "予約: ボリンジャー メソッドIII（%bが0.05未満に近い）",
+   "close": 139.4199981689453,
+   "rs": 57.34637964774951
+  },
+  {
+   "sym": "SNPS",
+   "kind": "予約: ボリンジャー メソッドIII（%bが0.05未満に近い）",
+   "close": 434.010009765625,
+   "rs": 46.10958904109589
+  }
+ ]
+}
