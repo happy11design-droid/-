@@ -3149,6 +3149,40 @@ def opt_stage(base, data, sim, days, ind, cache, part):
     #   Z2: 一人勝ち（短い期間）。直近10取引日でSOXが0%以下、銘柄が+10%以上かつSOXより15ポイント以上強く、終値が10取引日の最高値
     # 翌取引日の寄り付きで買う。売り: 日中に買値の−15%で損切り、J・Z1は終値が50日線の下（5取引日たってから）、Z2は20日線の下で翌日の寄り付き。最長120取引日
     _sxs = [sum(x for x in _sxl[max(0, k - 49):k + 1] if x) / 50 if k >= 49 and None not in _sxl[k - 49:k + 1] else None for k in range(nD)]
+    _NH = {}
+    def news_flag(sym, d):
+        """(個別の悪材料, 業界全体の悪材料)。合図の日を含む7日（暦日）の見出し。業界全体＝その7日に悪材料の見出しがある87銘柄の数が、その年の日の上位20%"""
+        if not _NH:
+            h_ = json.load(open(os.path.expanduser("~/.cache/stock_backtest/news/history_87.json")))
+            _NH["bad"] = {s_: sorted(v) for s_, v in h_["bad"].items()}
+            _NH["start"] = h_["weeks"][0]
+            per_day = {}
+            for s_, ds in _NH["bad"].items():
+                for x in ds:
+                    per_day.setdefault(x, set()).add(s_)
+            import datetime as _dt2
+            d0, d1 = _dt2.date.fromisoformat(h_["weeks"][0]), _dt2.date.fromisoformat(h_["weeks"][-1]) + _dt2.timedelta(days=6)
+            cnt, cur = {}, d0 + _dt2.timedelta(days=6)
+            while cur <= d1:
+                ss = set()
+                for k in range(7):
+                    ss |= per_day.get((cur - _dt2.timedelta(days=k)).isoformat(), set())
+                cnt[cur.isoformat()] = len(ss)
+                cur += _dt2.timedelta(days=1)
+            thy_ = {}   # 年ごとの上位20%（見出しの取れ方が新しい年ほど多いため、年ごとに線を引く）
+            for y_ in {d_[:4] for d_ in cnt}:
+                v_ = sorted(c_ for d_, c_ in cnt.items() if d_[:4] == y_)
+                thy_[y_] = max(1, v_[int(len(v_) * 0.8)])
+            _NH["cnt"], _NH["thy"] = cnt, thy_
+            print(f"見出しの悪材料: 業界全体の悪材料の線（年ごと、7日に何銘柄以上）{dict(sorted(thy_.items()))}", file=sys.stderr)
+        if d < _NH["start"]:
+            return (False, False)
+        import datetime as _dt2, bisect as _bs3
+        lo = (_dt2.date.fromisoformat(d) - _dt2.timedelta(days=6)).isoformat()
+        ds = _NH["bad"].get(sym, [])
+        i = _bs3.bisect_left(ds, lo)
+        ind_ = i < len(ds) and ds[i] <= d
+        return (ind_, _NH["cnt"].get(d, 0) >= _NH["thy"].get(d[:4], 99))
     _sigc, _BOOK = {}, {}
     def sig_trades(kind, prio_hi=True):
         ck_ = (kind, prio_hi)
@@ -4251,6 +4285,10 @@ def opt_stage(base, data, sim, days, ind, cache, part):
           "全部入り②新しい買い①③④と戻り⑤を足し、直近120取引日の平均がプラスのルールだけ買う": {"newsig": ("J_lo", "Z1", "Z2"), "reb": ("B", 2, "ma50", 120, "reb"), "adapt": ("roll", 120, False)},
           "全部入り③新しい買い①③④と戻り⑤を足すだけ": {"newsig": ("J_lo", "Z1", "Z2"), "reb": ("B", 2, "ma50", 120, "reb")},
           # 2026-11-13: 局面×指標×ニュースの組み合わせで、2015〜2021年の成績だけで作った決まり（tools/combo_search.py。OPT_BOOK=決まりのjson）
+          "見出し①個別の悪材料の見出しがあれば見送る（2023年〜）": {"newsbad": "ind"},
+          "見出し②業界全体の悪材料の週は見送る（2023年〜）": {"newsbad": "sector"},
+          "見出し③個別の悪材料だけのとき見送り、業界全体の悪材料の週は買う（2023年〜）": {"newsbad": "ind_only"},
+          "見出し④業界全体の悪材料の週の合図を先に買う（2023年〜）": {"newsbad": "sector_first"},
           "両方の期間で良かった①SOXが下向きの50日線の下の日は押し目を一番先に": {"regprio": ("B", "下↓")},
           "両方の期間で良かった②SOXが50日線の下で線が上向きの日に一人勝ち（逆行高）を足す": {"regadd": ("Z1", "下↑")},
           "組み合わせの決まり①見送るだけ": {"book": (os.environ.get("OPT_BOOK", ""), ("skip",))},
@@ -4657,6 +4695,18 @@ def opt_stage(base, data, sim, days, ind, cache, part):
                 trs = [t for t in trs if t["rule"] in ("S", "R", "Y") or not _hit(t, bk_["skip"])]
             if "prio" in use_:
                 trs = [{**t, "rs": t["rs"] + 1000} if t["rule"] not in ("S", "R") and _hit(t, bk_["prio"]) else t for t in trs]
+        if sp.get("newsbad"):   # 2026-11-19 ユーザーの指示「悪材料ありの場合でもエントリーしたら利益出るのか」→「検証して」（tools/news_history.py の見出し。2023年〜・87銘柄だけ）
+            md_ = sp["newsbad"]
+            def _nf(t):
+                return news_flag(t["sym"], t["sd"]) if t["rule"] in ("B", "C", "M", "V") and t.get("x") != "out" else (False, False)
+            if md_ == "ind":   # 個別の悪材料（その銘柄の悪材料の見出しが合図の日までの7日にある）なら見送る
+                trs = [t for t in trs if not _nf(t)[0]]
+            elif md_ == "sector":   # 業界全体の悪材料（87銘柄のうち悪材料の見出しがある銘柄の数が多い週）なら見送る
+                trs = [t for t in trs if not _nf(t)[1]]
+            elif md_ == "ind_only":   # 個別の悪材料だけのとき見送る（業界全体の悪材料の週は買う）
+                trs = [t for t in trs if not (_nf(t)[0] and not _nf(t)[1])]
+            elif md_ == "sector_first":   # 業界全体の悪材料の週の合図を先に買う
+                trs = [{**t, "rs": t["rs"] + 1000} if _nf(t)[1] else t for t in trs]
         if sp.get("regprio"):   # 2026-11-13: そのSOXの局面の日は、そのルールの合図を一番先に買う（組み合わせ検証で両方の期間に良かった形。後知恵あり）
             r_, g_ = sp["regprio"]
             trs = [{**t, "rs": t["rs"] + 1000, "ai": True} if t["rule"] == r_ and sox_reg(t["sd"]) == g_ else t for t in trs]
