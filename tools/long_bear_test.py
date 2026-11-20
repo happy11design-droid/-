@@ -125,28 +125,30 @@ def special_days(sox_d, sox_c):
     return out
 
 
-def sox_bears(sox_d, sox_c, th=0.40):
-    """SOXの終値で高値から th 以上下げた局面: [(高値の日, 底の日, 下げ, 高値を戻した日)]"""
-    eps, pk, pkd, k = [], sox_c[0], sox_d[0], 0
-    n = len(sox_c)
+def sox_bears(sox_d, sox_c, th=0.40, rec=1.0):
+    """SOXの終値の大きな下げ: [(高値の日, 底の日, 下げ, 高値を戻した日)]。
+    高値から th 以上下げた局面を、底から rec（+100%）戻すか高値を戻すまでを1つとして数える
+    （2026-11-20: 高値を戻すまでで区切ると 2000年の高値から2008年の底まで（17年）が1つになったため、2000〜2002年と2007〜2008年を分けた）"""
+    eps, pk, pkd, k, n = [], sox_c[0], sox_d[0], 0, len(sox_c)
     while k < n:
         if sox_c[k] >= pk:
             pk, pkd = sox_c[k], sox_d[k]
             k += 1
             continue
-        if sox_c[k] / pk - 1 <= -th:
-            j = k
-            lo, lod = sox_c[k], sox_d[k]
-            while j < n and sox_c[j] < pk:
-                if sox_c[j] < lo:
-                    lo, lod = sox_c[j], sox_d[j]
-                j += 1
-            eps.append((pkd, lod, lo / pk - 1, sox_d[j] if j < n else None))
-            if j >= n:
-                break
-            pk, pkd, k = sox_c[j], sox_d[j], j
+        if sox_c[k] / pk - 1 > -th:
+            k += 1
             continue
-        k += 1
+        lo, lod, j = sox_c[k], sox_d[k], k
+        while j < n and sox_c[j] < pk and sox_c[j] < lo * (1 + rec):
+            if sox_c[j] < lo:
+                lo, lod = sox_c[j], sox_d[j]
+            j += 1
+        kl = sox_d.index(lod)   # 高値は底の前の3年（750取引日）の中の最高値にする（2004〜2007年の横ばいを下げに入れないため）
+        kp = max(range(max(0, kl - 750), kl + 1), key=lambda x: sox_c[x])
+        eps.append((sox_d[kp], lod, lo / sox_c[kp] - 1, next((sox_d[x] for x in range(kl, n) if sox_c[x] >= sox_c[kp]), None)))
+        if j >= n:
+            break
+        pk, pkd, k = sox_c[j], sox_d[j], j   # 戻った日から新しい高値を数え直す
     return eps
 
 
@@ -353,6 +355,7 @@ def main():
         ("⑦ 特殊な下げの間はほかの業種全部から買う（テーマを変える）", [(0, t) for t in TA if not sp_on(t["sd"])] + [(1, t) for t in TOut if not sp_on(t["sd"])]
          + [(0, t) for t in TO if sp_on(t["sd"])]),
         ("⑧ SOXが下向きの50日線の下の間は87銘柄を買わない", [(0, t) for t in TA if not sox_dn50(t["sd"])] + [(1, t) for t in TOut]),
+        ("⑨ 特殊な下げの間は87銘柄の順張りだけ買わない（逆張りは買う）", [(0, t) for t in TA if not (sp_on(t["sd"]) and t["rule"] in ("M", "V"))] + [(1, t) for t in TOut]),
     ]
 
     IDX = {}
