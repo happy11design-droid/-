@@ -63,6 +63,29 @@ def watch_syms():
     return sorted(set(out))
 
 
+def _rows(path):
+    try:
+        return json.load(open(path))
+    except Exception:
+        return []
+
+
+def looks_short(new_path, old_path):
+    """新しく取った株価が、今ある株価より明らかに短いか（始まりが30日以上遅く、行数が半分未満）。
+    2026-11-18 の refresh で、Yahoo が分割の直前の SNDK や、合併・買収の後の BKH・NWE・PCRX・PSKY に1〜4日分しか返さず、
+    長い株価が上書きされて消えた（2026-11-20 に見つけた）。このときは今ある株価を残す"""
+    new, old = _rows(new_path), _rows(old_path)
+    if not old:
+        return False
+    if not new:
+        return True
+    late = dt.date.fromisoformat(new[0][0]) - dt.date.fromisoformat(old[0][0]) > dt.timedelta(days=30)
+    return late and len(new) < 0.5 * len(old)
+
+
+SHORT = []   # 短いデータが返ったため、取り直さずに残した銘柄
+
+
 def fetch_syms(syms, force=False, until=None):
     os.makedirs(os.path.join(CACHE, "prices"), exist_ok=True)
     def one(s):
@@ -78,10 +101,16 @@ def fetch_syms(syms, force=False, until=None):
         if until:
             rows = [r for r in json.load(open(tmp)) if r[0] < until]
             json.dump(rows, open(tmp, "w"))
+        if looks_short(tmp, p):
+            SHORT.append(s)
+            os.remove(tmp)
+            return True
         os.replace(tmp, p)
         return True
     with ThreadPoolExecutor(8) as ex:
         ok = list(ex.map(one, syms))
+    if SHORT:
+        print(f"取り直しで短いデータが返ったため、前の株価を残した: {' '.join(sorted(SHORT))}", flush=True)
     return sum(ok), len(syms)
 
 
@@ -197,8 +226,9 @@ def _last_day(path):
 
 def _merge_copy(src, dst):
     """src（このセッションのキャッシュ）を dst（ブランチの cache/）に足す。ブランチにだけあるファイルは消さない
-    （2026-11-08: ほかのセッションが先に保存したデータを消さないため）。株価（prices/*.json）は、最終日が新しい方を残す"""
-    n_new = n_upd = n_keep = 0
+    （2026-11-08: ほかのセッションが先に保存したデータを消さないため）。株価（prices/*.json）は、最終日が新しい方を残す。
+    ただし、片方が明らかに短い（始まりが30日以上遅く行数が半分未満、looks_short）ときは長い方を残す（2026-11-20）"""
+    n_new = n_upd = n_keep = n_short = n_fix = 0
     for root, dirs, files in os.walk(src):
         rel = os.path.relpath(root, src)
         os.makedirs(os.path.join(dst, rel), exist_ok=True)
@@ -208,6 +238,11 @@ def _merge_copy(src, dst):
             s_, d_ = os.path.join(root, f), os.path.join(dst, rel, f)
             if not os.path.exists(d_):
                 n_new += 1
+            elif rel == "prices" and f.endswith(".json") and looks_short(s_, d_):
+                n_short += 1   # このセッションの株価が明らかに短い（Yahoo が途中から返した。2026-11-20）。ブランチの長い株価を残す
+                continue
+            elif rel == "prices" and f.endswith(".json") and looks_short(d_, s_):
+                n_fix += 1     # ブランチの株価が明らかに短い（以前に短いデータで上書きされた）。このセッションの長い株価で直す
             elif rel == "prices" and f.endswith(".json") and _last_day(d_) > _last_day(s_):
                 n_keep += 1   # ブランチの方が新しい株価
                 continue
@@ -216,7 +251,9 @@ def _merge_copy(src, dst):
             else:
                 n_upd += 1
             shutil.copy2(s_, d_)
-    print(f"足したファイル {n_new}、新しくしたファイル {n_upd}、ブランチの方が新しいので残した株価 {n_keep}")
+    print(f"足したファイル {n_new}、新しくしたファイル {n_upd}、ブランチの方が新しいので残した株価 {n_keep}"
+          + (f"、このセッションの方が明らかに短いので残した株価 {n_short}" if n_short else "")
+          + (f"、ブランチの短い株価を長い株価で直した {n_fix}" if n_fix else ""))
 
 
 def cmd_save(a):

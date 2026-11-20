@@ -57,7 +57,12 @@ def hold_rule(r):
     ex = r.get("ルールの手じまい条件", "")
     if close is not None and stop is not None and close <= stop:
         return "**売り**", f"終値 {close:g} が損切り価格 {stop:g} 以下"
-    m = re.match(r"成立（([^）]*)）", ex)
+    # 2026-11-20: 日中の安値で損切り価格を割った日（以前の日を含む）と、以前の日に出た全部売りの合図も「売り」にする。
+    # scan.md の手じまい条件は太字（**）で始まることがあり、以前は「**成立（…）」を読めずに「保有継続」と出していた
+    m = re.match(r"\**損切り価格を下回った\**（([^）]*)）", ex)
+    if m:
+        return "**売り**", f"損切り価格 {stop:g} を下回った（{m.group(1)}）" if stop is not None else f"損切り価格を下回った（{m.group(1)}）"
+    m = re.match(r"\**成立（([^）]*)）", ex)
     if m:
         return "**売り**", m.group(1)
     if "半分売りの合図: **今日**" in ex or "半分売りの合図: 今日" in ex:

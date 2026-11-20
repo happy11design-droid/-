@@ -121,6 +121,12 @@ def load_bars(symbol):
     for i, t in enumerate(r["timestamp"]):
         bars.append({"date": dt.datetime.utcfromtimestamp(t + off).date(),
                      "o": q["open"][i], "h": q["high"][i], "l": q["low"][i], "c": q["close"][i], "v": q["volume"][i]})
+    # 2026-11-20: 日足が途中で切れて返ってきたら（SNDK の分割の直前に3日分だけになり「取得不可」になった）、1時間足から作った日足を使う
+    import yahoo_daily as yd
+    if yd.looks_truncated(r, 2):
+        rows = yd.hourly_daily(symbol, fetch)
+        if len(rows) > len(bars):
+            bars = [{"date": dt.date.fromisoformat(x[0]), "o": x[1], "h": x[2], "l": x[3], "c": x[4], "v": x[5]} for x in rows]
     # 最終日の足は終値がnullのまま返ることがある（2026-09-23に実際に発生）。meta の当日値で補う。
     last, mt = bars[-1], m.get("regularMarketTime")
     if last["c"] is None and mt and dt.datetime.utcfromtimestamp(mt + off).date() == last["date"]:
