@@ -36,6 +36,14 @@ def symbols():
     return sorted(cur | set(watch87()) | set(ETFS))
 
 
+def open_day():
+    """まだ確定していない日（米国東部時間で今日。ただし17時を過ぎたら明日）。この日以降の行は保存しない"""
+    from zoneinfo import ZoneInfo
+    now = dt.datetime.now(ZoneInfo("America/New_York"))
+    d = now.date() + dt.timedelta(days=1 if now.hour >= 17 else 0)
+    return d.isoformat()
+
+
 def g7(x):
     return float(f"{x:.7g}") if x is not None else None
 
@@ -63,6 +71,7 @@ def fetch(sym, refresh=False):
                 if None in (o, h, l, c) or c <= 0:
                     continue
                 rows.append([dt.datetime.utcfromtimestamp(t + off).strftime("%Y-%m-%d"), g7(o), g7(h), g7(l), g7(c), int(v or 0), g7(ac or c)])
+            rows = [r for r in rows if r[0] < open_day()]   # 取引中・引け前の今日の行は入れない（2026-11-20: 取引中の値が入っていた）
             if not rows:
                 return "なし"
             json.dump(rows, open(p, "w"), separators=(",", ":"))
