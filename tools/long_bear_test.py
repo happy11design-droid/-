@@ -358,7 +358,7 @@ def main():
         ("⑨ 特殊な下げの間は87銘柄の順張りだけ買わない（逆張りは買う）", [(0, t) for t in TA if not (sp_on(t["sd"]) and t["rule"] in ("M", "V"))] + [(1, t) for t in TOut]),
     ]
 
-    CBK, WCAP, WSZ = {}, {}, {}   # 形の名前 → 損切りが続いたら止める形 (件数, 損の件数, 止める取引日 or "sox20", 数え方 "loss"=損で終わった売買・"stop"=15%の損切りだけ)
+    CBK, WCAP, WSZ, MIXES = {}, {}, {}, {}   # 形の名前 → 損切りが続いたら止める形 (件数, 損の件数, 止める取引日 or "sox20", 数え方 "loss"=損で終わった売買・"stop"=15%の損切りだけ)
     if os.environ.get("LBT_EXTRA") == "1":
         # 2026-11-22 ユーザーの指示「全て検証して最善策を考えて」: 87銘柄の固定の一覧のまま、長い下げで崩れたテーマを買い続けないための形と、止める形を比べる
         def at(t_):
@@ -410,6 +410,36 @@ def main():
                      ("対策1a＋対策3a", [(0, t) for t in TA if not fallen(t, 90, 70)] + base_out)]
             WCAP = {FORMS[2][0]: 1, FORMS[3][0]: 2, FORMS[7][0]: 1}
             WSZ = {FORMS[4][0]: 0.5}
+        if os.environ.get("LBT_MIX") == "1":   # 2026-11-22 ユーザーの指示「手数料とプラン以外全て検証して」: Fable の「87銘柄の口と全業種の口を半分ずつ」を長い下げで（参考）
+            # 全業種の口＝その日にS&P500の構成銘柄で、RS≧90・終値＞150日線＞20取引日前の150日線・業種の3か月の強さ上位20%の銘柄（87銘柄も条件を満たせば入る。後知恵なし）
+            eligA = {}
+            for s in stocks:
+                s_ = data[s]
+                c_, m150 = s_["c"], s_["ma150"]
+                for i in range(170, len(c_)):
+                    r_ = s_["rs"][i]
+                    if r_ is None or r_ < 90 or m150[i] is None or m150[i - 20] is None or not (c_[i] > m150[i] > m150[i - 20]):
+                        continue
+                    if not liq(s_, i) or not in_sp(s_, i):
+                        continue
+                    rk = IR.get(s_["date"][i], {}).get(ind.get(s))
+                    if rk is None or rk > 0.2:
+                        continue
+                    eligA.setdefault(s_["date"][i], {})[s] = r_
+            okAllE = lambda s_, i, sp: s_["sym"] in eligA.get(s_["date"][i], ())
+            ok10AllE = top10(lambda s_, k: okAllE(s_, k, None))
+            TAllE = gen_set(okAllE, ok10AllE, "AllE")
+            for t_ in TA:
+                t_["weak"] = not strong(t_, 90)
+            FORMS = [FORMS[0], ("⑳ 87銘柄は150日線が上向きでRS≧90の銘柄だけ買う（いつも）", [(0, t) for t in TA if strong(t, 90)] + base_out),
+                     ("対策2 弱い87銘柄は半分の金額で買う", F_now()),
+                     ("全業種の口（その日のS&P500の強い銘柄を毎日選び直す。後知恵なし）", [(0, t) for t in TAllE]),
+                     ("混ぜる: ①の口50%＋全業種の口50%（毎年1月に戻す）", []),
+                     ("混ぜる: ①の口75%＋全業種の口25%（毎年1月に戻す）", []),
+                     ("混ぜる: ⑳の口50%＋全業種の口50%（毎年1月に戻す）", [])]
+            WSZ = {FORMS[2][0]: 0.5}
+            MIXES = {FORMS[4][0]: (FORMS[0][0], FORMS[3][0], 0.5), FORMS[5][0]: (FORMS[0][0], FORMS[3][0], 0.75),
+                     FORMS[6][0]: (FORMS[1][0], FORMS[3][0], 0.5)}
         if os.environ.get("LBT_REGIME") == "1":   # 2026-11-22 ユーザーの指示「検証して」: 強さの条件を下落相場の日だけ当てる形
             gs_m = gspc_series()
             gd_ = sorted(gs_m)
@@ -434,7 +464,7 @@ def main():
                 FORMS.append((f"{RLAB[k_]}の日だけ⑳", [(0, t) for t in TA if t["sd"] not in REG[k_] or strong(t, 90)] + base_out))
             for k_ in ("both200", "s2"):
                 FORMS.append((f"{RLAB[k_]}の日だけ⑪（RS≧80）", [(0, t) for t in TA if t["sd"] not in REG[k_] or strong(t, 80)] + base_out))
-        CBK = {} if os.environ.get("LBT_REGIME") == "1" or os.environ.get("LBT_FIX") == "1" else {FORMS[5][0]: (3, 3, 10, "loss"), FORMS[6][0]: (3, 3, 20, "loss"), FORMS[7][0]: (3, 3, "sox20", "stop"),
+        CBK = {} if os.environ.get("LBT_REGIME") == "1" or os.environ.get("LBT_FIX") == "1" or os.environ.get("LBT_MIX") == "1" else {FORMS[5][0]: (3, 3, 10, "loss"), FORMS[6][0]: (3, 3, 20, "loss"), FORMS[7][0]: (3, 3, "sox20", "stop"),
                FORMS[8][0]: (3, 3, "sox20", "stop"), FORMS[9][0]: (3, 3, "sox20", "stop"), FORMS[13][0]: (3, 3, 10, "loss")}
         if os.environ.get("LBT_REGIME") == "1":
             CBK = {}
@@ -579,8 +609,26 @@ def main():
     seeds = range(a.seeds)
     curves = {}
     for nm, cands in FORMS:
+        if nm in MIXES:
+            continue
         curves[nm] = [port(nm, 9000 + q, days[0], days[-1], log_eq=True)[2] for q in seeds]
         print("資金", nm, file=sys.stderr)
+    for nm, (ka, kb, wt) in MIXES.items():   # 口ごとの資金を、乱数の番号が同じものどうしで混ぜ、毎年1月の最初の取引日に割合へ戻す
+        curves[nm] = []
+        for ca, cb_ in zip(curves[ka], curves[kb]):
+            va, vb, prev, out = wt, 1 - wt, None, {}
+            for d in days:
+                if d not in ca or d not in cb_:
+                    continue
+                if prev is not None:
+                    va *= ca[d] / ca[prev]
+                    vb *= cb_[d] / cb_[prev]
+                    if d[:4] != prev[:4]:
+                        tot = va + vb
+                        va, vb = wt * tot, (1 - wt) * tot
+                out[d] = va + vb
+                prev = d
+            curves[nm].append(out)
     sox_at = lambda d: sox_m.get(d) or sox_m[sx_d[bisect.bisect_right(sx_d, d) - 1]]
     spy_at = lambda d: spy["c"][pos["SPY"][d]]
 
@@ -681,7 +729,11 @@ def main():
     for k in starts:
         lo, hi = days[k], days[k + WIN]
         for nm, cands in FORMS:
+            if nm in MIXES:
+                continue
             roll[nm].append(st.mean(port(nm, 7000 + q, lo, hi)[0] - 1 for q in seeds))
+    for nm, (ka, kb, wt) in MIXES.items():
+        roll[nm] = [wt * x + (1 - wt) * y for x, y in zip(roll[ka], roll[kb])]
     print("1年の区切り", file=sys.stderr)
     ref = FORMS[0][0]
     w("\n## 4. 1年の区切り（250取引日、10取引日ずつずらして空の枠から。乱数の平均）\n")
@@ -704,7 +756,7 @@ def main():
         w(f"| {nm} | " + " | ".join(cells) + " |")
     out = {"forms": [nm for nm, _ in FORMS], "starts": [days[k] for k in starts], "roll": roll, "special_spans": spans, "bears": bears}
     os.makedirs(C + "results", exist_ok=True)
-    json.dump(out, open(C + ("results/long_bear_roll_fix.json" if os.environ.get("LBT_FIX") == "1" else "results/long_bear_roll_regime.json" if os.environ.get("LBT_REGIME") == "1" else "results/long_bear_roll_extra.json" if os.environ.get("LBT_EXTRA") == "1" else "results/long_bear_roll.json"), "w"), ensure_ascii=False)
+    json.dump(out, open(C + ("results/long_bear_roll_mix.json" if os.environ.get("LBT_MIX") == "1" else "results/long_bear_roll_fix.json" if os.environ.get("LBT_FIX") == "1" else "results/long_bear_roll_regime.json" if os.environ.get("LBT_REGIME") == "1" else "results/long_bear_roll_extra.json" if os.environ.get("LBT_EXTRA") == "1" else "results/long_bear_roll.json"), "w"), ensure_ascii=False)
     open(a.out, "w", encoding="utf-8").write("\n".join(L) + "\n")
     print("\n".join(L))
 
