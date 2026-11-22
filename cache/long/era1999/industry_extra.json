@@ -1,0 +1,77 @@
+{
+"AIV": {
+"sector": "Real Estate",
+"industry": "REIT—Residential",
+"name": "Apartment Investment and Management Company"
+},
+"APC": {
+"sector": "Energy",
+"industry": "Oil & Gas Refining & Marketing",
+"name": "ARKO Petroleum Corp."
+},
+"BF.B": {
+"sector": "Consumer Defensive",
+"industry": "Beverages—Wineries & Distilleries",
+"name": "Brown-Forman Corporation"
+},
+"BRK.B": {
+"sector": "Financial Services",
+"industry": "Insurance—Diversified",
+"name": "Berkshire Hathaway Inc."
+},
+"FMC": {
+"sector": "Basic Materials",
+"industry": "Agricultural Inputs",
+"name": "FMC Corporation"
+},
+"FOSL": {
+"sector": "Consumer Cyclical",
+"industry": "Footwear & Accessories",
+"name": "Fossil Group, Inc."
+},
+"KVUE": {
+"sector": "Consumer Defensive",
+"industry": "Household & Personal Products",
+"name": "Kenvue Inc."
+},
+"NAVI": {
+"sector": "Financial Services",
+"industry": "Credit Services",
+"name": "Navient Holdings, Inc."
+},
+"OI": {
+"sector": "Consumer Cyclical",
+"industry": "Packaging & Containers",
+"name": "O-I Glass, Inc."
+},
+"PARA": {
+"sector": "Technology",
+"industry": "Software—Application",
+"name": "Parabolic Technologies, Inc."
+},
+"POM": {
+"sector": "Healthcare",
+"industry": "Pharmaceutical Retailers",
+"name": "Pomdoctor Limited"
+},
+"STI": {
+"sector": "Industrials",
+"industry": "Electrical Equipment & Parts",
+"name": "Solidion Technology, Inc."
+},
+"TE": {
+"sector": "Industrials",
+"industry": "Electrical Equipment & Parts",
+"name": "T1 Energy Inc."
+},
+"TRIP": {
+"sector": "Consumer Cyclical",
+"industry": "Travel Services",
+"name": "Tripadvisor, Inc."
+},
+"XRX": {
+"sector": "Industrials",
+"industry": "Business Equipment & Supplies",
+"name": "Xerox Holdings Corporation"
+}
+}
