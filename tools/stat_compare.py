@@ -55,9 +55,13 @@ def mix(eqA, eqB, w, days):
     return out
 
 
-def mix_sw(eqA, eqB, target, days, j0=0):
+SWITCH_COST = 0.002   # 口の間で資金を移すとき、移した金額に片道0.1%×2（売りと買い）
+
+
+def mix_sw(eqA, eqB, target, days, j0=0, cost=SWITCH_COST):
     """切り替えて混ぜる形（2026-11-22 ユーザーの指示「全て検証して」）: target[j] はその日の引けで決まる口Aの割合。
-    前の日の引けで決まった割合が変わった日（1日遅れ）と、毎年1月の最初の取引日に、その割合へ資金を移す（口の間で資金を移す近似。株を売る手間は入れない）"""
+    前の日の引けで決まった割合が変わった日（1日遅れ）の引けと、毎年1月の最初の取引日に、その割合へ資金を移す。
+    移す口の保有を同じ割合で売り、移す先の口の保有を同じ割合で買い足す近似で、移した金額に cost をかける"""
     out = np.full_like(eqA, np.nan)
     for q in range(eqA.shape[0]):
         a, b = eqA[q], eqB[q]
@@ -70,6 +74,7 @@ def mix_sw(eqA, eqB, target, days, j0=0):
             tw = target[j - 1]
             if tw != w or (days[j][:4] != days[j - 1][:4] and 0 < tw < 1):
                 t = va + vb
+                t -= abs(tw * t - va) * cost
                 va, vb, w = tw * t, (1 - tw) * t, tw
             out[q, j] = va + vb
     return out
@@ -179,7 +184,7 @@ def main():
     for nm in nall:
         F["全業種: " + short(nm)] = (ffill(dall[nm]["eq"]), ffill(dall[nm]["live"]))
     base87, baseall = "87銘柄: " + short(n87[0]), "全業種: " + short(nall[0])
-    strong87 = next((k for k in F if k.startswith("87銘柄") and "RS≧90の銘柄だけ" in k and "200日線" not in k), None)
+    strong87 = next((k for k in F if k.startswith("87銘柄") and (k.endswith("今のルール＋強さの条件") or ("RS≧90の銘柄だけ" in k and "200日線" not in k))), None)
     for w, lab in ((0.5, "混ぜる: 87銘柄の口50%＋全業種の口50%（毎年1月に戻す）"), (0.75, "混ぜる: 87銘柄の口75%＋全業種の口25%（毎年1月に戻す）")):
         F[lab] = (mix(F[base87][0], F[baseall][0], w, days), mix_live(F[base87][1], F[baseall][1], w))
     if strong87:
@@ -195,6 +200,8 @@ def main():
         if rg not in REGS:
             continue
         rs_ = set(REGS[rg])
+        nsw = sum(1 for j in range(1, len(days)) if (days[j] in rs_) != (days[j - 1] in rs_))
+        print(f"{rg}: 2015年〜の切り替えの回数 {nsw}（守りに入る・戻すを合わせて）、守りの日 {sum(1 for d in days if d in rs_) / len(days):.0%}", file=sys.stderr)
         for a_, alab in ((base87, "今のルールの87銘柄の口"), (strong87, "強さの条件の87銘柄の口")):
             if not a_:
                 continue
