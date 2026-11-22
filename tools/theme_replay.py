@@ -184,8 +184,22 @@ class Replay:
         return s["c"][j] / t["px"]
 
     # ---- 4銘柄の枠 ----
-    def simulate(self, use_etf, cbk=None):
-        """cbk=(件数, 損の件数, 止める取引日): 売った売買の直近の件数のうち損で終わった件数が届いたら、次の日から新しい買いを止める（2026-11-22 の検証の形）"""
+    def strong_ok(self, c, day, n_rs):
+        """強さの条件（2026-11-22 の長い下げの検証）: 87銘柄の候補は、合図の日に150日線が20取引日前より上で、RS≧n_rs のときだけ買う。テーマの外は今のまま"""
+        if c["sym"] not in self.group:
+            return True
+        s = self.data.get(c["sym"])
+        if not s or day not in s["date"]:
+            return False
+        k = s["date"].index(day)
+        if k < 170:
+            return False
+        cc = s["c"]
+        return sum(cc[k - 149:k + 1]) > sum(cc[k - 169:k - 19]) and (c.get("rs") or 0) >= n_rs
+
+    def simulate(self, use_etf, cbk=None, strong=None):
+        """cbk=(件数, 損の件数, 止める取引日): 売った売買の直近の件数のうち損で終わった件数が届いたら、次の日から新しい買いを止める（2026-11-22 の検証の形）。
+        strong=RSの下限: 87銘柄の候補に強さの条件を当てる（strong_ok）"""
         cal = sorted({d for s in self.data.values() for d in s["date"] if d >= self.recs[0]["trade_date"]})
         rec_by = {r["trade_date"]: r for r in self.recs}
         cash, pos, done, curve, until, self.paused = self.cap0, [], [], [], -1, []
@@ -208,6 +222,8 @@ class Replay:
                     continue
                 for c in self.sigs(r):
                     if len(pos) >= SLOTS or any(p["sym"] == c["sym"] for p in pos):
+                        continue
+                    if strong and not self.strong_ok(c, r["trade_date"], strong):
                         continue
                     t = self.plan(r, c, use_etf)
                     if not t or t["buy"] != day:

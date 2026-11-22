@@ -358,6 +358,43 @@ def main():
         ("⑨ 特殊な下げの間は87銘柄の順張りだけ買わない（逆張りは買う）", [(0, t) for t in TA if not (sp_on(t["sd"]) and t["rule"] in ("M", "V"))] + [(1, t) for t in TOut]),
     ]
 
+    CBK = {}   # 形の名前 → 損切りが続いたら止める形 (件数, 損の件数, 止める取引日 or "sox20", 数え方 "loss"=損で終わった売買・"stop"=15%の損切りだけ)
+    if os.environ.get("LBT_EXTRA") == "1":
+        # 2026-11-22 ユーザーの指示「全て検証して最善策を考えて」: 87銘柄の固定の一覧のまま、長い下げで崩れたテーマを買い続けないための形と、止める形を比べる
+        def at(t_):
+            s_ = data[t_["sym"]]
+            return s_, pos[t_["sym"]].get(t_["sd"])
+        def up150(t_):   # 合図の日に、その銘柄の150日線（30週線）が20取引日前より上
+            s_, k = at(t_)
+            return k is not None and k >= 170 and s_["ma150"][k] is not None and s_["ma150"][k - 20] is not None and s_["ma150"][k] > s_["ma150"][k - 20]
+        def strong(t_, n=80):  # 150日線が上向きで、RS≧n
+            s_, k = at(t_)
+            return up150(t_) and k is not None and (s_["rs"][k] or 0) >= n
+        def dn50(t_):    # 合図の日に、その銘柄が50日線より下で、50日線が10取引日前より下（2026-11-03 の「局面に沿う④」）
+            s_, k = at(t_)
+            return k is not None and k >= 60 and s_["ma50"][k] is not None and s_["ma50"][k - 10] is not None and s_["c"][k] < s_["ma50"][k] < s_["ma50"][k - 10]
+        rev_dn = lambda t_: t_["rule"] in ("B", "C") and dn50(t_)
+        base_out = [(1, t) for t in TOut]
+        FORMS = [
+            FORMS[0],
+            ("⑩ 87銘柄は150日線（30週線）が上向きの銘柄だけ買う", [(0, t) for t in TA if up150(t)] + base_out),
+            ("⑪ 87銘柄は150日線が上向きでRS≧80の銘柄だけ買う", [(0, t) for t in TA if strong(t)] + base_out),
+            ("⑫ 87銘柄の押し目・急落の底は、銘柄が下向きの50日線の下なら買わない（11/03の④）", [(0, t) for t in TA if not rev_dn(t)] + base_out),
+            ("⑬ ⑩＋⑫", [(0, t) for t in TA if up150(t) and not rev_dn(t)] + base_out),
+            ("⑭ ①＋損で終わった売買が3回続いたら10取引日止める", F_now()),
+            ("⑮ ①＋損で終わった売買が3回続いたら20取引日止める", F_now()),
+            ("⑯ ①＋15%の損切りが3回続いたら止め、SOXが20日線を上回ったら再開（⑤'）", F_now()),
+            ("⑰ ⑩＋⑤'", [(0, t) for t in TA if up150(t)] + base_out),
+            ("⑱ ⑫＋⑤'", [(0, t) for t in TA if not rev_dn(t)] + base_out),
+            ("⑲ 87銘柄は150日線が上向きでRS≧70の銘柄だけ買う", [(0, t) for t in TA if strong(t, 70)] + base_out),
+            ("⑳ 87銘柄は150日線が上向きでRS≧90の銘柄だけ買う", [(0, t) for t in TA if strong(t, 90)] + base_out),
+            ("㉑ 87銘柄はRS≧80の銘柄だけ買う（150日線の条件なし）", [(0, t) for t in TA if at(t)[1] is not None and (at(t)[0]["rs"][at(t)[1]] or 0) >= 80] + base_out),
+            ("㉒ ⑪＋損で終わった売買が3回続いたら10取引日止める", [(0, t) for t in TA if strong(t)] + base_out),
+        ]
+        CBK = {FORMS[5][0]: (3, 3, 10, "loss"), FORMS[6][0]: (3, 3, 20, "loss"), FORMS[7][0]: (3, 3, "sox20", "stop"),
+               FORMS[8][0]: (3, 3, "sox20", "stop"), FORMS[9][0]: (3, 3, "sox20", "stop"), FORMS[13][0]: (3, 3, 10, "loss")}
+    sx20 = {sx_d[k]: sum(sx_c[k - 19:k + 1]) / 20 for k in range(19, len(sx_c))}
+
     IDX = {}
     for nm_, cands_ in FORMS:   # 形ごとに、買う日ごとの候補（優先・RSの高い順）を先に作る
         bi_ = {}
@@ -372,7 +409,9 @@ def main():
         rnd = random.Random(seed)
         cash, held, pk, mdd = 1.0, [], 1.0, 0.0
         eqs = {}
-        for d in days[di[lo]:di[hi] + 1]:
+        cb = CBK.get(nm_)
+        res, until, paused, trig = [], -1, False, -1
+        for kd, d in enumerate(days[di[lo]:di[hi] + 1]):
             still = []
             for h in held:
                 v = h["t"]["path"].get(d)
@@ -380,11 +419,24 @@ def main():
                     h["v"] = v
                 if h["t"]["out"] == d:
                     cash += h["size"] * h["v"]
+                    if cb:
+                        res.append(h["t"]["stopped"] if cb[3] == "stop" else h["t"]["ret"] < 0)
+                        if len(res) >= cb[0] and sum(res[-cb[0]:]) >= cb[1]:
+                            if cb[2] == "sox20":
+                                paused, until, trig = True, kd + 120, kd
+                            else:
+                                until = max(until, kd + cb[2])
+                            res = []   # 止めたら数え直す
                 else:
                     still.append(h)
             held = still
             eq = cash + sum(h["size"] * h["v"] for h in held)
-            for p_, t in by_in.get(d, ()):
+            if cb and cb[2] == "sox20" and paused:
+                pd_ = prevd.get(d)
+                if kd > until or (kd > trig and pd_ in sx20 and sox_m.get(pd_, 0) > sx20[pd_]):
+                    paused = False
+            blocked = cb is not None and ((cb[2] == "sox20" and paused) or (cb[2] != "sox20" and kd <= until))
+            for p_, t in (() if blocked else by_in.get(d, ())):
                 if skip and rnd.random() < skip:
                     continue
                 if len(held) >= 4 or any(h["t"]["sym"] == t["sym"] for h in held):
@@ -605,7 +657,7 @@ def main():
         w(f"| {nm} | " + " | ".join(cells) + " |")
     out = {"forms": [nm for nm, _ in FORMS], "starts": [days[k] for k in starts], "roll": roll, "special_spans": spans, "bears": bears}
     os.makedirs(C + "results", exist_ok=True)
-    json.dump(out, open(C + "results/long_bear_roll.json", "w"), ensure_ascii=False)
+    json.dump(out, open(C + ("results/long_bear_roll_extra.json" if os.environ.get("LBT_EXTRA") == "1" else "results/long_bear_roll.json"), "w"), ensure_ascii=False)
     open(a.out, "w", encoding="utf-8").write("\n".join(L) + "\n")
     print("\n".join(L))
 

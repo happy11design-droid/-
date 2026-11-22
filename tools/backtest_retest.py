@@ -4656,6 +4656,8 @@ def opt_stage(base, data, sim, days, ind, cache, part):
     V1["急落の底をRSI(2)≦15にする（OPT_C15=1 で動かす）"] = {"c15": True}
     # 見送った候補の確かめ直し（2026-10-17）: 買い方・新しい合図・買う順番
     V1["テーマの外の強い銘柄で空き枠を埋める（OPT_OUTSIDE=1、毎朝のツールと同じ）"] = {"outside": True}
+    for n_ in (70, 80, 90):   # 2026-11-22: 強さの条件（長い下げの検証の⑪）
+        V1[f"強さの条件: 87銘柄は150日線が上向きでRS≧{n_}の銘柄だけ買う"] = {"rskip": (f"strong{n_}", "all")}
     # 保有全体の異常（2026-10-18 ユーザーの指示「全ての銘柄が損切りに達した異常事態を対策できなかったことが問題」）
     for n_, x_, md_ in ((2, 0.08, "loser"), (2, 0.10, "loser"), (3, 0.08, "loser"), (3, 0.10, "loser"), ("all", 0.05, "loser"), ("all", 0.08, "loser"),
                         (2, 0.08, "all"), (3, 0.10, "all")):
@@ -4975,7 +4977,18 @@ def opt_stage(base, data, sim, days, ind, cache, part):
             trs = trs + short_trades(k_, n_, l_)
         if sp.get("rskip"):   # 2026-11-05: 銘柄の局面に沿う。rskip=(局面, "rev"|"all"|"match")
             k_, who_ = sp["rskip"]
-            if k_ in ("uponly", "upish"):   # 2026-11-12 ユーザーの指示「上昇相場の銘柄を購入した方が年率は上がらないのか？」→「テストして」
+            if k_.startswith("strong"):   # 2026-11-22: 87銘柄（テーマの外でない候補）は、合図の日に150日線（30週線）が20取引日前より上で、RS≧N の銘柄だけ買う
+                # （1996年〜の長い下げの検証 tools/long_bear_test.py の⑪。崩れたテーマの銘柄の押し目を固定の一覧で買い続けないため）
+                n_rs = int(k_[6:])
+                def _strong(sym, d):
+                    s_ = data.get(sym)
+                    k = _spos.setdefault(sym, {x: i for i, x in enumerate(s_["date"])}).get(d) if s_ else None
+                    if k is None or k < 170:
+                        return False
+                    c_ = s_["c"]
+                    return sum(c_[k - 149:k + 1]) > sum(c_[k - 169:k - 19]) and (s_["rs"][k] or 0) >= n_rs
+                trs = [t for t in trs if t["rule"] not in ("B", "C", "M", "V", "W") or t.get("x") == "out" or _strong(t["sym"], t["sd"])]
+            elif k_ in ("uponly", "upish"):   # 2026-11-12 ユーザーの指示「上昇相場の銘柄を購入した方が年率は上がらないのか？」→「テストして」
                 # uponly: 合図の日に上昇相場（stock_regime の up）の銘柄だけ買う。upish: 上昇相場か「上げ」（終値が50日線より上で、50日線が10取引日前より上か20日線が5取引日前より上）だけ
                 def _upish(sym, d):
                     if stock_regime(sym, d) == "up":
