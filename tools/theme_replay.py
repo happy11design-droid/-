@@ -197,9 +197,10 @@ class Replay:
         cc = s["c"]
         return sum(cc[k - 149:k + 1]) > sum(cc[k - 169:k - 19]) and (c.get("rs") or 0) >= n_rs
 
-    def simulate(self, use_etf, cbk=None, strong=None, strong_days=None):
+    def simulate(self, use_etf, cbk=None, strong=None, strong_days=None, weakcap=None, weakhalf=False, skip_fn=None):
         """cbk=(件数, 損の件数, 止める取引日): 売った売買の直近の件数のうち損で終わった件数が届いたら、次の日から新しい買いを止める（2026-11-22 の検証の形）。
-        strong=RSの下限: 87銘柄の候補に強さの条件を当てる（strong_ok）。strong_days を渡すと、その合図の日（下落相場の日など）だけ当てる"""
+        strong=RSの下限: 87銘柄の候補に強さの条件を当てる（strong_ok）。strong_days を渡すと、その合図の日（下落相場の日など）だけ当てる。
+        weakcap=N: 強さの条件（RS≧90）を満たさない87銘柄は同時にN銘柄まで、weakhalf: 半分の金額で買う、skip_fn(候補, 合図の日)→True なら買わない（2026-11-22）"""
         cal = sorted({d for s in self.data.values() for d in s["date"] if d >= self.recs[0]["trade_date"]})
         rec_by = {r["trade_date"]: r for r in self.recs}
         cash, pos, done, curve, until, self.paused = self.cap0, [], [], [], -1, []
@@ -225,6 +226,11 @@ class Replay:
                         continue
                     if strong and (strong_days is None or r["trade_date"] in strong_days) and not self.strong_ok(c, r["trade_date"], strong):
                         continue
+                    if skip_fn and skip_fn(c, r["trade_date"]):
+                        continue
+                    weak = (weakcap or weakhalf) and not self.strong_ok(c, r["trade_date"], 90)
+                    if weak and weakcap and sum(1 for p in pos if p.get("weak")) >= weakcap:
+                        continue
                     t = self.plan(r, c, use_etf)
                     if not t or t["buy"] != day:
                         continue
@@ -232,11 +238,11 @@ class Replay:
                     if g and sum(1 for p in pos if self.ind.get(p["sym"]) == g) >= GCAP:
                         continue
                     eq = cash + sum(p["amt"] * self.ratio(p, prev) for p in pos)
-                    amt = min(eq / SLOTS, cash)
+                    amt = min(eq / SLOTS * (0.5 if weak and weakhalf else 1.0), cash)
                     if amt <= 1:
                         continue
                     cash -= amt
-                    pos.append({**t, "amt": amt * (1 - COST)})
+                    pos.append({**t, "amt": amt * (1 - COST), "weak": bool(weak)})
             curve.append((day, cash + sum(p["amt"] * self.ratio(p, day) for p in pos)))
         peak, mdd = 0, 0
         for _, v in curve:

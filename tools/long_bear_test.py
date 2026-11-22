@@ -358,7 +358,7 @@ def main():
         ("⑨ 特殊な下げの間は87銘柄の順張りだけ買わない（逆張りは買う）", [(0, t) for t in TA if not (sp_on(t["sd"]) and t["rule"] in ("M", "V"))] + [(1, t) for t in TOut]),
     ]
 
-    CBK = {}   # 形の名前 → 損切りが続いたら止める形 (件数, 損の件数, 止める取引日 or "sox20", 数え方 "loss"=損で終わった売買・"stop"=15%の損切りだけ)
+    CBK, WCAP, WSZ = {}, {}, {}   # 形の名前 → 損切りが続いたら止める形 (件数, 損の件数, 止める取引日 or "sox20", 数え方 "loss"=損で終わった売買・"stop"=15%の損切りだけ)
     if os.environ.get("LBT_EXTRA") == "1":
         # 2026-11-22 ユーザーの指示「全て検証して最善策を考えて」: 87銘柄の固定の一覧のまま、長い下げで崩れたテーマを買い続けないための形と、止める形を比べる
         def at(t_):
@@ -391,6 +391,25 @@ def main():
             ("㉑ 87銘柄はRS≧80の銘柄だけ買う（150日線の条件なし）", [(0, t) for t in TA if at(t)[1] is not None and (at(t)[0]["rs"][at(t)[1]] or 0) >= 80] + base_out),
             ("㉒ ⑪＋損で終わった売買が3回続いたら10取引日止める", [(0, t) for t in TA if strong(t)] + base_out),
         ]
+        WCAP, WSZ = {}, {}
+        if os.environ.get("LBT_FIX") == "1":   # 2026-11-22 ユーザーの指示「検証して」: 強さの条件が2015〜2021年に効かない対策
+            for t_ in TA:
+                t_["weak"] = not strong(t_, 90)
+            def fallen(t_, a_=90, b_=70):
+                s_, k = at(t_)
+                if k is None or k < 70:
+                    return False
+                rs_ = s_["rs"]
+                return (rs_[k] or 0) < b_ and max((x or 0) for x in rs_[k - 63:k]) >= a_
+            FORMS = [FORMS[0], ("⑳ 87銘柄は150日線が上向きでRS≧90の銘柄だけ買う（いつも）", [(0, t) for t in TA if strong(t, 90)] + base_out),
+                     ("対策1a 弱い87銘柄（⑳を満たさない）は同時に1銘柄まで", F_now()),
+                     ("対策1b 弱い87銘柄は同時に2銘柄まで", F_now()),
+                     ("対策2 弱い87銘柄は半分の金額で買う", F_now()),
+                     ("対策3a 崩れたリーダー（直前3か月にRS≧90、合図の日にRS<70）の87銘柄は買わない", [(0, t) for t in TA if not fallen(t, 90, 70)] + base_out),
+                     ("対策3b 崩れたリーダー（直前3か月にRS≧90、合図の日にRS<80）は買わない", [(0, t) for t in TA if not fallen(t, 90, 80)] + base_out),
+                     ("対策1a＋対策3a", [(0, t) for t in TA if not fallen(t, 90, 70)] + base_out)]
+            WCAP = {FORMS[2][0]: 1, FORMS[3][0]: 2, FORMS[7][0]: 1}
+            WSZ = {FORMS[4][0]: 0.5}
         if os.environ.get("LBT_REGIME") == "1":   # 2026-11-22 ユーザーの指示「検証して」: 強さの条件を下落相場の日だけ当てる形
             gs_m = gspc_series()
             gd_ = sorted(gs_m)
@@ -415,7 +434,7 @@ def main():
                 FORMS.append((f"{RLAB[k_]}の日だけ⑳", [(0, t) for t in TA if t["sd"] not in REG[k_] or strong(t, 90)] + base_out))
             for k_ in ("both200", "s2"):
                 FORMS.append((f"{RLAB[k_]}の日だけ⑪（RS≧80）", [(0, t) for t in TA if t["sd"] not in REG[k_] or strong(t, 80)] + base_out))
-        CBK = {} if os.environ.get("LBT_REGIME") == "1" else {FORMS[5][0]: (3, 3, 10, "loss"), FORMS[6][0]: (3, 3, 20, "loss"), FORMS[7][0]: (3, 3, "sox20", "stop"),
+        CBK = {} if os.environ.get("LBT_REGIME") == "1" or os.environ.get("LBT_FIX") == "1" else {FORMS[5][0]: (3, 3, 10, "loss"), FORMS[6][0]: (3, 3, 20, "loss"), FORMS[7][0]: (3, 3, "sox20", "stop"),
                FORMS[8][0]: (3, 3, "sox20", "stop"), FORMS[9][0]: (3, 3, "sox20", "stop"), FORMS[13][0]: (3, 3, 10, "loss")}
         if os.environ.get("LBT_REGIME") == "1":
             CBK = {}
@@ -469,7 +488,9 @@ def main():
                     continue
                 if t["ind"] and sum(1 for h in held if h["t"]["ind"] == t["ind"]) >= 2:
                     continue
-                size = min(eq / 4, cash)
+                if nm_ in WCAP and t.get("weak") and sum(1 for h in held if h["t"].get("weak")) >= WCAP[nm_]:
+                    continue
+                size = min(eq / 4 * (WSZ.get(nm_, 1.0) if t.get("weak") else 1.0), cash)
                 if size <= eq * 0.02:
                     continue
                 cash -= size
@@ -683,7 +704,7 @@ def main():
         w(f"| {nm} | " + " | ".join(cells) + " |")
     out = {"forms": [nm for nm, _ in FORMS], "starts": [days[k] for k in starts], "roll": roll, "special_spans": spans, "bears": bears}
     os.makedirs(C + "results", exist_ok=True)
-    json.dump(out, open(C + ("results/long_bear_roll_regime.json" if os.environ.get("LBT_REGIME") == "1" else "results/long_bear_roll_extra.json" if os.environ.get("LBT_EXTRA") == "1" else "results/long_bear_roll.json"), "w"), ensure_ascii=False)
+    json.dump(out, open(C + ("results/long_bear_roll_fix.json" if os.environ.get("LBT_FIX") == "1" else "results/long_bear_roll_regime.json" if os.environ.get("LBT_REGIME") == "1" else "results/long_bear_roll_extra.json" if os.environ.get("LBT_EXTRA") == "1" else "results/long_bear_roll.json"), "w"), ensure_ascii=False)
     open(a.out, "w", encoding="utf-8").write("\n".join(L) + "\n")
     print("\n".join(L))
 

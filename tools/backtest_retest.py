@@ -4282,6 +4282,8 @@ def opt_stage(base, data, sim, days, ind, cache, part):
                     continue
                 if t.get("maxheld") and len(held) + ghost_n >= t["maxheld"]:   # 下げの局面では保有をこの数まで（2026-11-02）
                     continue
+                if t.get("weak") and sum(1 for h in held if h["t"].get("weak")) >= t["weakcap"]:   # 弱い87銘柄は同時にこの数まで（2026-11-22）
+                    continue
                 if t.get("ghost"):
                     if len(held) + ghost_n < slots and not (cap and sum(1 for h in held if ind.get(h["t"]["sym"]) == ind.get(t["sym"])) >= cap):
                         ghost_n += 1
@@ -4658,6 +4660,11 @@ def opt_stage(base, data, sim, days, ind, cache, part):
     V1["テーマの外の強い銘柄で空き枠を埋める（OPT_OUTSIDE=1、毎朝のツールと同じ）"] = {"outside": True}
     for n_ in (70, 80, 90):   # 2026-11-22: 強さの条件（長い下げの検証の⑪）
         V1[f"強さの条件: 87銘柄は150日線が上向きでRS≧{n_}の銘柄だけ買う"] = {"rskip": (f"strong{n_}", "all")}
+    V1["弱い87銘柄（150日線が上向きでRS≧90を満たさない）は同時に1銘柄まで"] = {"rskip": ("weakcap1", "all")}
+    V1["弱い87銘柄（150日線が上向きでRS≧90を満たさない）は同時に2銘柄まで"] = {"rskip": ("weakcap2", "all")}
+    V1["弱い87銘柄（150日線が上向きでRS≧90を満たさない）は半分の金額で買う"] = {"rskip": ("weakhalf", "all")}
+    V1["崩れたリーダー（直前3か月にRS≧90、合図の日にRS<70）の87銘柄は買わない"] = {"rskip": ("fallen90_70", "all")}
+    V1["崩れたリーダー（直前3か月にRS≧90、合図の日にRS<80）の87銘柄は買わない"] = {"rskip": ("fallen90_80", "all")}
     for reg_, lab_ in (("both200", "SOXとS&P500が両方200日線の下"), ("sox200", "SOXが200日線の下"), ("s2", "SOXが60日の最高値から−10%以下（S2）"),
                        ("sp15", "特殊な下げの印"), ("sox200dn", "SOXが200日線の下で50日線が下向き")):
         V1[f"強さの条件: {lab_}の日だけ、87銘柄は150日線が上向きでRS≧90の銘柄だけ買う"] = {"rskip": (f"strong90@{reg_}", "all")}
@@ -4980,7 +4987,39 @@ def opt_stage(base, data, sim, days, ind, cache, part):
             trs = trs + short_trades(k_, n_, l_)
         if sp.get("rskip"):   # 2026-11-05: 銘柄の局面に沿う。rskip=(局面, "rev"|"all"|"match")
             k_, who_ = sp["rskip"]
-            if k_.startswith("strong"):   # 2026-11-22: 87銘柄（テーマの外でない候補）は、合図の日に150日線（30週線）が20取引日前より上で、RS≧N の銘柄だけ買う
+            if k_.startswith(("weakcap", "weakhalf", "fallen")):
+                # 2026-11-22 ユーザーの指示「検証して」（強さの条件が2015〜2021年に効かない対策）。弱い87銘柄＝87銘柄（テーマの外でない）の候補のうち、
+                # 合図の日に「150日線が20取引日前より上でRS≧90」を満たさないもの。
+                #   weakcapN: 弱い87銘柄は同時にN銘柄まで（止めずに持つ数を減らす）／weakhalf: 弱い87銘柄は半分の金額で買う／
+                #   fallenA_B: 「崩れたリーダー」＝直前63取引日にRS≧Aだった日があり、合図の日にRS<B の87銘柄だけ買わない
+                def _pos3(sym, d):
+                    s_ = data.get(sym)
+                    return s_, (_spos.setdefault(sym, {x: i for i, x in enumerate(s_["date"])}).get(d) if s_ else None)
+                def _weak(t):
+                    if t["rule"] not in ("B", "C", "M", "V", "W") or t.get("x") == "out":
+                        return False
+                    s_, k = _pos3(t["sym"], t["sd"])
+                    if k is None or k < 170:
+                        return True
+                    c_ = s_["c"]
+                    return not (sum(c_[k - 149:k + 1]) > sum(c_[k - 169:k - 19]) and (s_["rs"][k] or 0) >= 90)
+                if k_.startswith("weakcap"):
+                    n_cap = int(k_[7:])
+                    trs = [{**t, "weak": True, "weakcap": n_cap} if _weak(t) else t for t in trs]
+                elif k_ == "weakhalf":
+                    trs = [{**t, "szm": t.get("szm", 1.0) * 0.5} if _weak(t) else t for t in trs]
+                else:
+                    a_, b_ = (int(x) for x in k_[6:].split("_"))
+                    def _fallen(t):
+                        if t["rule"] not in ("B", "C", "M", "V", "W") or t.get("x") == "out":
+                            return False
+                        s_, k = _pos3(t["sym"], t["sd"])
+                        if k is None or k < 70:
+                            return False
+                        rs_ = s_["rs"]
+                        return (rs_[k] or 0) < b_ and max((x or 0) for x in rs_[k - 63:k]) >= a_
+                    trs = [t for t in trs if not _fallen(t)]
+            elif k_.startswith("strong"):   # 2026-11-22: 87銘柄（テーマの外でない候補）は、合図の日に150日線（30週線）が20取引日前より上で、RS≧N の銘柄だけ買う
                 # （1996年〜の長い下げの検証 tools/long_bear_test.py の⑪。崩れたテーマの銘柄の押し目を固定の一覧で買い続けないため）
                 # "strong90@sox200" のように @ の後に日の集合を書くと、その日（下落相場の日）だけ当てる（2026-11-22 ユーザーの指示「検証して」）
                 k_, _, reg_ = k_.partition("@")
