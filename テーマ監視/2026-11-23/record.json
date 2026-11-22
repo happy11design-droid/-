@@ -1,0 +1,242 @@
+{
+ "trade_date": "2026-11-20",
+ "run_date": "2026-11-23",
+ "theme_stage": "【ステージ3】（急騰後、30週線が横ばい化し株価が下回る天井圏。第2章）[1, 2]",
+ "candidates": [
+  {
+   "sym": "DELL",
+   "kind": "逆張り: 急落の底（担当: コナーズ）",
+   "pattern": "A",
+   "close": 278.02,
+   "limit": null,
+   "stop_buy": null,
+   "limit_buy": 272.46,
+   "verdict": "様子見",
+   "author": "コナーズ",
+   "hot": false,
+   "rsi14": 28.483792122975657,
+   "s50": -0.08104026804911424,
+   "rs": 97.64117647058823,
+   "s2_skip": false,
+   "badnews": false,
+   "goodnews": true
+  },
+  {
+   "sym": "HPE",
+   "kind": "逆張り: 急落の底（担当: コナーズ）",
+   "pattern": "A",
+   "close": 40.91,
+   "limit": null,
+   "stop_buy": null,
+   "limit_buy": 40.09,
+   "verdict": "様子見",
+   "author": "コナーズ",
+   "hot": false,
+   "rsi14": 29.340651259194786,
+   "s50": -0.02831190823132146,
+   "rs": 96.28235294117647,
+   "s2_skip": false,
+   "badnews": false,
+   "goodnews": true
+  },
+  {
+   "sym": "MU",
+   "kind": "逆張り: 急落の底（担当: コナーズ）",
+   "pattern": "A",
+   "close": 594.51,
+   "limit": null,
+   "stop_buy": null,
+   "limit_buy": 582.62,
+   "verdict": "様子見",
+   "author": "コナーズ",
+   "hot": false,
+   "rsi14": 29.5189454230795,
+   "s50": -0.07164965143932978,
+   "rs": 92.01176470588236,
+   "s2_skip": false,
+   "badnews": false,
+   "goodnews": false
+  },
+  {
+   "sym": "SNPS",
+   "kind": "逆張り: ボリンジャー メソッドIII",
+   "pattern": "A",
+   "close": 396.17,
+   "limit": null,
+   "stop_buy": null,
+   "limit_buy": null,
+   "verdict": "買い",
+   "author": "ボリンジャー",
+   "hot": false,
+   "rsi14": 30.70024611527387,
+   "s50": 0.04078643941081683,
+   "rs": 32.61176470588235,
+   "s2_skip": false,
+   "badnews": false,
+   "goodnews": false
+  },
+  {
+   "sym": "DLR",
+   "kind": "逆張り: ボリンジャー メソッドIII",
+   "pattern": "A",
+   "close": 162.46,
+   "limit": null,
+   "stop_buy": null,
+   "limit_buy": null,
+   "verdict": "買い",
+   "author": "ボリンジャー",
+   "hot": false,
+   "rsi14": 33.66720739971616,
+   "s50": -0.023590552459178293,
+   "rs": 27.564705882352943,
+   "s2_skip": false,
+   "badnews": false,
+   "goodnews": false
+  }
+ ],
+ "holdings": [
+  {
+   "sym": "SNDK",
+   "rule": "ルール外（ユーザーの判断。この日はどのルールの合図もなし）",
+   "buy_date": "2026-10-21",
+   "buy_price": 171.4125,
+   "verdict": "未判定",
+   "author": ""
+  },
+  {
+   "sym": "AMD",
+   "rule": "ボリンジャーIII",
+   "buy_date": "2026-10-21",
+   "buy_price": 549.97,
+   "verdict": "保有継続",
+   "author": "ボリンジャー"
+  }
+ ],
+ "s2": {
+  "on": true,
+  "label": "あり（S2）",
+  "close": 8408.58984375,
+  "hi60": 13217.8203125,
+  "drop": -0.3638444429602319
+ },
+ "special": {
+  "on": true,
+  "label": "あり（特殊な下げ）",
+  "since": "2026-10-16",
+  "drop": -0.3638444429602319,
+  "n": 2,
+  "A": true,
+  "B": false,
+  "C": true
+ },
+ "group_news": {
+  "半導体": {
+   "n1": 18,
+   "n0": 12,
+   "per": 1.875,
+   "mark": false,
+   "good": 16,
+   "gper": 1.0,
+   "gmark": false
+  },
+  "半導体製造装置・材料・設計ソフト・計測": {
+   "n1": 5,
+   "n0": 0,
+   "per": 0.5555555555555556,
+   "mark": false,
+   "good": 9,
+   "gper": 1.0,
+   "gmark": false
+  },
+  "AIサーバー・ストレージ・メモリ・端末": {
+   "n1": 9,
+   "n0": 0,
+   "per": 1.0,
+   "mark": false,
+   "good": 33,
+   "gper": 3.6666666666666665,
+   "gmark": true
+  },
+  "光・通信・ネットワーク": {
+   "n1": 5,
+   "n0": 12,
+   "per": 1.8888888888888888,
+   "mark": true,
+   "good": 6,
+   "gper": 0.6666666666666666,
+   "gmark": false
+  },
+  "データセンターの電力・冷却・部品・受託製造・建設": {
+   "n1": 2,
+   "n0": 0,
+   "per": 0.10526315789473684,
+   "mark": false,
+   "good": 4,
+   "gper": 0.21052631578947367,
+   "gmark": false
+  },
+  "AIプラットフォーム・クラウド": {
+   "n1": 7,
+   "n0": 4,
+   "per": 1.0,
+   "mark": false,
+   "good": 5,
+   "gper": 0.45454545454545453,
+   "gmark": false
+  },
+  "AIソフト・セキュリティ・ITサービス": {
+   "n1": 2,
+   "n0": 0,
+   "per": 0.14285714285714285,
+   "mark": false,
+   "good": 6,
+   "gper": 0.42857142857142855,
+   "gmark": false
+  }
+ },
+ "omitted": [
+  {
+   "sym": "Q",
+   "kind": "逆張り: ボリンジャー メソッドIII",
+   "pattern": "A",
+   "close": 103.47000122070312,
+   "rs": 25.235294117647058
+  },
+  {
+   "sym": "CDNS",
+   "kind": "逆張り: ボリンジャー メソッドIII",
+   "pattern": "A",
+   "close": 281.5799865722656,
+   "rs": 23.1
+  },
+  {
+   "sym": "CEG",
+   "kind": "逆張り: ボリンジャー メソッドIII",
+   "pattern": "A",
+   "close": 237.41000366210938,
+   "rs": 12.229411764705882
+  },
+  {
+   "sym": "CRWV",
+   "kind": "逆張り: ボリンジャー メソッドIII",
+   "pattern": "A",
+   "close": 39.5099983215332,
+   "rs": 0.0
+  },
+  {
+   "sym": "TMO",
+   "kind": "逆張り: ボリンジャー メソッドIII",
+   "pattern": "A",
+   "close": 669.5399780273438,
+   "rs": 91.04117647058824
+  }
+ ],
+ "ref_b": [
+  {
+   "sym": "EQIX",
+   "kind": "予約: ボリンジャー メソッドIII（%bが0.05未満に近い）",
+   "close": 968.219970703125,
+   "rs": 54.54705882352941
+  }
+ ]
+}
