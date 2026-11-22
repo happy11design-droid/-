@@ -291,6 +291,12 @@ def cmd_review(a):
             w("\n" + theme_replay.section(a.dir, CAPITAL))
         except Exception as e_:   # 週次レビューを止めない
             w(f"\n## 6. ルールの合図だけで売買した場合（著者の判定は使わない）\n\n計算できなかった（{type(e_).__name__}: {e_}）")
+        # 並行記録: 2026-11-23 から同じ金額で始めた仮の資金（今のルール・止める形・静観・上がっている業種・上がっている銘柄。2026-11-22 ユーザーの指示）
+        try:
+            import paper_track
+            w("\n" + paper_track.section(a.dir, paper_track.START, CAPITAL))
+        except Exception as e_:   # 週次レビューを止めない
+            w(f"\n## 7. 並行記録（同じ日に始めた仮の資金）\n\n計算できなかった（{type(e_).__name__}: {e_}）")
     slip_text, alert = slippage(a.dir)
     if a.slip_out:
         open(a.slip_out, "w", encoding="utf-8").write(slip_text)     # 記録はいつも残す

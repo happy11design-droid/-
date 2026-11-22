@@ -184,17 +184,24 @@ class Replay:
         return s["c"][j] / t["px"]
 
     # ---- 4銘柄の枠 ----
-    def simulate(self, use_etf):
+    def simulate(self, use_etf, cbk=None):
+        """cbk=(件数, 損の件数, 止める取引日): 売った売買の直近の件数のうち損で終わった件数が届いたら、次の日から新しい買いを止める（2026-11-22 の検証の形）"""
         cal = sorted({d for s in self.data.values() for d in s["date"] if d >= self.recs[0]["trade_date"]})
         rec_by = {r["trade_date"]: r for r in self.recs}
-        cash, pos, done, curve = self.cap0, [], [], []
+        cash, pos, done, curve, until, self.paused = self.cap0, [], [], [], -1, []
         for di, day in enumerate(cal):
-            for p in list(pos):
+            for p in sorted(pos, key=lambda p: p["sym"]):
                 if p["exit_date"] == day and not p["why"].startswith("保有中"):
                     cash += p["amt"] * (1 + p["ret"] + 2 * COST) * (1 - COST)
                     pos.remove(p)
                     done.append(p)
+                    if cbk and len(done) >= cbk[0] and sum(1 for q in done[-cbk[0]:] if q["ret"] < 0) >= cbk[1] and di + cbk[2] > until:
+                        until = di + cbk[2]
+                        self.paused.append((day, cal[min(until, len(cal) - 1)] if until < len(cal) else f"{cbk[2]}取引日後"))
             prev = cal[di - 1] if di else None
+            if di <= until:
+                curve.append((day, cash + sum(p["amt"] * self.ratio(p, day) for p in pos)))
+                continue
             for back in cal[max(0, di - ts.C_LIMIT_DAYS):di]:   # 急落の底の指値は合図の日から3取引日のうちに約定する
                 r = rec_by.get(back)
                 if not r:
