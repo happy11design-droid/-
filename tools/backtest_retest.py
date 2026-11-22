@@ -4658,6 +4658,9 @@ def opt_stage(base, data, sim, days, ind, cache, part):
     V1["テーマの外の強い銘柄で空き枠を埋める（OPT_OUTSIDE=1、毎朝のツールと同じ）"] = {"outside": True}
     for n_ in (70, 80, 90):   # 2026-11-22: 強さの条件（長い下げの検証の⑪）
         V1[f"強さの条件: 87銘柄は150日線が上向きでRS≧{n_}の銘柄だけ買う"] = {"rskip": (f"strong{n_}", "all")}
+    for reg_, lab_ in (("both200", "SOXとS&P500が両方200日線の下"), ("sox200", "SOXが200日線の下"), ("s2", "SOXが60日の最高値から−10%以下（S2）"),
+                       ("sp15", "特殊な下げの印"), ("sox200dn", "SOXが200日線の下で50日線が下向き")):
+        V1[f"強さの条件: {lab_}の日だけ、87銘柄は150日線が上向きでRS≧90の銘柄だけ買う"] = {"rskip": (f"strong90@{reg_}", "all")}
     # 保有全体の異常（2026-10-18 ユーザーの指示「全ての銘柄が損切りに達した異常事態を対策できなかったことが問題」）
     for n_, x_, md_ in ((2, 0.08, "loser"), (2, 0.10, "loser"), (3, 0.08, "loser"), (3, 0.10, "loser"), ("all", 0.05, "loser"), ("all", 0.08, "loser"),
                         (2, 0.08, "all"), (3, 0.10, "all")):
@@ -4979,7 +4982,17 @@ def opt_stage(base, data, sim, days, ind, cache, part):
             k_, who_ = sp["rskip"]
             if k_.startswith("strong"):   # 2026-11-22: 87銘柄（テーマの外でない候補）は、合図の日に150日線（30週線）が20取引日前より上で、RS≧N の銘柄だけ買う
                 # （1996年〜の長い下げの検証 tools/long_bear_test.py の⑪。崩れたテーマの銘柄の押し目を固定の一覧で買い続けないため）
+                # "strong90@sox200" のように @ の後に日の集合を書くと、その日（下落相場の日）だけ当てる（2026-11-22 ユーザーの指示「検証して」）
+                k_, _, reg_ = k_.partition("@")
                 n_rs = int(k_[6:])
+                if reg_ == "both200" and "both200" not in SKIPSET:
+                    from backtest_lib import load_prices as _lp3
+                    _g3 = _lp3(cache, "^GSPC")
+                    _gc3 = _g3["c"]
+                    _gb = {_g3["date"][i] for i in range(199, len(_gc3)) if _gc3[i] < sum(_gc3[i - 199:i + 1]) / 200}
+                    SKIPSET["both200"] = {d for d in SKIPSET["sox200"] if d in _gb}
+                    print(f"SOXとS&P500が両方200日線の下の日: 2015年〜の{sum(1 for d in SKIPSET['both200'] if d >= '2015-01-01') / max(1, sum(1 for d in days if d >= '2015-01-01')):.0%}", file=sys.stderr)
+                regset_ = SKIPSET[reg_] if reg_ else None
                 def _strong(sym, d):
                     s_ = data.get(sym)
                     k = _spos.setdefault(sym, {x: i for i, x in enumerate(s_["date"])}).get(d) if s_ else None
@@ -4987,7 +5000,8 @@ def opt_stage(base, data, sim, days, ind, cache, part):
                         return False
                     c_ = s_["c"]
                     return sum(c_[k - 149:k + 1]) > sum(c_[k - 169:k - 19]) and (s_["rs"][k] or 0) >= n_rs
-                trs = [t for t in trs if t["rule"] not in ("B", "C", "M", "V", "W") or t.get("x") == "out" or _strong(t["sym"], t["sd"])]
+                trs = [t for t in trs if t["rule"] not in ("B", "C", "M", "V", "W") or t.get("x") == "out"
+                       or (regset_ is not None and t["sd"] not in regset_) or _strong(t["sym"], t["sd"])]
             elif k_ in ("uponly", "upish"):   # 2026-11-12 ユーザーの指示「上昇相場の銘柄を購入した方が年率は上がらないのか？」→「テストして」
                 # uponly: 合図の日に上昇相場（stock_regime の up）の銘柄だけ買う。upish: 上昇相場か「上げ」（終値が50日線より上で、50日線が10取引日前より上か20日線が5取引日前より上）だけ
                 def _upish(sym, d):

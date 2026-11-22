@@ -391,8 +391,34 @@ def main():
             ("㉑ 87銘柄はRS≧80の銘柄だけ買う（150日線の条件なし）", [(0, t) for t in TA if at(t)[1] is not None and (at(t)[0]["rs"][at(t)[1]] or 0) >= 80] + base_out),
             ("㉒ ⑪＋損で終わった売買が3回続いたら10取引日止める", [(0, t) for t in TA if strong(t)] + base_out),
         ]
-        CBK = {FORMS[5][0]: (3, 3, 10, "loss"), FORMS[6][0]: (3, 3, 20, "loss"), FORMS[7][0]: (3, 3, "sox20", "stop"),
+        if os.environ.get("LBT_REGIME") == "1":   # 2026-11-22 ユーザーの指示「検証して」: 強さの条件を下落相場の日だけ当てる形
+            gs_m = gspc_series()
+            gd_ = sorted(gs_m)
+            gc_ = [gs_m[d] for d in gd_]
+            g200 = {gd_[k] for k in range(199, len(gc_)) if gc_[k] < sum(gc_[k - 199:k + 1]) / 200}
+            s200, s200dn, s2_ = set(), set(), set()
+            for k in range(199, len(sx_c)):
+                if sx_c[k] < sum(sx_c[k - 199:k + 1]) / 200:
+                    s200.add(sx_d[k])
+                    if k >= 60 and sum(sx_c[k - 49:k + 1]) < sum(sx_c[k - 59:k - 9]):
+                        s200dn.add(sx_d[k])
+                if k >= 59 and sx_c[k] / max(sx_c[k - 59:k + 1]) - 1 <= -0.10:
+                    s2_.add(sx_d[k])
+            REG = {"both200": s200 & g200, "sox200": s200, "s2": s2_, "sp15": {d for d, v in SP.items() if v}, "sox200dn": s200dn}
+            RLAB = {"both200": "SOXとS&P500が両方200日線の下", "sox200": "SOXが200日線の下", "s2": "SOXが60日の最高値から−10%以下（S2）",
+                    "sp15": "特殊な下げの印", "sox200dn": "SOXが200日線の下で50日線が下向き"}
+            for k_, v_ in REG.items():
+                print(f"{RLAB[k_]}の日: 1996年〜の{sum(1 for d in days if d in v_) / len(days):.0%}", file=sys.stderr)
+            FORMS = [FORMS[0], ("⑳ 87銘柄は150日線が上向きでRS≧90の銘柄だけ買う（いつも）", [(0, t) for t in TA if strong(t, 90)] + base_out),
+                     ("⑪ 同じでRS≧80（いつも）", [(0, t) for t in TA if strong(t, 80)] + base_out)]
+            for k_ in REG:
+                FORMS.append((f"{RLAB[k_]}の日だけ⑳", [(0, t) for t in TA if t["sd"] not in REG[k_] or strong(t, 90)] + base_out))
+            for k_ in ("both200", "s2"):
+                FORMS.append((f"{RLAB[k_]}の日だけ⑪（RS≧80）", [(0, t) for t in TA if t["sd"] not in REG[k_] or strong(t, 80)] + base_out))
+        CBK = {} if os.environ.get("LBT_REGIME") == "1" else {FORMS[5][0]: (3, 3, 10, "loss"), FORMS[6][0]: (3, 3, 20, "loss"), FORMS[7][0]: (3, 3, "sox20", "stop"),
                FORMS[8][0]: (3, 3, "sox20", "stop"), FORMS[9][0]: (3, 3, "sox20", "stop"), FORMS[13][0]: (3, 3, 10, "loss")}
+        if os.environ.get("LBT_REGIME") == "1":
+            CBK = {}
     sx20 = {sx_d[k]: sum(sx_c[k - 19:k + 1]) / 20 for k in range(19, len(sx_c))}
 
     IDX = {}
@@ -657,7 +683,7 @@ def main():
         w(f"| {nm} | " + " | ".join(cells) + " |")
     out = {"forms": [nm for nm, _ in FORMS], "starts": [days[k] for k in starts], "roll": roll, "special_spans": spans, "bears": bears}
     os.makedirs(C + "results", exist_ok=True)
-    json.dump(out, open(C + ("results/long_bear_roll_extra.json" if os.environ.get("LBT_EXTRA") == "1" else "results/long_bear_roll.json"), "w"), ensure_ascii=False)
+    json.dump(out, open(C + ("results/long_bear_roll_regime.json" if os.environ.get("LBT_REGIME") == "1" else "results/long_bear_roll_extra.json" if os.environ.get("LBT_EXTRA") == "1" else "results/long_bear_roll.json"), "w"), ensure_ascii=False)
     open(a.out, "w", encoding="utf-8").write("\n".join(L) + "\n")
     print("\n".join(L))
 
