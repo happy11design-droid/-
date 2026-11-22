@@ -55,6 +55,53 @@ def mix(eqA, eqB, w, days):
     return out
 
 
+def mix_sw(eqA, eqB, target, days, j0=0):
+    """切り替えて混ぜる形（2026-11-22 ユーザーの指示「全て検証して」）: target[j] はその日の引けで決まる口Aの割合。
+    前の日の引けで決まった割合が変わった日（1日遅れ）と、毎年1月の最初の取引日に、その割合へ資金を移す（口の間で資金を移す近似。株を売る手間は入れない）"""
+    out = np.full_like(eqA, np.nan)
+    for q in range(eqA.shape[0]):
+        a, b = eqA[q], eqB[q]
+        w = target[j0]
+        va, vb = w, 1 - w
+        out[q, j0] = 1.0
+        for j in range(j0 + 1, len(days)):
+            va *= a[j] / a[j - 1]
+            vb *= b[j] / b[j - 1]
+            tw = target[j - 1]
+            if tw != w or (days[j][:4] != days[j - 1][:4] and 0 < tw < 1):
+                t = va + vb
+                va, vb, w = tw * t, (1 - tw) * t, tw
+            out[q, j] = va + vb
+    return out
+
+
+def slot_use(trades, days):
+    """売買の記録（乱数10通り）から、年ごとの枠の使い方（87銘柄・テーマの外・空き）の割合と、1年の売買の数（2026-11-22 ユーザーの質問への答えの数値）"""
+    di = {d: i for i, d in enumerate(days)}
+    yrs = sorted({d[:4] for d in days})
+    nd = {y: sum(1 for d in days if d[:4] == y) for y in yrs}
+    res = {y: [0.0, 0.0, 0] for y in yrs}
+    nseed = max(1, len(trades))
+    cnt = {y: [0, 0] for y in yrs}
+    for tl in trades:
+        for x in tl:
+            i0 = di.get(x[0])
+            i1 = di.get(x[1]) if x[1] else len(days) - 1
+            if i0 is None or i1 is None:
+                continue
+            sz = x[7] if len(x) > 7 and x[7] else 1.0
+            out_ = len(x) > 6 and x[6] == 1
+            cnt[x[0][:4]][1 if out_ else 0] += 1
+            for j in range(i0, max(i0 + 1, i1)):
+                res[days[j][:4]][1 if out_ else 0] += sz
+    tab = {}
+    for y in yrs:
+        tot = 4 * nd[y] * nseed
+        a87, aout = res[y][0] / tot, res[y][1] / tot
+        tab[y] = (a87, aout, max(0.0, 1 - a87 - aout), cnt[y][0] / nseed, cnt[y][1] / nseed)
+    return tab
+
+
 def mix_live(lA, lB, w):
     out = np.empty_like(lA)
     for q in range(lA.shape[0]):
@@ -117,13 +164,15 @@ def main():
     ap.add_argument("--reps", type=int, default=3000)
     a = ap.parse_args()
     d87, dall = json.load(open(a.eq87)), json.load(open(a.eqall))
-    n87 = [k for k in d87 if not k.startswith("今のルール（傾き")]   # 古い今のルール（傾きの小さい順）は使わない
-    nall = [k for k in dall if not k.startswith("今のルール（傾き")]
+    n87 = [k for k in d87 if not k.startswith(("今のルール（傾き", "_"))]   # 古い今のルール（傾きの小さい順）と、日の集合（_regs・_breadth）は使わない
+    nall = [k for k in dall if not k.startswith(("今のルール（傾き", "_"))]
     days = d87[n87[0]]["days"]
     assert days == dall[nall[0]]["days"]
     short = lambda nm: (nm.replace("買う順番: RSの高い順＋遅らせて買う 急落の底 合図の日の終値の2%下の指値（3日間）", "今のルール")
                         .replace("＋テーマの外の強い銘柄で空き枠を埋める（OPT_OUTSIDE=1、毎朝のツールと同じ）", "").replace("強さの条件: ", "")
-                        .replace("（150日線が上向きでRS≧90を満たさない）", ""))
+                        .replace("（150日線が上向きでRS≧90を満たさない）", "").replace("87銘柄は150日線が上向きでRS≧90の銘柄だけ買う", "強さの条件")
+                        .replace("底の後40日は2倍ETF: SOXが上向きの30週線の上（ワインスタインのステージ2）", "SOXのステージ2の後40日は2倍ETF")
+                        .replace("待っている現金をQQQに置く", "待っている現金をQQQ"))
     F = {}
     for nm in n87:
         F["87銘柄: " + short(nm)] = (ffill(d87[nm]["eq"]), ffill(d87[nm]["live"]))
@@ -135,6 +184,24 @@ def main():
         F[lab] = (mix(F[base87][0], F[baseall][0], w, days), mix_live(F[base87][1], F[baseall][1], w))
     if strong87:
         F["混ぜる: 強さの条件の87銘柄の口50%＋全業種の口50%"] = (mix(F[strong87][0], F[baseall][0], 0.5, days), mix_live(F[strong87][1], F[baseall][1], 0.5))
+    # 2026-11-22: 待っている現金をQQQに置く口どうしを混ぜる形と、87銘柄の割合で守りに入ったら全業種の口へ資金を移す形
+    q87 = next((k for k in F if k.startswith("87銘柄") and k.endswith("強さの条件＋待っている現金をQQQ")), None)
+    qall = next((k for k in F if k.startswith("全業種") and k.endswith("今のルール＋待っている現金をQQQ")), None)
+    if q87 and qall:
+        F["混ぜる: 強さの条件＋QQQの87銘柄の口50%＋全業種＋QQQの口50%"] = (mix(F[q87][0], F[qall][0], 0.5, days), mix_live(F[q87][1], F[qall][1], 0.5))
+    REGS = d87.get("_regs", {})
+    live_from0 = next(i for i, x in enumerate(d87[n87[0]]["live"][0]) if x is not None)
+    for rg, rlab in (("b50h", "50日線より上が30%未満で守り・50%以上で戻す"), ("b200h", "200日線より上が40%未満で守り・55%以上で戻す")):
+        if rg not in REGS:
+            continue
+        rs_ = set(REGS[rg])
+        for a_, alab in ((base87, "今のルールの87銘柄の口"), (strong87, "強さの条件の87銘柄の口")):
+            if not a_:
+                continue
+            for wd, wlab in ((0.5, "半分"), (0.0, "全部")):
+                tg = np.array([wd if d in rs_ else 1.0 for d in days])
+                F[f"切り替えて混ぜる: {alab}、87銘柄の{rlab}間は{wlab}を全業種の口へ"] = (
+                    mix_sw(F[a_][0], F[baseall][0], tg, days), mix_sw(F[a_][1], F[baseall][1], tg, days, live_from0)[:, :] )
     S = {k: stats(v[0], days) for k, v in F.items()}
     live_from = next(i for i, x in enumerate(d87[n87[0]]["live"][0]) if x is not None)
     L = []
@@ -201,6 +268,25 @@ def main():
             x, y = np.array(syn[k]), np.array(syn_m[k])
             w_(f"| {k} | {np.median(x) * 100:+.1f}% | {np.quantile(x, 0.05) * 100:+.1f}% | {np.median(y) * 100:.0f}% | {np.quantile(y, 0.95) * 100:.0f}% | "
                f"{np.mean(x < -0.3) * 100:.0f}% | {'—' if k == base87 else f'{np.mean(x > b) * 100:.0f}%'} |")
+    # 6. 枠の使い方（2026-11-22 ユーザーの質問「強さの条件は、枠が空けばテーマの外の銘柄を選択するの？」）
+    tr_ = [(("87銘柄: " + short(nm)), d87[nm]["trades"], d87[nm].get("live_trades")) for nm in n87 if d87[nm].get("trades")]
+    if tr_:
+        w_("\n## 4. 枠の使い方（4枠のうち、87銘柄・テーマの外の強い銘柄・空き〔現金。QQQの形はQQQ〕で持っていた日の割合と、1年の買いの数。乱数10通りの平均）\n")
+        yrs = sorted({d[:4] for d in days})
+        w_("| 形 | 年 | " + " | ".join(yrs) + " | 全期間 |")
+        w_("|---|---|" + "---|" * (len(yrs) + 1))
+        for k, trs_, lt_ in tr_:
+            tab = slot_use(trs_, days)
+            nd = {y: sum(1 for d in days if d[:4] == y) for y in yrs}
+            tot = sum(nd.values())
+            agg = [sum(tab[y][i] * nd[y] for y in yrs) / tot for i in range(3)]
+            w_(f"| {k} | 87銘柄 | " + " | ".join(f"{tab[y][0] * 100:.0f}%" for y in yrs) + f" | {agg[0] * 100:.0f}% |")
+            w_(f"| | テーマの外 | " + " | ".join(f"{tab[y][1] * 100:.0f}%" for y in yrs) + f" | {agg[1] * 100:.0f}% |")
+            w_(f"| | 空き | " + " | ".join(f"{tab[y][2] * 100:.0f}%" for y in yrs) + f" | {agg[2] * 100:.0f}% |")
+            w_(f"| | 買いの数（87銘柄／テーマの外） | " + " | ".join(f"{tab[y][3]:.0f}／{tab[y][4]:.0f}" for y in yrs) + " | |")
+        w_("\n今回の期間（空の枠から）の買いの数（乱数30通りの中央値。87銘柄／テーマの外）: " + "、".join(
+            f"{k} {np.median([sum(1 for x in tl if x[6] == 0) for tl in lt_]):.0f}／{np.median([sum(1 for x in tl if x[6] == 1) for tl in lt_]):.0f}"
+            for k, _, lt_ in tr_ if lt_ and len(lt_[0][0] if lt_[0] else []) > 6))
     w_("\n- この結果は数値を条件どおりに計算したもので、Claudeによる個別銘柄の売買判断ではない。")
     open(a.out, "w", encoding="utf-8").write("\n".join(L) + "\n")
     print("\n".join(L))

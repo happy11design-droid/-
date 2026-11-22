@@ -464,7 +464,54 @@ def main():
                 FORMS.append((f"{RLAB[k_]}の日だけ⑳", [(0, t) for t in TA if t["sd"] not in REG[k_] or strong(t, 90)] + base_out))
             for k_ in ("both200", "s2"):
                 FORMS.append((f"{RLAB[k_]}の日だけ⑪（RS≧80）", [(0, t) for t in TA if t["sd"] not in REG[k_] or strong(t, 80)] + base_out))
-        CBK = {} if os.environ.get("LBT_REGIME") == "1" or os.environ.get("LBT_FIX") == "1" or os.environ.get("LBT_MIX") == "1" else {FORMS[5][0]: (3, 3, 10, "loss"), FORMS[6][0]: (3, 3, 20, "loss"), FORMS[7][0]: (3, 3, "sox20", "stop"),
+        if os.environ.get("LBT_SWITCH") == "1":   # 2026-11-22 ユーザーの指示「全て検証して」: 87銘柄の割合で守りに入り、下げ止まりで攻めに戻す（backtest_retest.py の b50 などと同じ決め方）
+            A87 = sorted(s for s in A if s in data)
+            br50, br200, brnl = {}, {}, {}
+            for d in days:
+                a50 = a200 = nl = n_ = 0
+                for s in A87:
+                    k = pos[s].get(d)
+                    s_ = data[s]
+                    if k is None or k < 200 or s_["ma50"][k] is None:
+                        continue
+                    c_ = s_["c"]
+                    n_ += 1
+                    a50 += c_[k] > s_["ma50"][k]
+                    a200 += c_[k] > sum(c_[k - 199:k + 1]) / 200
+                    nl += c_[k] <= min(c_[k - 59:k + 1])
+                if n_ >= 20:
+                    br50[d], br200[d], brnl[d] = a50 / n_, a200 / n_, nl / n_
+            def hyst(enter, leave):
+                out_, on_ = set(), False
+                for k, d in enumerate(days):
+                    if not on_ and enter(k, d):
+                        on_ = True
+                    elif on_ and leave(k, d):
+                        on_ = False
+                    if on_:
+                        out_.add(d)
+                return out_
+            def w30(k, d):
+                j = sxi.get(d)
+                if j is None or j < 160:
+                    return False
+                m_, mp_ = sum(sx_c[j - 149:j + 1]) / 150, sum(sx_c[j - 159:j - 9]) / 150
+                return sx_c[j] > m_ and m_ >= mp_
+            e50 = lambda k, d: d in br50 and br50[d] < 0.30
+            nlq = lambda k, d: k >= 4 and all(brnl.get(days[j], 1) <= 0.02 for j in range(k - 4, k + 1))
+            REG = {"b50": {d for d in days if e50(0, d)}, "b50h": hyst(e50, lambda k, d: br50.get(d, 0) >= 0.50),
+                   "b50nl": hyst(e50, lambda k, d: nlq(k, d) and br50.get(d, 0) >= 0.40),
+                   "b200h": hyst(lambda k, d: d in br200 and br200[d] < 0.40, lambda k, d: br200.get(d, 0) >= 0.55), "b50w30": hyst(e50, w30)}
+            RLAB = {"b50": "50日線より上が30%未満の日", "b50h": "50日線より上が30%未満で守り・50%以上で戻す",
+                    "b50nl": "50日線より上が30%未満で守り・新安値が減り40%以上で戻す", "b200h": "200日線より上が40%未満で守り・55%以上で戻す",
+                    "b50w30": "50日線より上が30%未満で守り・SOXがステージ2で戻す"}
+            for k_, v_ in REG.items():
+                print(f"87銘柄の{RLAB[k_]}: 1996年〜の{sum(1 for d in days if d in v_) / len(days):.0%}", file=sys.stderr)
+            FORMS = [FORMS[0], ("⑳ 87銘柄は150日線が上向きでRS≧90の銘柄だけ買う（いつも）", [(0, t) for t in TA if strong(t, 90)] + base_out)]
+            for k_ in REG:
+                FORMS.append((f"87銘柄の{RLAB[k_]}（守りは⑳）", [(0, t) for t in TA if t["sd"] not in REG[k_] or strong(t, 90)] + base_out))
+                FORMS.append((f"87銘柄の{RLAB[k_]}（守りは87銘柄を買わずテーマの外だけ）", [(0, t) for t in TA if t["sd"] not in REG[k_]] + base_out))
+        CBK = {} if os.environ.get("LBT_REGIME") == "1" or os.environ.get("LBT_FIX") == "1" or os.environ.get("LBT_MIX") == "1" or os.environ.get("LBT_SWITCH") == "1" else {FORMS[5][0]: (3, 3, 10, "loss"), FORMS[6][0]: (3, 3, 20, "loss"), FORMS[7][0]: (3, 3, "sox20", "stop"),
                FORMS[8][0]: (3, 3, "sox20", "stop"), FORMS[9][0]: (3, 3, "sox20", "stop"), FORMS[13][0]: (3, 3, 10, "loss")}
         if os.environ.get("LBT_REGIME") == "1":
             CBK = {}
@@ -756,7 +803,7 @@ def main():
         w(f"| {nm} | " + " | ".join(cells) + " |")
     out = {"forms": [nm for nm, _ in FORMS], "starts": [days[k] for k in starts], "roll": roll, "special_spans": spans, "bears": bears}
     os.makedirs(C + "results", exist_ok=True)
-    json.dump(out, open(C + ("results/long_bear_roll_mix.json" if os.environ.get("LBT_MIX") == "1" else "results/long_bear_roll_fix.json" if os.environ.get("LBT_FIX") == "1" else "results/long_bear_roll_regime.json" if os.environ.get("LBT_REGIME") == "1" else "results/long_bear_roll_extra.json" if os.environ.get("LBT_EXTRA") == "1" else "results/long_bear_roll.json"), "w"), ensure_ascii=False)
+    json.dump(out, open(C + ("results/long_bear_roll_switch.json" if os.environ.get("LBT_SWITCH") == "1" else "results/long_bear_roll_mix.json" if os.environ.get("LBT_MIX") == "1" else "results/long_bear_roll_fix.json" if os.environ.get("LBT_FIX") == "1" else "results/long_bear_roll_regime.json" if os.environ.get("LBT_REGIME") == "1" else "results/long_bear_roll_extra.json" if os.environ.get("LBT_EXTRA") == "1" else "results/long_bear_roll.json"), "w"), ensure_ascii=False)
     open(a.out, "w", encoding="utf-8").write("\n".join(L) + "\n")
     print("\n".join(L))
 

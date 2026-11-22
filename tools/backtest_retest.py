@@ -2624,6 +2624,60 @@ def opt_stage(base, data, sim, days, ind, cache, part):
         _m = _re.match(r"^\| ([A-Z][A-Z0-9.\-]*) \|", _ln)
         if _m and _cur and _m.group(1) != "ティッカー":
             _TG[_m.group(1)] = _cur
+    # 2026-11-22 ユーザーの指示「全て検証して」（相場に下げの傾向が出たら守り、下げ止まったら攻めに切り替える）:
+    # 87銘柄のうち50日線・200日線より上の銘柄の割合と、60取引日の安値（終値）の銘柄の割合で「守りの間」の日の集合を作る。
+    # その日の引けで分かる値だけを使う（合図の日 t["sd"] の引けで判定し、買うのは翌日以降）。全業種の監視銘柄の検証でも同じ87銘柄の割合を使う
+    #   b50: 50日線より上が30%未満の日／b50h: 30%未満で守りに入り、50%以上に戻ったら攻めに戻す
+    #   b50nl: 30%未満で守りに入り、60日安値の銘柄が2%以下の日が5日続き、かつ50日線より上が40%以上で戻す
+    #   b200h: 200日線より上が40%未満で守りに入り、55%以上で戻す
+    #   b50w30: 30%未満で守りに入り、SOXが上向きの150日線（30週線）の上に出たら戻す（ワインスタインのステージ2）
+    _T87 = [s_ for s_ in _TG if s_ in data]
+    _br50, _br200, _brnl = [None] * len(days), [None] * len(days), [None] * len(days)
+    _p87 = {s_: {x: i for i, x in enumerate(data[s_]["date"])} for s_ in _T87}
+    _cs87 = {}
+    for s_ in _T87:
+        cs_ = [0.0]
+        for v_ in data[s_]["c"]:
+            cs_.append(cs_[-1] + v_)
+        _cs87[s_] = cs_
+    for k, d in enumerate(days):
+        a50 = a200 = nl = n_ = 0
+        for s_ in _T87:
+            i = _p87[s_].get(d)
+            if i is None or i < 200:
+                continue
+            c_, cs_ = data[s_]["c"], _cs87[s_]
+            n_ += 1
+            a50 += c_[i] > (cs_[i + 1] - cs_[i - 49]) / 50
+            a200 += c_[i] > (cs_[i + 1] - cs_[i - 199]) / 200
+            nl += c_[i] <= min(c_[i - 59:i + 1])
+        if n_ >= 20:
+            _br50[k], _br200[k], _brnl[k] = a50 / n_, a200 / n_, nl / n_
+    def _hyst(enter, leave):
+        out_, on_ = set(), False
+        for k in range(len(days)):
+            if not on_ and enter(k):
+                on_ = True
+            elif on_ and leave(k):
+                on_ = False
+            if on_:
+                out_.add(days[k])
+        return out_
+    def _w30s(k):
+        if k < 160 or None in _sxl[k - 159:k + 1]:
+            return False
+        m_, mp_ = sum(_sxl[k - 149:k + 1]) / 150, sum(_sxl[k - 159:k - 9]) / 150
+        return _sxl[k] > m_ and m_ >= mp_
+    _nlq = lambda k: k >= 4 and all(_brnl[j] is not None and _brnl[j] <= 0.02 for j in range(k - 4, k + 1))
+    _e50 = lambda k: _br50[k] is not None and _br50[k] < 0.30
+    SKIPSET["b50"] = {days[k] for k in range(len(days)) if _e50(k)}
+    SKIPSET["b50h"] = _hyst(_e50, lambda k: _br50[k] is not None and _br50[k] >= 0.50)
+    SKIPSET["b50nl"] = _hyst(_e50, lambda k: _nlq(k) and _br50[k] is not None and _br50[k] >= 0.40)
+    SKIPSET["b200h"] = _hyst(lambda k: _br200[k] is not None and _br200[k] < 0.40, lambda k: _br200[k] is not None and _br200[k] >= 0.55)
+    SKIPSET["b50w30"] = _hyst(_e50, _w30s)
+    BREADTH = {"days": days, "b50": _br50, "b200": _br200, "nl": _brnl}
+    print("87銘柄の割合の守りの間: " + "、".join(f"{k_} 2015年〜の{sum(1 for d in SKIPSET[k_] if d >= '2015-01-01') / max(1, sum(1 for d in days if d >= '2015-01-01')):.0%}の日"
+                                     for k_ in ("b50", "b50h", "b50nl", "b200h", "b50w30")), file=sys.stderr)
     if os.environ.get("OPT_GROUP_IND"):   # 全業種の監視銘柄では、今の87銘柄のグループ（後知恵）を使わず業種だけで分ける
         _TG = {}
     def group_of(sym):
@@ -4668,6 +4722,13 @@ def opt_stage(base, data, sim, days, ind, cache, part):
     for reg_, lab_ in (("both200", "SOXとS&P500が両方200日線の下"), ("sox200", "SOXが200日線の下"), ("s2", "SOXが60日の最高値から−10%以下（S2）"),
                        ("sp15", "特殊な下げの印"), ("sox200dn", "SOXが200日線の下で50日線が下向き")):
         V1[f"強さの条件: {lab_}の日だけ、87銘柄は150日線が上向きでRS≧90の銘柄だけ買う"] = {"rskip": (f"strong90@{reg_}", "all")}
+    # 2026-11-22 ユーザーの指示「全て検証して」: 87銘柄の割合で守りに入り、下げ止まりの合図で攻め（今のルール）に戻す
+    BRL = {"b50": "87銘柄の50日線より上が30%未満の日", "b50h": "87銘柄の50日線より上が30%未満で守り・50%以上で戻す",
+           "b50nl": "87銘柄の50日線より上が30%未満で守り・60日安値の銘柄が2%以下の日が5日続き50日線より上が40%以上で戻す",
+           "b200h": "87銘柄の200日線より上が40%未満で守り・55%以上で戻す", "b50w30": "87銘柄の50日線より上が30%未満で守り・SOXがステージ2で戻す"}
+    for reg_, lab_ in BRL.items():
+        V1[f"切り替え: {lab_}（守りは強さの条件）"] = {"rskip": (f"strong90@{reg_}", "all")}
+        V1[f"切り替え: {lab_}（守りは87銘柄を買わずテーマの外だけ）"] = {"rskip": (f"no87@{reg_}", "all")}
     # 保有全体の異常（2026-10-18 ユーザーの指示「全ての銘柄が損切りに達した異常事態を対策できなかったことが問題」）
     for n_, x_, md_ in ((2, 0.08, "loser"), (2, 0.10, "loser"), (3, 0.08, "loser"), (3, 0.10, "loser"), ("all", 0.05, "loser"), ("all", 0.08, "loser"),
                         (2, 0.08, "all"), (3, 0.10, "all")):
@@ -5019,6 +5080,9 @@ def opt_stage(base, data, sim, days, ind, cache, part):
                         rs_ = s_["rs"]
                         return (rs_[k] or 0) < b_ and max((x or 0) for x in rs_[k - 63:k]) >= a_
                     trs = [t for t in trs if not _fallen(t)]
+            elif k_.startswith("no87@"):   # 2026-11-22 ユーザーの指示「全て検証して」: 守りの間（日の集合）は87銘柄の候補を買わず、テーマの外の強い銘柄だけ買う
+                regset_ = SKIPSET[k_.partition("@")[2]]
+                trs = [t for t in trs if t["rule"] not in ("B", "C", "M", "V", "W") or t.get("x") == "out" or t["sd"] not in regset_]
             elif k_.startswith("strong"):   # 2026-11-22: 87銘柄（テーマの外でない候補）は、合図の日に150日線（30週線）が20取引日前より上で、RS≧N の銘柄だけ買う
                 # （1996年〜の長い下げの検証 tools/long_bear_test.py の⑪。崩れたテーマの銘柄の押し目を固定の一覧で買い続けないため）
                 # "strong90@sox200" のように @ の後に日の集合を書くと、その日（下落相場の日）だけ当てる（2026-11-22 ユーザーの指示「検証して」）
@@ -5415,7 +5479,12 @@ def opt_stage(base, data, sim, days, ind, cache, part):
             if nm_ != REF and os.environ.get("OPT_EQDUMP_ALL") != "1":
                 continue
             trs, sp = make(spec_)
-            out = {"days": days, "eq": [], "live": [], "live_trades": []}
+            out = {"days": days, "eq": [], "live": [], "live_trades": [], "trades": []}
+            byd = {(t["sym"], t["in"]): t for t in trs}
+            # 売買の記録: (買った日, 売った日, 理由, 銘柄, ルール, 2倍ETFなら2, テーマの外なら1, 買う金額の倍率, 損益)。2026-11-22: 空き枠がテーマの外に回る割合を数えるため
+            trow = lambda x: [x[0], x[1], x[2], x[3], (byd.get((x[3], x[0])) or {}).get("rule"), 2 if (byd.get((x[3], x[0])) or {}).get("L") == 2 else 1,
+                              1 if (byd.get((x[3], x[0])) or {}).get("x") == "out" else 0, (byd.get((x[3], x[0])) or {}).get("szm", 1.0),
+                              (byd.get((x[3], x[0])) or {}).get("ret")]
             for q in range(30):
                 for key, d_from in (("eq", days[0]), ("live", st_)):
                     lg = []
@@ -5423,10 +5492,12 @@ def opt_stage(base, data, sim, days, ind, cache, part):
                     eqd = {x[1]: x[2] for x in lg if x[0] == "eq"}
                     out[key].append([eqd.get(d) for d in days])
                     if key == "live":
-                        byd = {(t["sym"], t["in"]): t for t in trs}
-                        out["live_trades"].append([[x[0], x[1], x[2], x[3], (byd.get((x[3], x[0])) or {}).get("rule"),
-                                                    2 if (byd.get((x[3], x[0])) or {}).get("L") == 2 else 1] for x in lg if x[0] != "eq"])
+                        out["live_trades"].append([trow(x) for x in lg if x[0] not in ("eq", "req", "cb")])
+                    elif q < 10:
+                        out["trades"].append([trow(x) for x in lg if x[0] not in ("eq", "req", "cb")])
             allf[nm_] = out
+        allf["_regs"] = {k_: sorted(SKIPSET[k_]) for k_ in ("b50", "b50h", "b50nl", "b200h", "b50w30", "sox200", "both200") if k_ in SKIPSET}
+        allf["_breadth"] = BREADTH
         _js.dump(allf if os.environ.get("OPT_EQDUMP_ALL") == "1" else allf[REF], open(os.environ["OPT_EQDUMP"], "w"), ensure_ascii=False)
         print("資金を書き出し", os.environ["OPT_EQDUMP"], file=sys.stderr)
     if os.environ.get("OPT_DEBUG_EQ"):   # 調べる用: 最初の形の乱数1通りの、指定の日からの資金と保有（OPT_DEBUG_EQ=開始日）
