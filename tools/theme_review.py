@@ -365,7 +365,20 @@ def cmd_review(a):
         weather_check(a.dir, rows, w)
     except Exception as e_:   # 週次レビューを止めない
         w(f"\n## 5. 天気予報とニュースの答え合わせ\n\n計算できなかった（{type(e_).__name__}: {e_}）")
-    for fn_, nm_ in ((seq_tests, "6. 逐次の判断"), (monitor, "7. 効き目の見張り")):   # 2026-11-15 M3・M4（Fableの提案、ユーザーの指示「項目を足して」）
+    if not a.since:
+        # 累計の方だけ: ルールの合図だけで4銘柄の枠・2倍ETF込みで売買した場合（著者の判定は使わない。2026-11-20 ユーザーの指示）
+        try:
+            import theme_replay
+            w("\n" + theme_replay.section(a.dir, CAPITAL))
+        except Exception as e_:   # 週次レビューを止めない
+            w(f"\n## 6. ルールの合図だけで売買した場合（著者の判定は使わない）\n\n計算できなかった（{type(e_).__name__}: {e_}）")
+        # 並行記録: 2026-11-23 から同じ金額で始めた仮の資金（今のルール・止める形・静観・上がっている業種・上がっている銘柄。2026-11-22 ユーザーの指示）
+        try:
+            import paper_track
+            w("\n" + paper_track.section(a.dir, paper_track.START, CAPITAL))
+        except Exception as e_:   # 週次レビューを止めない
+            w(f"\n## 7. 並行記録（同じ日に始めた仮の資金）\n\n計算できなかった（{type(e_).__name__}: {e_}）")
+    for fn_, nm_ in ((seq_tests, "8. 逐次の判断"), (monitor, "9. 効き目の見張り")):   # 2026-11-15 M3・M4（Fableの提案、ユーザーの指示「項目を足して」）
         try:
             fn_(rows, w)
         except Exception as e_:   # 週次レビューを止めない
@@ -456,7 +469,7 @@ def seq_tests(rows, w):
         if ("ミネルヴィニ" in x["kind"] or "新高値" in x["kind"]) and x.get("hot") is not None:
             byh.setdefault(week(x["date"]), {}).setdefault(bool(x["hot"]), []).append(x["ret"])
     Dh = [(wk_, sum(g[False]) / len(g[False]) - sum(g[True]) / len(g[True])) for wk_, g in sorted(byh.items()) if g.get(False) and g.get(True)]
-    w("\n## 6. 逐次の判断（記録だけ。売買のルールは変えない）\n")
+    w("\n## 8. 逐次の判断（記録だけ。売買のルールは変えない）\n")
     w("週ごとに2つの群の差 D_週 を出し、プラスの週 w・マイナスの週 l から 点数 ＝ 0.3365×w − 0.5108×l。+2.079 以上で「効いている」、−1.504 以下で「効いていない」、"
       "その間は続ける（Fableの提案 `Fableの提案_確かめ方_2026-11-15.md` 3節）。「効いている」は採用ではなく、バックテストと合わせて検討を始める合図。売り終わった候補だけ。\n")
     w("| 対象 | D_週（プラスなら効いている向き） | 数えた週 | プラスの週 | マイナスの週 | 点数 | 判断 | D_週の平均 | 「効いている」まで、あとプラスの週 |")
@@ -486,7 +499,7 @@ def monitor(rows, w):
             if p0 and p1:
                 by.setdefault(x["exit_date"][:7], []).append(x["ret"] - b["beta"] * (p1 / p0 - 1))
     vals = [(m, sum(v) / len(v), len(v)) for m, v in sorted(by.items()) if len(v) >= 2]
-    w("\n## 7. 効き目の見張り（知らせるだけ。売買のルールは変えない）\n")
+    w("\n## 9. 効き目の見張り（知らせるだけ。売買のルールは変えない）\n")
     w(f"急落の底の、指数（SOX）の分を除いた損益（損益 − {b['beta']:.2f}×同じ期間のSOXの騰落率）を、売った月ごとに平均し（2件以上の月）、"
       f"2015〜2020年のバックテストの基準（月の平均 {b['mean'] * 100:+.2f}%・ばらつき {b['sd'] * 100:.2f}%）と比べる（CUSUM。Fableの提案 4節。基準は `新分析ツール/見張りの基準.json`）。\n")
     if not vals:
@@ -606,6 +619,10 @@ def load_real(path):
             if m:   # 2倍ETFで買った: 払った金額を元の株の2倍の値動きで近似する（目減りは含まない。2026-10-05）
                 t["lev"] = 2
                 t["shares"] = 2 * float(m.group(2)) * float(m.group(3)) / t["buy"]
+                # 2026-11-20: 保有中はETFの実際の終値で評価する（2倍の近似は大きく下げると −100% を超える。SNDK −52% で SNDU の損が −105% になった）。
+                # Yahoo のETFの値段は分割に合わせて調整されるので、買値・株数も今の基準に直す
+                fe0 = sp_.factor(m.group(1), c[1])
+                t["etf"], t["etf_sh"], t["etf_buy"] = m.group(1), float(m.group(2)) * fe0, float(m.group(3)) / fe0
             if len(c) >= 7 and re.match(r"^\d{4}-\d{2}-\d{2}$", c[5]) and c[6]:
                 t["sell_date"], t["sell_raw"] = c[5], float(c[6])
                 t["sell"] = t["sell_raw"] / sp_.factor(c[0], c[5])
@@ -630,12 +647,16 @@ def actual_vs_expected(w):
     if not closed and not opened:
         w("実際の売買の記録はまだない。")
         return
-    px = {}
+    px, epx = {}, {}
     for t in closed + opened:
         if t["sym"] not in px:
             d = fetch_daily(t["sym"])
             if d:
                 px[t["sym"]] = dict(zip(d["date"], d["c"]))
+        if t.get("etf") and t["etf"] not in epx:
+            d = fetch_daily(t["etf"])
+            if d:
+                epx[t["etf"]] = dict(zip(d["date"], d["c"]))
     today = max((max(v) for v in px.values() if v), default=dt.date.today().isoformat())
     start = min(t["buy_date"] for t in closed + opened)
     # 毎日の資金（決済した損益＋保有中の含み損益、終値で評価）
@@ -649,6 +670,12 @@ def actual_vs_expected(w):
             if t["sell_date"] and t["sell_date"] <= d:
                 eq += t["shares"] * (t["sell"] - t["buy"])
                 continue
+            if t.get("etf") in epx:   # 2倍ETFで持っている間は、ETFの実際の終値で評価する（2026-11-20）
+                c = epx[t["etf"]].get(d)
+                if c is not None:
+                    last_close[("ETF", t["etf"])] = c
+                eq += t["etf_sh"] * (last_close.get(("ETF", t["etf"]), t["etf_buy"]) - t["etf_buy"])
+                continue
             c = px.get(t["sym"], {}).get(d)
             if c is not None:
                 last_close[t["sym"]] = c
@@ -657,7 +684,8 @@ def actual_vs_expected(w):
         peak = max(peak, eq)
         mdd = max(mdd, 1 - eq / peak)
     realized = sum(t["shares"] * (t["sell"] - t["buy"]) for t in closed)
-    unreal = sum(t["shares"] * (last_close.get(t["sym"], t["buy"]) - t["buy"]) for t in opened)
+    unreal = sum(t["etf_sh"] * (last_close.get(("ETF", t["etf"]), t["etf_buy"]) - t["etf_buy"]) if t.get("etf") in epx
+                 else t["shares"] * (last_close.get(t["sym"], t["buy"]) - t["buy"]) for t in opened)
     rets = [t["lev"] * (t["sell"] / t["buy"] - 1) for t in closed]
     n = len(rets)
     win = sum(r > 0 for r in rets) / n if n else None

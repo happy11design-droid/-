@@ -554,6 +554,193 @@ def add_extra87(syms, ctx, cache):
     print("S&P500 でない・新しい監視銘柄を加えた: " + "、".join(added), file=sys.stderr)
 
 
+def era_stage(data, build, days, ind, cache):
+    """2026-11-22 ユーザーの指示「全て検証して最善策を提案して」（検証案B・C）: 今のルール（元の株、2倍ETFなし）を、長い下げを含む期間
+    （1999〜2012年、S&P500の過去の構成銘柄のうちYahooに株価が残る銘柄）と2015年〜で、止める形・静観・乗り換えと比べる。
+    買う順番はRSの高い順（今のルール）、4銘柄・1銘柄＝資金÷4・同じ業種2銘柄まで、待っている現金は短期国債（^IRX）の利息を付ける。
+    環境変数: BT_ERA_LO・BT_ERA_HI（期間）、BT_ERA_OUT（書き出すファイル）、BT_ERA_LABEL（見出し）"""
+    import json as _json
+    import backtest_crash_mode as cm
+    from backtest_caps import THEME
+    DC = {"Electrical Equipment & Parts", "Specialty Industrial Machinery", "Engineering & Construction", "Building Products & Equipment",
+          "Utilities—Independent Power Producers", "REIT—Specialty"}
+    AI = set(THEME) | DC
+    lo, hi = os.environ.get("BT_ERA_LO", days[0]), os.environ.get("BT_ERA_HI", days[-1])
+    label = os.environ.get("BT_ERA_LABEL", f"{lo}〜{hi}")
+    dd_all = [d for d in days if lo <= d <= hi]
+    pos = {}
+    def ix(sym, d):
+        if sym not in pos:
+            pos[sym] = {x: k for k, x in enumerate(data[sym]["date"])}
+        return pos[sym].get(d)
+    trs = build()
+    for t in trs:
+        s = data[t["sym"]]
+        i0 = ix(t["sym"], t["in"])
+        t["rs"] = (s["rs"][i0 - 1] or 0) if i0 else 0
+        t["ai"] = ind.get(t["sym"]) in AI
+    by_in = {}
+    for t in trs:
+        by_in.setdefault(t["in"], []).append(t)
+    FL = cm.market_flags(cache)
+    IRX = cm.irx_daily()
+    prev_of = {d: (days[k - 1] if k else None) for k, d in enumerate(days)}
+
+    def port(lo_, hi_, univ="all", block=None, sellall=None, cbk=None, switch=None, curve=None, stats=None):
+        """univ: all＝全業種（後知恵なしの監視銘柄）、ai＝テーマの業種だけ。block(合図の日)→新しい買いを止める、sellall(前の日)→寄り付きで全部売る、
+        cbk=(件数, 損の件数, 止める取引日)、switch(合図の日)→テーマの業種だけの形で、その日は全業種から買う（上がっている銘柄への乗り換え）"""
+        dd = [d for d in days if lo_ <= d <= hi_]
+        cash, held, peak, mdd, eq = 1.0, [], 1.0, 0.0, 1.0
+        res, until, nb, nsell = [], -1, 0, 0
+        for k, d in enumerate(dd):
+            pd_ = prev_of[d]
+            if k:
+                cash *= 1 + IRX.get(pd_, 0.0)
+            if sellall and k and pd_ and sellall(pd_) and held:
+                for h in held:
+                    s = data[h["t"]["sym"]]
+                    j = ix(h["t"]["sym"], d)
+                    vo = h["v"] * (s["o"][j] / s["c"][j - 1]) if j else h["v"]
+                    cash += h["size"] * vo * (1 - COST)
+                nsell += len(held)
+                held = []
+            still = []
+            for h in held:
+                v = h["t"]["path"].get(d)
+                if v is not None:
+                    h["v"] = v
+                if h["t"]["out"] == d:
+                    cash += h["size"] * h["v"]
+                    res.append(h["v"] - 1)
+                    if cbk and len(res) >= cbk[0] and sum(1 for x in res[-cbk[0]:] if x < 0) >= cbk[1]:
+                        until = max(until, k + cbk[2])
+                else:
+                    still.append(h)
+            held = still
+            eq = cash + sum(h["size"] * h["v"] for h in held)
+            ok_buy = k > 0 and k > until and not (block and pd_ and block(pd_))
+            if ok_buy:
+                wide = univ == "all" or (switch and pd_ and switch(pd_))
+                cands = [t for t in by_in.get(d, []) if wide or t["ai"]]
+                for t in sorted(cands, key=lambda t: (t["prio"], -t["rs"])):
+                    if any(h["t"]["sym"] == t["sym"] for h in held):
+                        continue
+                    if len(held) >= SLOTS:
+                        break
+                    if sum(1 for h in held if ind.get(h["t"]["sym"]) == ind.get(t["sym"])) >= 2:
+                        continue
+                    size = min(eq / SLOTS, cash)
+                    if size <= 0:
+                        break
+                    cash -= size
+                    nb += 1
+                    v0 = t["path"].get(d, 1.0)
+                    if t["out"] == d:
+                        cash += size * v0
+                        res.append(v0 - 1)
+                        continue
+                    held.append({"t": t, "size": size, "v": v0})
+            eq = cash + sum(h["size"] * h["v"] for h in held)
+            peak = max(peak, eq)
+            mdd = max(mdd, 1 - eq / peak)
+            if curve is not None:
+                curve.append((d, eq))
+        if stats is not None:
+            stats.update(n=len(res), win=sum(1 for x in res if x > 0) / max(1, len(res)), buys=nb, sold=nsell)
+        yrs = max(1e-9, (dt.date.fromisoformat(dd[-1]) - dt.date.fromisoformat(dd[0])).days / 365.25)
+        return eq ** (1 / yrs) - 1, mdd, eq - 1
+
+    f1, f5, f3 = FL["①"], FL["⑤"], FL["③"]
+    FORMS = [("今のルール", {}),
+             ("①SOXとS&P500が両方200日線の下の日は新しい買いを止める", {"block": lambda d: d in f1}),
+             ("①で持っている銘柄も全部売り、新しい買いも止める（静観）", {"block": lambda d: d in f1, "sellall": lambda d: d in f1}),
+             ("⑤SOXが下向きの200日線の下の日は新しい買いを止める", {"block": lambda d: d in f5}),
+             ("⑤で持っている銘柄も全部売り、新しい買いも止める（静観）", {"block": lambda d: d in f5, "sellall": lambda d: d in f5}),
+             ("③特殊な下げの印の間は新しい買いを止める", {"block": lambda d: d in f3}),
+             ("損切り（損で終わった売買）が3回続いたら20取引日止める（検証案C）", {"cbk": (3, 3, 20)}),
+             ("①で止める＋損切りが3回続いたら20取引日止める", {"block": lambda d: d in f1, "cbk": (3, 3, 20)})]
+    UNIVS = [("全業種（後知恵なしの監視銘柄）", "all"), ("テーマの業種だけ（AI・半導体・データセンター関連の業種）", "ai")]
+    if os.environ.get("BT_ERA_EXTRA") == "1":   # 2026-11-22: テーマの業種だけで、損切りが続いたら止める形の数値違いと、乗り換えとの組み合わせ
+        UNIVS = [UNIVS[1]]
+        sw1 = lambda d: d in f1
+        FORMS = [FORMS[0],
+                 ("損切りが3回続いたら20取引日止める", {"cbk": (3, 3, 20)}),
+                 ("損切りが3回続いたら10取引日止める", {"cbk": (3, 3, 10)}),
+                 ("損切りが3回続いたら40取引日止める", {"cbk": (3, 3, 40)}),
+                 ("損切りが2回続いたら20取引日止める", {"cbk": (2, 2, 20)}),
+                 ("直近5件のうち3件が損なら20取引日止める", {"cbk": (5, 3, 20)}),
+                 ("損切りが3回続いたら20取引日止める＋①の日は全業種から買う", {"cbk": (3, 3, 20), "switch": sw1}),
+                 ("損切りが3回続いたら20取引日止める＋⑤の日は全業種から買う", {"cbk": (3, 3, 20), "switch": lambda d: d in f5}),
+                 ("⑤の日は全業種から買う", {"switch": lambda d: d in f5})]
+    EPI = [("ITバブルの崩壊 2000-03〜2002-10", "2000-03-10", "2002-10-09"), ("2003〜2006年", "2003-01-02", "2006-12-29"),
+           ("金融危機 2007-10〜2009-03", "2007-10-09", "2009-03-09"), ("2009-03〜2012年", "2009-03-10", "2012-12-31"),
+           ("2015〜2021年", "2015-01-02", "2021-12-31"), ("2022年", "2022-01-03", "2022-12-30"), ("2023年〜", "2023-01-03", "2026-12-31"),
+           ("今回 2026-10-01〜", "2026-10-01", "2026-12-31")]
+    EPI = [e for e in EPI if e[1] >= lo and e[1] <= hi]
+    L = []
+    w = L.append
+    w(f"## {label}\n")
+    w(f"- 期間 {dd_all[0]}〜{dd_all[-1]}。売買の候補 {len(trs)}件（全業種）、うちテーマの業種 {sum(1 for t in trs if t['ai'])}件。合図の出ていた日の割合: "
+      + "、".join(f"{k} {sum(1 for d in dd_all if d in v) / len(dd_all) * 100:.0f}%" for k, v in FL.items()))
+    for un, uk in UNIVS:
+        forms = list(FORMS) + ([("テーマの業種だけ、①の日は全業種から買う（上がっている銘柄への乗り換え）", {"switch": lambda d: d in f1})] if uk == "ai" else [])
+        w(f"\n### {un}\n")
+        w("| 形 | 年率 | 最大下落率 | " + " | ".join(e[0] for e in EPI) + " | 売買の数 | 勝率 |")
+        w("|---|---|---|" + "---|" * len(EPI) + "---|---|")
+        curves = {}
+        for nm, kw in forms:
+            cv, st = [], {}
+            cagr, mdd, _ = port(lo, hi, univ=uk, curve=cv, stats=st, **kw)
+            curves[nm] = cv
+            cd = dict(cv)
+            ks = [d for d, _ in cv]
+            cells = []
+            for _, a_, b_ in EPI:
+                da = next((d for d in ks if d >= a_), None)
+                db = max((d for d in ks if d <= b_), default=None)
+                cells.append(f"{(cd[db] / cd[da] - 1) * 100:+.0f}%" if da and db and db > da else "-")
+            w(f"| {nm} | {cagr * 100:+.1f}% | {mdd * 100:.0f}% | " + " | ".join(cells) + f" | {st['n']} | {st['win'] * 100:.0f}% |")
+        # 1年の区切り（20取引日ごとに空の枠から250取引日）
+        w("\n1年の区切り（20取引日ごとに空の枠から始めて250取引日。今のルールとの差）:\n")
+        w("| 形 | 区切りの数 | 1年の損益の平均 | 今のルールとの差（平均） | 今のルールより良かった割合 | 悪い5%の1年の損益 | 悪い5%の最大下落率 |")
+        w("|---|---|---|---|---|---|---|")
+        starts = list(range(0, len(dd_all) - 250, 20))
+        base_r = None
+        for nm, kw in forms:
+            rr, md = [], []
+            for s0 in starts:
+                _, m_, r_ = port(dd_all[s0], dd_all[s0 + 250], univ=uk, **kw)
+                rr.append(r_)
+                md.append(m_)
+            if base_r is None:
+                base_r = rr
+            diff = [a_ - b_ for a_, b_ in zip(rr, base_r)]
+            q = lambda xs, f: sorted(xs)[max(0, int(len(xs) * f) - 1)]
+            w(f"| {nm} | {len(rr)} | {sum(rr) / len(rr) * 100:+.1f}% | {sum(diff) / len(diff) * 100:+.1f}pt | "
+              f"{sum(1 for x in diff if x > 0) / len(diff) * 100:.0f}% | {q(rr, 0.05) * 100:+.1f}% | {sorted(md)[int(len(md) * 0.95)] * 100:.0f}% |")
+            print(label, un, nm, "済み", file=sys.stderr)
+        yrs_ = sorted({d[:4] for d in dd_all})
+        w("\n年ごとの損益:\n")
+        w("| 形 | " + " | ".join(yrs_) + " |")
+        w("|---|" + "---|" * len(yrs_))
+        for nm, cv in curves.items():
+            cd = dict(cv)
+            ks = [d for d, _ in cv]
+            cells = []
+            prev_v = 1.0
+            for y in yrs_:
+                yk = [d for d in ks if d[:4] == y]
+                v = cd[yk[-1]]
+                cells.append(f"{(v / prev_v - 1) * 100:+.0f}")
+                prev_v = v
+            w(f"| {nm} | " + " | ".join(cells) + " |")
+    out = os.environ.get("BT_ERA_OUT")
+    txt = "\n".join(L) + "\n"
+    if out:
+        open(out, "w", encoding="utf-8").write(txt)
+    print(txt)
+
+
 def main():
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -562,13 +749,25 @@ def main():
     r.add_argument("--etf", default=None, help="etf2x: 2倍ETFにする銘柄（カンマ区切り）。省略すると backtest_2x.HAS_2X")
     r.add_argument("--drag", default=None, help="etf2x: 2倍ETFの目減り（年率）。数値なら全部同じ、'measured' なら 新分析ツール/2倍ETFの対応表.json の実測（ないものは0.12）")
     r.add_argument("--tag", default="", help="etf2x: 結果のファイル名と見出しに付ける名前（例: ムームー証券）")
-    r.add_argument("--stage", default="all", choices=("sell", "combo", "half", "filter", "rule", "stats", "dd", "robust", "earn", "realized", "etf2x", "etfrule", "weinstein", "rsi", "pivot", "exits", "pullback", "recover", "prio", "slope", "slope2", "slope3", "swap", "premium", "hot", "hotyear", "ideas", "theme", "halfadd", "replay", "stopcheck", "actual", "stopfreq", "themedrop", "crashstops", "ddsize", "shock", "parity", "audit", "opt1", "opt2", "sigcount", "all"))
+    r.add_argument("--stage", default="all", choices=("sell", "combo", "half", "filter", "rule", "stats", "dd", "robust", "earn", "realized", "etf2x", "etfrule", "weinstein", "rsi", "pivot", "exits", "pullback", "recover", "prio", "slope", "slope2", "slope3", "swap", "premium", "hot", "hotyear", "ideas", "theme", "halfadd", "replay", "stopcheck", "actual", "stopfreq", "themedrop", "crashstops", "ddsize", "shock", "parity", "audit", "opt1", "opt2", "sigcount", "era", "all"))
     r.add_argument("--keep-open", action="store_true", help="データの最終日までに売りが来ていない売買も最終日の終値で数える（2026-10-16 の点検。以前は数えなかった）")
     r.add_argument("--overlap", action="store_true", help="同じ銘柄の売買を持っている間の合図も数える（2026-10-16 の点検。以前は数えなかった）")
     r.add_argument("--recdir", default=None, help="parity: 毎朝の record.json を置いたディレクトリ")
     r.add_argument("--watch87", action="store_true", help="actual: 監視銘柄を後知恵なしの一覧ではなく 新分析ツール/テーマ監視銘柄.md の銘柄に固定する（後知恵あり。S&P500の構成銘柄かどうかは問わない）")
     a = ap.parse_args()
     bl.KEEP_OPEN, bl.OVERLAP = a.keep_open or bl.KEEP_OPEN, a.overlap or bl.OVERLAP   # BT_FIXED=1 のときは指定がなくても直した数え方
+    # 2026-11-22: 別の期間（1999〜2012年、`--stage era`）で動かすときの始まり・設計期間の区切りと、流動性の決まり。
+    # 古い期間の株価は後の株式分割で小さく調整されているので（1999年のAAPLは約0.3ドル）、「株価5ドル以上・出来高25万株以上」の代わりに
+    # 同じ下限の売買代金（50日平均の出来高×終値 ≧ 125万ドル。分割の調整で変わらない）で判定する（BT_LIQ_DOLLAR=1）
+    cb.START = os.environ.get("BT_START", cb.START)
+    cb.IS_END = os.environ.get("BT_IS_END", cb.IS_END)
+    cb.OOS_START = os.environ.get("BT_OOS_START", cb.OOS_START)
+    if os.environ.get("BT_LIQ_DOLLAR") == "1":
+        import backtest_trend as bt_liq
+        def _liq_dollar(s, i, spans):
+            return (s["vol50"][i] is not None and s["vol50"][i] * s["c"][i] >= 1_250_000 and bl.is_member(spans, s["date"][i]))
+        bt_liq.liquid = _liq_dollar
+        bs.liquid = _liq_dollar
     ctx = cb.setup(a.cache, with_parts=False)
     data, members, ind, days, G, end = (ctx[k] for k in ("data", "members", "ind", "days", "G", "end"))
     if a.watch87:   # 今のテーマ監視銘柄（87銘柄）だけにルールを当てる（2026-10-14 ユーザーの指示。後知恵あり）
@@ -864,8 +1063,8 @@ def main():
             out.append({"sym": t["sym"], "in": data[t["sym"]]["date"][t["i0"]], "out": max(p), "path": p, "prio": t["prio"], "rule": t["rule"], "w": t.get("w", 1.0)})
         return out
 
-    is_hi = max(d for d in days if d <= cb.IS_END)
-    oos_lo = min(d for d in days if d >= cb.OOS_START)
+    is_hi = max((d for d in days if d <= cb.IS_END), default=days[-1])
+    oos_lo = min((d for d in days if d >= cb.OOS_START), default=days[-1])
 
     def port(trs, seed, lo, hi, curve=None, rcurve=None, closed=None):
         dd = [d for d in days if lo <= d <= hi]
@@ -922,6 +1121,8 @@ def main():
         o_ = [port(trs, s0 + k, oos_lo, days[-1])[0] for k in range(n)]
         return {"all": cb.med([x[0] for x in a_]), "mdd": cb.med([x[1] for x in a_]), "is": cb.med(i_), "oos": cb.med(o_)}
 
+    if a.stage == "era":   # 2026-11-22: 長い下げを含む期間で、止める形・静観・乗り換えを確かめる（検証案B・C）
+        return era_stage(data, build, days, ind, a.cache)
     cur_tr = build()
     CUR = {sd: ev(cur_tr, sd) for sd in (SCREEN, CONF1, CONF2)}
     print("土台", {k[0]: (round(v["all"], 3), round(v["is"], 3), round(v["oos"], 3)) for k, v in CUR.items()}, file=sys.stderr)
@@ -3169,6 +3370,40 @@ def opt_stage(base, data, sim, days, ind, cache, part):
     #   Z2: 一人勝ち（短い期間）。直近10取引日でSOXが0%以下、銘柄が+10%以上かつSOXより15ポイント以上強く、終値が10取引日の最高値
     # 翌取引日の寄り付きで買う。売り: 日中に買値の−15%で損切り、J・Z1は終値が50日線の下（5取引日たってから）、Z2は20日線の下で翌日の寄り付き。最長120取引日
     _sxs = [sum(x for x in _sxl[max(0, k - 49):k + 1] if x) / 50 if k >= 49 and None not in _sxl[k - 49:k + 1] else None for k in range(nD)]
+    _NH = {}
+    def news_flag(sym, d):
+        """(個別の悪材料, 業界全体の悪材料)。合図の日を含む7日（暦日）の見出し。業界全体＝その7日に悪材料の見出しがある87銘柄の数が、その年の日の上位20%"""
+        if not _NH:
+            h_ = json.load(open(os.path.expanduser("~/.cache/stock_backtest/news/history_87.json")))
+            _NH["bad"] = {s_: sorted(v) for s_, v in h_["bad"].items()}
+            _NH["start"] = h_["weeks"][0]
+            per_day = {}
+            for s_, ds in _NH["bad"].items():
+                for x in ds:
+                    per_day.setdefault(x, set()).add(s_)
+            import datetime as _dt2
+            d0, d1 = _dt2.date.fromisoformat(h_["weeks"][0]), _dt2.date.fromisoformat(h_["weeks"][-1]) + _dt2.timedelta(days=6)
+            cnt, cur = {}, d0 + _dt2.timedelta(days=6)
+            while cur <= d1:
+                ss = set()
+                for k in range(7):
+                    ss |= per_day.get((cur - _dt2.timedelta(days=k)).isoformat(), set())
+                cnt[cur.isoformat()] = len(ss)
+                cur += _dt2.timedelta(days=1)
+            thy_ = {}   # 年ごとの上位20%（見出しの取れ方が新しい年ほど多いため、年ごとに線を引く）
+            for y_ in {d_[:4] for d_ in cnt}:
+                v_ = sorted(c_ for d_, c_ in cnt.items() if d_[:4] == y_)
+                thy_[y_] = max(1, v_[int(len(v_) * 0.8)])
+            _NH["cnt"], _NH["thy"] = cnt, thy_
+            print(f"見出しの悪材料: 業界全体の悪材料の線（年ごと、7日に何銘柄以上）{dict(sorted(thy_.items()))}", file=sys.stderr)
+        if d < _NH["start"]:
+            return (False, False)
+        import datetime as _dt2, bisect as _bs3
+        lo = (_dt2.date.fromisoformat(d) - _dt2.timedelta(days=6)).isoformat()
+        ds = _NH["bad"].get(sym, [])
+        i = _bs3.bisect_left(ds, lo)
+        ind_ = i < len(ds) and ds[i] <= d
+        return (ind_, _NH["cnt"].get(d, 0) >= _NH["thy"].get(d[:4], 99))
     _sigc, _BOOK = {}, {}
     def sig_trades(kind, prio_hi=True):
         ck_ = (kind, prio_hi)
@@ -4455,6 +4690,10 @@ def opt_stage(base, data, sim, days, ind, cache, part):
           "全部入り②新しい買い①③④と戻り⑤を足し、直近120取引日の平均がプラスのルールだけ買う": {"newsig": ("J_lo", "Z1", "Z2"), "reb": ("B", 2, "ma50", 120, "reb"), "adapt": ("roll", 120, False)},
           "全部入り③新しい買い①③④と戻り⑤を足すだけ": {"newsig": ("J_lo", "Z1", "Z2"), "reb": ("B", 2, "ma50", 120, "reb")},
           # 2026-11-13: 局面×指標×ニュースの組み合わせで、2015〜2021年の成績だけで作った決まり（tools/combo_search.py。OPT_BOOK=決まりのjson）
+          "見出し①個別の悪材料の見出しがあれば見送る（2023年〜）": {"newsbad": "ind"},
+          "見出し②業界全体の悪材料の週は見送る（2023年〜）": {"newsbad": "sector"},
+          "見出し③個別の悪材料だけのとき見送り、業界全体の悪材料の週は買う（2023年〜）": {"newsbad": "ind_only"},
+          "見出し④業界全体の悪材料の週の合図を先に買う（2023年〜）": {"newsbad": "sector_first"},
           "両方の期間で良かった①SOXが下向きの50日線の下の日は押し目を一番先に": {"regprio": ("B", "下↓")},
           "両方の期間で良かった②SOXが50日線の下で線が上向きの日に一人勝ち（逆行高）を足す": {"regadd": ("Z1", "下↑")},
           "組み合わせの決まり①見送るだけ": {"book": (os.environ.get("OPT_BOOK", ""), ("skip",))},
@@ -4876,6 +5115,18 @@ def opt_stage(base, data, sim, days, ind, cache, part):
                 trs = [t for t in trs if t["rule"] in ("S", "R", "Y") or not _hit(t, bk_["skip"])]
             if "prio" in use_:
                 trs = [{**t, "rs": t["rs"] + 1000} if t["rule"] not in ("S", "R") and _hit(t, bk_["prio"]) else t for t in trs]
+        if sp.get("newsbad"):   # 2026-11-19 ユーザーの指示「悪材料ありの場合でもエントリーしたら利益出るのか」→「検証して」（tools/news_history.py の見出し。2023年〜・87銘柄だけ）
+            md_ = sp["newsbad"]
+            def _nf(t):
+                return news_flag(t["sym"], t["sd"]) if t["rule"] in ("B", "C", "M", "V") and t.get("x") != "out" else (False, False)
+            if md_ == "ind":   # 個別の悪材料（その銘柄の悪材料の見出しが合図の日までの7日にある）なら見送る
+                trs = [t for t in trs if not _nf(t)[0]]
+            elif md_ == "sector":   # 業界全体の悪材料（87銘柄のうち悪材料の見出しがある銘柄の数が多い週）なら見送る
+                trs = [t for t in trs if not _nf(t)[1]]
+            elif md_ == "ind_only":   # 個別の悪材料だけのとき見送る（業界全体の悪材料の週は買う）
+                trs = [t for t in trs if not (_nf(t)[0] and not _nf(t)[1])]
+            elif md_ == "sector_first":   # 業界全体の悪材料の週の合図を先に買う
+                trs = [{**t, "rs": t["rs"] + 1000} if _nf(t)[1] else t for t in trs]
         if sp.get("regprio"):   # 2026-11-13: そのSOXの局面の日は、そのルールの合図を一番先に買う（組み合わせ検証で両方の期間に良かった形。後知恵あり）
             r_, g_ = sp["regprio"]
             trs = [{**t, "rs": t["rs"] + 1000, "ai": True} if t["rule"] == r_ and sox_reg(t["sd"]) == g_ else t for t in trs]

@@ -92,6 +92,14 @@ def fetch_daily(sym):
     """直近3年の日足（配当・分割調整済み）。取得できなければ None（新高値V2の「直前2年の最高値」に2年分以上が必要）"""
     try:
         res = json.loads(curl(f"https://query1.finance.yahoo.com/v8/finance/chart/{sym.replace('.', '-')}?interval=1d&range=3y"))["chart"]["result"][0]
+        # 2026-11-20: 日足が途中で切れて返ってきたら（SNDK の分割の直前に3日分だけになった）、1時間足から作った日足を使う
+        import yahoo_daily as yd
+        if yd.looks_truncated(res, 3):
+            rows = yd.hourly_daily(sym.replace(".", "-"), curl)
+            if len(rows) > len(res.get("timestamp") or []):
+                d = {"date": [r[0] for r in rows], "o": [r[1] for r in rows], "h": [r[2] for r in rows],
+                     "l": [r[3] for r in rows], "c": [r[4] for r in rows], "v": [r[5] for r in rows]}
+                return d if len(d["c"]) > 60 else None
         q, off = res["indicators"]["quote"][0], res["meta"].get("gmtoffset", 0)
         adj = res["indicators"].get("adjclose", [{}])[0].get("adjclose") or q["close"]
         d = {"date": [], "o": [], "h": [], "l": [], "c": [], "v": []}
@@ -211,6 +219,15 @@ def dark_cloud_signal(d, since):
     for j in range(2, len(d["c"])):
         if d["date"][j] > since and xs.dark_cloud(d, j):
             return d["date"][j]
+    return None
+
+
+def stop_breach(d, since, stop):
+    """買った日（since）以降で、日中の安値が損切り価格（stop）以下になった最初の日と、その日の安値。なければ None。
+    損切りは日中の逆指値なので、終値ではなく安値で判定する（2026-11-20）"""
+    for j in range(len(d["c"])):
+        if d["date"][j] >= since and d["l"][j] <= stop:
+            return d["date"][j], d["l"][j]
     return None
 
 
@@ -748,14 +765,15 @@ def main():
                 if bb_ == day:
                     ex = "**成立（出来高2倍の大陰線 → 翌日の寄り付きで全部売る）** " + ex
                 elif bb_:
-                    ex = f"**出来高2倍の大陰線が {bb_} に出た**（まだ持っていれば、次の寄り付きで全部売る） " + ex
+                    # 2026-11-20: 以前の日に出た全部売りの合図も「成立」として出し続ける（AMD の 11/05 の大陰線が「保有継続」と表示されていた）
+                    ex = f"**成立（出来高2倍の大陰線が {bb_} に出た → まだ持っていれば次の寄り付きで全部売る）** " + ex
             if "新高値" in h["rule"] or "ミネルヴィニ" in h["rule"]:
                 hd = half_signal(d, h["date"])
                 dc = dark_cloud_signal(d, h["date"])
                 if dc == day:
                     ex = "**成立（かぶせ線 → 翌日の寄り付きで全部売る）** " + ex
                 elif dc:
-                    ex = f"**かぶせ線が {dc} に出た**（まだ持っていれば、次の寄り付きで全部売る） " + ex
+                    ex = f"**成立（かぶせ線が {dc} に出た → まだ持っていれば次の寄り付きで全部売る）** " + ex
                 if hd == day:
                     ex += "。**半分売りの合図: 今日**（翌日の寄り付きで半分売る。残りはルールの手じまいまで持つ）"
                 elif hd:
@@ -766,8 +784,13 @@ def main():
             if ex2:
                 ex += f"（2倍ETF {ex2[0]} で持っている場合も、判定は元の株 {h['sym']} の値段）"
             stop = h["price"] * (1 - STOP)
-            if c <= stop:
-                ex = "**損切り価格を下回った** " + ex
+            br = stop_breach(d, h["date"], stop)
+            if br and br[0] == day:
+                ex = f"**損切り価格を下回った**（今日の安値 {br[1]:.2f}。逆指値なら今日約定） " + ex
+            elif br:
+                # 2026-11-20: 損切りは日中の逆指値。以前の日に安値が損切り価格を割っていれば、その後に値が戻っても「損切り済み」として出し続ける
+                # （AMD は 11/05 に安値 402.10 が損切り価格 467.47 を割ったが、戻った 11/20 の表では「保有継続」になっていた）
+                ex = f"**損切り価格を下回った**（{br[0]} の安値 {br[1]:.2f}。逆指値なら約定済み。まだ持っていれば次の寄り付きで売る） " + ex
             if ex.startswith(("成立", "**成立", "**損切り価格を下回った")):
                 exit_n += 1
             px_ = f"{h['price']:.2f}" + (f"（株式分割 1→{h['split']:g} に合わせて直した値。記録は {h['price_raw']:.2f}）" if h.get("split", 1) != 1 else "")
