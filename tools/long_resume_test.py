@@ -228,7 +228,7 @@ def cmd_report(a):
     for t, k, f in rows:
         w(f"| {f['name']} | {pc(cagr(f, '1996-01-01', '2014-12-31'))}（{pc(mdd(f, '1996-01-01', '2014-12-31'))}） | {pc(cagr(f, '2015-01-01', '9999'))}（{pc(mdd(f, '2015-01-01', '9999'))}） | "
           + " | ".join(pc(span(f, lo, hi)) for _, lo, hi in eps) + " |")
-    sxs = lambda lo, hi: sxm[sx_d[max(0, bisect.bisect_left(sx_d, lo) - 1)]], sxm[sx_d[bisect.bisect_right(sx_d, hi) - 1]]
+    sxs = lambda lo, hi: (sxm[sx_d[max(0, bisect.bisect_left(sx_d, lo) - 1)]], sxm[sx_d[bisect.bisect_right(sx_d, hi) - 1]])
     w("| SOX指数 | | | " + " | ".join(pc(sxs(lo, hi)[1] / sxs(lo, hi)[0] - 1) for _, lo, hi in eps) + " |")
 
     # 3. 1年の区切り
@@ -272,7 +272,7 @@ def cmd_report(a):
         for rk, rn in RULES:
             per = R[t]["periods"][rk]
             last = per[-1] if per else None
-            st_.append(f"{rn}: " + ("止めている（再開の合図はまだ）" if last and last[1] is None else f"再開済み（{last[1]}）" if last and last[0] >= "2026-10-01" else "止めていない"))
+            st_.append(f"{rn}: " + ("止めている（再開の合図はまだ）" if last and last[1] is None else f"再開済み（{last[1]}）" if last and last[1] >= "2026-10-01" else "止めていない"))
         w(f"- {TRIG[t]}に止めた場合: " + "／".join(st_))
     w("\n- この結果はルールの条件どおりに機械的に計算したもので、Claudeによる個別銘柄の売買判断ではない。")
     open(a.out, "w", encoding="utf-8").write("\n".join(L) + "\n")
