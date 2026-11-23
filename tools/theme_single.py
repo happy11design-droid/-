@@ -246,9 +246,19 @@ def report(sym, d, pool_series, asof=None, hold=None, earn=None, wl_rs10=None):
 
     if hold:
         px, bd, rule = float(hold[0]), hold[1], hold[2]
+        try:   # 買った日の後に株式分割があれば、買値を今の株価の基準に直す（theme_scan.load_holdings と同じ。2026-11-20）
+            import splits as sp_
+            f_ = sp_.factor(sym, bd)
+            if f_ != 1:
+                px /= f_
+        except Exception:
+            pass
         stop = px * (1 - STOP)
+        import theme_scan as ts0
+        br = ts0.stop_breach(d, bd, stop)   # 日中の安値で判定（逆指値）。一度割った後に戻っても出し続ける（2026-11-20）
         w("## 6. 保有中の確認\n")
-        w(f"- ルール: {rule}／買った日: {bd}／買値: {px:.2f}／損益: {pct(c / px - 1)}／損切り価格（買値の15%下）: {stop:.2f}" + ("（**下回っている**）" if c <= stop else ""))
+        w(f"- ルール: {rule}／買った日: {bd}／買値: {px:.2f}／損益: {pct(c / px - 1)}／損切り価格（買値の15%下）: {stop:.2f}"
+          + (f"（**{br[0]} の安値 {br[1]:.2f} で下回った。逆指値なら約定済み。まだ持っていれば次の寄り付きで売る**）" if br else ""))
         if "新高値" in rule:
             w(f"- 手じまい条件（引けで50日線割れ）: {mark(c < m50)}（50日線 {m50:.2f}）")
         elif "急落" in rule:
