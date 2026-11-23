@@ -69,6 +69,8 @@ def watch87():
 def sox_series():
     """^SOX の終値: long/index（1994年〜）に prices/（2013年〜の新しい日）を足す"""
     a = {r[0]: r[1] for r in json.load(open(C + "long/index/^SOX.json"))}
+    if os.path.exists(LS + "^SOX.json"):   # 2026-11-23: tools/long_stocks.py で取った新しい日足を優先
+        a.update({r[0]: r[4] for r in json.load(open(LS + "^SOX.json"))})
     b = bl.load_prices(C, "^SOX")
     if b:
         for d, c in zip(b["date"], b["c"]):
@@ -152,15 +154,24 @@ def sox_bears(sox_d, sox_c, th=0.40, rec=1.0):
     return eps
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--out", default="新分析ツール/バックテスト結果/実際の運用の期間の確認_2026-10-23/長い下げの中で今のルールを確かめる（1996年〜）.md")
-    ap.add_argument("--seeds", type=int, default=10)
-    a = ap.parse_args()
+def build_trades():
+    """売買を作る（時間がかかるので、株価の最終日が同じなら ~/.cache/stock_backtest/results/long_bear_trades.pkl を使う。pkl はデータ用ブランチに保存しない）"""
+    import pickle
+    last = json.load(open(LS + "SPY.json"))[-1][0]
+    nfile = sum(1 for f in os.listdir(LS) if f.endswith(".json") and not f.startswith("^"))
+    pk_ = C + "results/long_bear_trades.pkl"
+    if os.path.exists(pk_):
+        try:
+            z = pickle.load(open(pk_, "rb"))
+            if z.get("key") == (last, nfile):
+                print(f"作った売買を使う（{last}まで）", file=sys.stderr)
+                return z
+        except Exception:
+            pass
     bl.KEEP_OPEN, bl.OVERLAP = True, True
     W87 = watch87()
     mem_sp = bl.load_members(C)   # S&P500 の構成期間（1996年〜）
-    syms = sorted(f[:-5] for f in os.listdir(LS) if f.endswith(".json"))
+    syms = sorted(f[:-5] for f in os.listdir(LS) if f.endswith(".json") and not f.startswith("^"))   # ^SOX・^VIX は指数（売買しない）
     data = {}
     for s in syms:
         d = load_long(s)
@@ -328,6 +339,75 @@ def main():
     for t in TE:
         t["set"] = "ETF"
 
+    z = {"key": (last, nfile), "TA": TA, "TO": TO, "TOut": TOut, "VAll": VAll, "TE": TE, "days": days, "n_stocks": len(stocks),
+         "nA99": sum(1 for s in A if data[s]["date"][0] < "1999-01-01"), "spyc": dict(zip(spy["date"], spy["c"]))}
+    os.makedirs(C + "results", exist_ok=True)
+    pickle.dump(z, open(pk_, "wb"), protocol=pickle.HIGHEST_PROTOCOL)
+    return z
+
+
+def make_index(cands):
+    """候補 [(優先, 売買)] を、買う日ごとの候補（優先・RSの高い順）にする"""
+    bi_ = {}
+    for p_, t in cands:
+        bi_.setdefault(t["in"], []).append((p_, t))
+    for v_ in bi_.values():
+        v_.sort(key=lambda x: (x[0], -x[1]["rs"]))
+    return bi_
+
+
+def port(by_in, days, di, seed, lo, hi, skip=0.25, log_eq=False):
+    """4枠・1銘柄＝資金÷4・同じ業種2銘柄まで。候補の skip を乱数で見送る。(最後の資金, 最大下落率, {日: 資金})"""
+    rnd = random.Random(seed)
+    cash, held, pk, mdd = 1.0, [], 1.0, 0.0
+    eqs = {}
+    eq = 1.0
+    for d in days[di[lo]:di[hi] + 1]:
+        still = []
+        for h in held:
+            v = h["t"]["path"].get(d)
+            if v is not None:
+                h["v"] = v
+            if h["t"]["out"] == d:
+                cash += h["size"] * h["v"]
+            else:
+                still.append(h)
+        held = still
+        eq = cash + sum(h["size"] * h["v"] for h in held)
+        for p_, t in by_in.get(d, ()):
+            if skip and rnd.random() < skip:
+                continue
+            if len(held) >= 4 or any(h["t"]["sym"] == t["sym"] for h in held):
+                continue
+            if t["ind"] and sum(1 for h in held if h["t"]["ind"] == t["ind"]) >= 2:
+                continue
+            size = min(eq / 4, cash)
+            if size <= eq * 0.02:
+                continue
+            cash -= size
+            v = t["path"].get(d, 1.0)
+            h = {"t": t, "size": size, "v": v}
+            if t["out"] == d:
+                cash += size * v
+            else:
+                held.append(h)
+        eq = cash + sum(h["size"] * h["v"] for h in held)
+        pk = max(pk, eq)
+        mdd = min(mdd, eq / pk - 1)
+        if log_eq:
+            eqs[d] = eq
+    return eq, mdd, eqs
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--out", default="新分析ツール/バックテスト結果/実際の運用の期間の確認_2026-10-23/長い下げの中で今のルールを確かめる（1996年〜）.md")
+    ap.add_argument("--seeds", type=int, default=10)
+    a = ap.parse_args()
+    z = build_trades()
+    TA, TO, TOut, VAll, TE, days = z["TA"], z["TO"], z["TOut"], z["VAll"], z["TE"], z["days"]
+    di = {d: k for k, d in enumerate(days)}
+    prevd = {days[k]: days[k - 1] for k in range(1, len(days))}
     sox_m = sox_series()
     sx_d = sorted(sox_m)
     sx_c = [sox_m[d] for d in sx_d]
@@ -358,55 +438,11 @@ def main():
         ("⑨ 特殊な下げの間は87銘柄の順張りだけ買わない（逆張りは買う）", [(0, t) for t in TA if not (sp_on(t["sd"]) and t["rule"] in ("M", "V"))] + [(1, t) for t in TOut]),
     ]
 
-    IDX = {}
-    for nm_, cands_ in FORMS:   # 形ごとに、買う日ごとの候補（優先・RSの高い順）を先に作る
-        bi_ = {}
-        for p_, t in cands_:
-            bi_.setdefault(t["in"], []).append((p_, t))
-        for v_ in bi_.values():
-            v_.sort(key=lambda x: (x[0], -x[1]["rs"]))
-        IDX[nm_] = bi_
+    IDX = {nm_: make_index(cands_) for nm_, cands_ in FORMS}
+    _port = port
 
     def port(nm_, seed, lo, hi, skip=0.25, log_eq=False):
-        by_in = IDX[nm_]
-        rnd = random.Random(seed)
-        cash, held, pk, mdd = 1.0, [], 1.0, 0.0
-        eqs = {}
-        for d in days[di[lo]:di[hi] + 1]:
-            still = []
-            for h in held:
-                v = h["t"]["path"].get(d)
-                if v is not None:
-                    h["v"] = v
-                if h["t"]["out"] == d:
-                    cash += h["size"] * h["v"]
-                else:
-                    still.append(h)
-            held = still
-            eq = cash + sum(h["size"] * h["v"] for h in held)
-            for p_, t in by_in.get(d, ()):
-                if skip and rnd.random() < skip:
-                    continue
-                if len(held) >= 4 or any(h["t"]["sym"] == t["sym"] for h in held):
-                    continue
-                if t["ind"] and sum(1 for h in held if h["t"]["ind"] == t["ind"]) >= 2:
-                    continue
-                size = min(eq / 4, cash)
-                if size <= eq * 0.02:
-                    continue
-                cash -= size
-                v = t["path"].get(d, 1.0)
-                h = {"t": t, "size": size, "v": v}
-                if t["out"] == d:
-                    cash += size * v
-                else:
-                    held.append(h)
-            eq = cash + sum(h["size"] * h["v"] for h in held)
-            pk = max(pk, eq)
-            mdd = min(mdd, eq / pk - 1)
-            if log_eq:
-                eqs[d] = eq
-        return eq, mdd, eqs
+        return _port(IDX[nm_], days, di, seed, lo, hi, skip, log_eq)
 
     med = lambda xs: st.median(xs) if xs else float("nan")
     pc = lambda x: f"{x * 100:+.1f}%"
@@ -417,8 +453,8 @@ def main():
     w("# 長い下げの中で今のルールを確かめる（1996年〜）\n")
     w("2026-11-20、ユーザーの質問「アンソロピックの上場も失敗し、AI半導体株が下がり続けています。それでもなおAI半導体株を買った方が利益が出るのですか？」"
       "への回答で、2015年〜のデータには2000〜2002年・2008年のような長い半導体の下げがないことを示し、1996年〜で確かめると提案 →「はい。全て検証して」。\n")
-    w(f"- 株価: Yahoo の日足（1990年〜、{days[-1]}まで）。今のS&P500の構成銘柄と87銘柄の **{len(stocks)}銘柄**（87銘柄のうち1999年より前からあるのは"
-      f" {sum(1 for s in A if data[s]['date'][0] < '1999-01-01')}銘柄）。**上場をやめた会社は入っていない（生き残りの偏り）**。"
+    w(f"- 株価: Yahoo の日足（1990年〜、{days[-1]}まで）。今のS&P500の構成銘柄と87銘柄の **{z['n_stocks']}銘柄**（87銘柄のうち1999年より前からあるのは"
+      f" {z['nA99']}銘柄）。**上場をやめた会社は入っていない（生き残りの偏り）**。"
       "2000〜2002年に消えた会社（ネット・通信・半導体の多く）が入らないので、特に87銘柄（今の勝ち組）の昔の成績は良く出すぎる。")
     w("- 87銘柄（A）は今の毎朝のツールと同じ固定の一覧（後知恵あり）。ほかの業種（O）は、その日にS&P500の構成銘柄だった期間だけ使う（members.csv、1996年〜）。")
     w("- ルール: 押し目（ボリンジャー メソッドIII）・急落の底・ミネルヴィニ・新高値V2（RS上位10）。手じまいは各ルールの主な手じまいと日中の逆指値15%。"
@@ -483,7 +519,7 @@ def main():
         curves[nm] = [port(nm, 9000 + q, days[0], days[-1], log_eq=True)[2] for q in seeds]
         print("資金", nm, file=sys.stderr)
     sox_at = lambda d: sox_m.get(d) or sox_m[sx_d[bisect.bisect_right(sx_d, d) - 1]]
-    spy_at = lambda d: spy["c"][pos["SPY"][d]]
+    spy_at = lambda d: z["spyc"][d]
 
     def span_ret(nm, lo, hi):
         lo_ = days[max(0, bisect.bisect_left(days, lo) - 1)]

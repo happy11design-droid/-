@@ -23,7 +23,7 @@ import backtest_lib as bl
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 C = os.path.expanduser("~/.cache/stock_backtest/")
 OUT = C + "long/stocks/"
-ETFS = ["SPY", "QQQ", "SMH", "SOXX", "XLK"]
+ETFS = ["SPY", "QQQ", "SMH", "SOXX", "XLK", "^SOX", "^VIX"]   # 2026-11-23: SOX・VIX の長い日足も（再開の合図の検証）
 
 
 def watch87():
@@ -54,7 +54,10 @@ def fetch(sym, refresh=False):
         return "あり"
     if os.path.exists(p) and refresh:
         last = json.load(open(p))[-1][0]
-        if last >= (dt.date.today() - dt.timedelta(days=4)).isoformat():
+        d_ = dt.date.fromisoformat(open_day()) - dt.timedelta(days=1)
+        while d_.weekday() >= 5:   # 確定した直近の平日（祝日は考えない。祝日なら取り直すだけ）
+            d_ -= dt.timedelta(days=1)
+        if last >= d_.isoformat():
             return "あり"
     p1, p2 = int(dt.datetime(1990, 1, 1).timestamp()), int(time.time())
     ys = sym.replace(".", "-")
