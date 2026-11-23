@@ -167,6 +167,8 @@ def main():
     ap.add_argument("--out", required=True)
     ap.add_argument("--pbo-json")
     ap.add_argument("--reps", type=int, default=3000)
+    ap.add_argument("--regs", help="tools/signal_scan.py の --regs-out（合図の日の集合）。合図の日は87銘柄の口の半分・全部を全業種の口へ移す形を足す")
+    ap.add_argument("--no-old-switch", action="store_true", help="b50h・b200h の切り替えて混ぜる形を出さない")
     a = ap.parse_args()
     d87, dall = json.load(open(a.eq87)), json.load(open(a.eqall))
     n87 = [k for k in d87 if not k.startswith(("今のルール（傾き", "_"))]   # 古い今のルール（傾きの小さい順）と、日の集合（_regs・_breadth）は使わない
@@ -196,8 +198,16 @@ def main():
         F["混ぜる: 強さの条件＋QQQの87銘柄の口50%＋全業種＋QQQの口50%"] = (mix(F[q87][0], F[qall][0], 0.5, days), mix_live(F[q87][1], F[qall][1], 0.5))
     REGS = d87.get("_regs", {})
     live_from0 = next(i for i, x in enumerate(d87[n87[0]]["live"][0]) if x is not None)
+    if a.regs:   # 2026-11-23 ユーザーの指示「もっと何かシグナルを掴めないか検証して」: 早めの合図の候補ごとに、合図の日は87銘柄の口の資金を全業種の口へ移す
+        X = json.load(open(a.regs))
+        for key, lst in X["sets"].items():
+            rs_ = set(lst)
+            for wd, wlab in ((0.5, "半分"), (0.0, "全部")):
+                tg = np.array([wd if d in rs_ else 1.0 for d in days])
+                F[f"合図で切り替え: {X['labels'][key]}の日は{wlab}を全業種の口へ"] = (
+                    mix_sw(F[base87][0], F[baseall][0], tg, days), mix_sw(F[base87][1], F[baseall][1], tg, days, live_from0))
     for rg, rlab in (("b50h", "50日線より上が30%未満で守り・50%以上で戻す"), ("b200h", "200日線より上が40%未満で守り・55%以上で戻す")):
-        if rg not in REGS:
+        if rg not in REGS or a.no_old_switch:
             continue
         rs_ = set(REGS[rg])
         nsw = sum(1 for j in range(1, len(days)) if (days[j] in rs_) != (days[j - 1] in rs_))
