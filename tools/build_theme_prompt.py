@@ -131,6 +131,14 @@ def main():
                     th = th[:len(th) - over] + CUT
             print(f"{head.splitlines()[0][3:]}: 1銘柄で{LIMIT}文字を超えるため、ニュースを縮めました", file=sys.stderr)
         p = fill(bt, th)
+        if len(p) > LIMIT and "テーマ全体のニュース" in th:   # まだ超えるときは、テーマ全体のニュースを末尾から縮める
+            i = th.index("テーマ全体のニュース")
+            cut = len(p) - LIMIT + len(CUT)
+            th = th[:max(i, len(th) - cut)].rstrip() + "\n" + CUT   # 足りなければ、テーマ全体のニュースを全部省き、その前（1・2節）の末尾まで縮める
+            cut2 = len(fill(bt, th)) - LIMIT
+            if cut2 > 0:
+                th = th[:len(th) - cut2 - len(CUT) - 1].rstrip() + "\n" + CUT
+            p = fill(bt, th)
         if len(p) > LIMIT:
             sys.exit(f"1銘柄だけでも{LIMIT}文字を超えます（{len(p)}文字）。データファイルを短くしてください")
         path = os.path.join(outdir, f"prompt_{k}.txt")
