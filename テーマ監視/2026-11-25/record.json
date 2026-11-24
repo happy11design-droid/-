@@ -1,0 +1,176 @@
+{
+ "trade_date": "2026-11-24",
+ "run_date": "2026-11-25",
+ "theme_stage": "【ステージ3】（急騰後の大幅調整、30週線横ばいかつ線の下で推移、第2章）",
+ "candidates": [
+  {
+   "sym": "ANET",
+   "kind": "逆張り: 急落の底（担当: コナーズ）（指値の3日目）",
+   "pattern": "A",
+   "close": 168.56,
+   "limit": null,
+   "stop_buy": null,
+   "limit_buy": 164.27,
+   "verdict": "様子見",
+   "author": "コナーズ",
+   "hot": false,
+   "rsi14": 42.95168985841539,
+   "s50": -0.02224831645336478,
+   "rs": 66.45205479452055,
+   "s2_skip": false,
+   "badnews": false,
+   "goodnews": false
+  },
+  {
+   "sym": "NBIS",
+   "kind": "逆張り: 急落の底（担当: コナーズ）（指値の3日目）",
+   "pattern": "A",
+   "close": 87.31,
+   "limit": null,
+   "stop_buy": null,
+   "limit_buy": 79.68,
+   "verdict": "様子見",
+   "author": "コナーズ",
+   "hot": false,
+   "rsi14": 33.58786458530609,
+   "s50": -0.17231754113525244,
+   "rs": 1.7436399217221135,
+   "s2_skip": false,
+   "badnews": false,
+   "goodnews": false
+  },
+  {
+   "sym": "DLTR",
+   "kind": "順張り: 新高値（V2、担当: ミネルヴィニ）",
+   "pattern": "A",
+   "close": 154.65,
+   "limit": null,
+   "stop_buy": null,
+   "limit_buy": null,
+   "verdict": "様子見",
+   "author": "ミネルヴィニ",
+   "hot": false,
+   "rsi14": 68.45100107906764,
+   "s50": 0.03780500991916291,
+   "rs": 96.09393346379647,
+   "s2_skip": true,
+   "badnews": false,
+   "goodnews": false
+  }
+ ],
+ "holdings": [
+  {
+   "sym": "SNDK",
+   "rule": "ルール外（ユーザーの判断。この日はどのルールの合図もなし）",
+   "buy_date": "2026-10-21",
+   "buy_price": 171.41,
+   "verdict": "未判定",
+   "author": ""
+  },
+  {
+   "sym": "AMD",
+   "rule": "ボリンジャーIII",
+   "buy_date": "2026-10-21",
+   "buy_price": 549.97,
+   "verdict": "保有継続",
+   "author": "ボリンジャー"
+  }
+ ],
+ "s2": {
+  "on": true,
+  "label": "あり（S2）",
+  "close": 8832.5009765625,
+  "hi60": 13217.8203125,
+  "drop": -0.3317732600578882
+ },
+ "special": {
+  "on": true,
+  "label": "あり（特殊な下げ）",
+  "since": "2026-10-16",
+  "drop": -0.3317732600578882,
+  "n": 2,
+  "A": true,
+  "B": false,
+  "C": true
+ },
+ "group_news": {
+  "半導体": {
+   "n1": 27,
+   "n0": 53,
+   "per": 5.0,
+   "mark": true,
+   "good": 47,
+   "gper": 2.9375,
+   "gmark": false
+  },
+  "半導体製造装置・材料・設計ソフト・計測": {
+   "n1": 5,
+   "n0": 1,
+   "per": 0.6666666666666666,
+   "mark": false,
+   "good": 10,
+   "gper": 1.1111111111111112,
+   "gmark": false
+  },
+  "AIサーバー・ストレージ・メモリ・端末": {
+   "n1": 7,
+   "n0": 3,
+   "per": 1.1111111111111112,
+   "mark": false,
+   "good": 37,
+   "gper": 4.111111111111111,
+   "gmark": true
+  },
+  "光・通信・ネットワーク": {
+   "n1": 3,
+   "n0": 14,
+   "per": 1.8888888888888888,
+   "mark": false,
+   "good": 5,
+   "gper": 0.5555555555555556,
+   "gmark": false
+  },
+  "データセンターの電力・冷却・部品・受託製造・建設": {
+   "n1": 4,
+   "n0": 3,
+   "per": 0.3684210526315789,
+   "mark": false,
+   "good": 6,
+   "gper": 0.3157894736842105,
+   "gmark": false
+  },
+  "AIプラットフォーム・クラウド": {
+   "n1": 5,
+   "n0": 4,
+   "per": 0.8181818181818182,
+   "mark": false,
+   "good": 4,
+   "gper": 0.36363636363636365,
+   "gmark": false
+  },
+  "AIソフト・セキュリティ・ITサービス": {
+   "n1": 1,
+   "n0": 1,
+   "per": 0.14285714285714285,
+   "mark": false,
+   "good": 12,
+   "gper": 0.8571428571428571,
+   "gmark": false
+  }
+ },
+ "omitted": [],
+ "ref_b": [
+  {
+   "sym": "SNPS",
+   "kind": "予約: ボリンジャー メソッドIII（%bが0.05未満に近い）",
+   "close": 414.82000732421875,
+   "rs": 30.223091976516635
+  },
+  {
+   "sym": "CDNS",
+   "kind": "予約: ボリンジャー メソッドIII（%bが0.05未満に近い）",
+   "close": 296.6000061035156,
+   "rs": 21.117416829745597
+  }
+ ]
+}
