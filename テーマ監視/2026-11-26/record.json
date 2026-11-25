@@ -1,0 +1,121 @@
+{
+ "trade_date": "2026-11-25",
+ "run_date": "2026-11-26",
+ "theme_stage": "【ステージ3】（大上昇の後に30週線が上昇モメンタムを失い「横ばい」となっているため、第2章・第8章 [1, 2]）。",
+ "candidates": [],
+ "holdings": [
+  {
+   "sym": "SNDK",
+   "rule": "ルール外（ユーザーの判断。この日はどのルールの合図もなし）",
+   "buy_date": "2026-10-21",
+   "buy_price": 171.41,
+   "verdict": "未判定",
+   "author": ""
+  },
+  {
+   "sym": "AMD",
+   "rule": "ボリンジャーIII",
+   "buy_date": "2026-10-21",
+   "buy_price": 549.97,
+   "verdict": "保有継続",
+   "author": "ボリンジャー"
+  }
+ ],
+ "s2": {
+  "on": true,
+  "label": "あり（S2）",
+  "close": 8774.8623046875,
+  "hi60": 13217.8203125,
+  "drop": -0.3361339390890967
+ },
+ "special": {
+  "on": true,
+  "label": "あり（特殊な下げ）",
+  "since": "2026-10-16",
+  "drop": -0.3361339390890967,
+  "n": 2,
+  "A": true,
+  "B": false,
+  "C": true
+ },
+ "group_news": {
+  "半導体": {
+   "n1": null,
+   "n0": 9,
+   "per": 0.5625,
+   "mark": false,
+   "good": null,
+   "gper": 0.0,
+   "gmark": false
+  },
+  "半導体製造装置・材料・設計ソフト・計測": {
+   "n1": null,
+   "n0": 2,
+   "per": 0.2222222222222222,
+   "mark": false,
+   "good": null,
+   "gper": 0.0,
+   "gmark": false
+  },
+  "AIサーバー・ストレージ・メモリ・端末": {
+   "n1": null,
+   "n0": 8,
+   "per": 0.8888888888888888,
+   "mark": false,
+   "good": null,
+   "gper": 0.0,
+   "gmark": false
+  },
+  "光・通信・ネットワーク": {
+   "n1": null,
+   "n0": 7,
+   "per": 0.7777777777777778,
+   "mark": false,
+   "good": null,
+   "gper": 0.0,
+   "gmark": false
+  },
+  "データセンターの電力・冷却・部品・受託製造・建設": {
+   "n1": null,
+   "n0": 3,
+   "per": 0.15789473684210525,
+   "mark": false,
+   "good": null,
+   "gper": 0.0,
+   "gmark": false
+  },
+  "AIプラットフォーム・クラウド": {
+   "n1": null,
+   "n0": 10,
+   "per": 0.9090909090909091,
+   "mark": true,
+   "good": null,
+   "gper": 0.0,
+   "gmark": false
+  },
+  "AIソフト・セキュリティ・ITサービス": {
+   "n1": null,
+   "n0": 1,
+   "per": 0.07142857142857142,
+   "mark": false,
+   "good": null,
+   "gper": 0.0,
+   "gmark": false
+  }
+ },
+ "omitted": [],
+ "ref_b": [
+  {
+   "sym": "CDNS",
+   "kind": "予約: ボリンジャー メソッドIII（%bが0.05未満に近い）",
+   "close": 294.8900146484375,
+   "rs": 16.661448140900195
+  },
+  {
+   "sym": "CEG",
+   "kind": "予約: ボリンジャー メソッドIII（%bが0.05未満に近い）",
+   "close": 235.27999877929688,
+   "rs": 6.974559686888454
+  }
+ ]
+}
