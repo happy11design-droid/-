@@ -69,6 +69,8 @@ def watch87():
 def sox_series():
     """^SOX の終値: long/index（1994年〜）に prices/（2013年〜の新しい日）を足す"""
     a = {r[0]: r[1] for r in json.load(open(C + "long/index/^SOX.json"))}
+    if os.path.exists(LS + "^SOX.json"):   # 2026-11-23: tools/long_stocks.py で取った新しい日足を優先
+        a.update({r[0]: r[4] for r in json.load(open(LS + "^SOX.json"))})
     b = bl.load_prices(C, "^SOX")
     if b:
         for d, c in zip(b["date"], b["c"]):
@@ -152,6 +154,251 @@ def sox_bears(sox_d, sox_c, th=0.40, rec=1.0):
     return eps
 
 
+def build_trades():
+    """売買を作る（時間がかかるので、株価の最終日が同じなら ~/.cache/stock_backtest/results/long_bear_trades.pkl を使う。pkl はデータ用ブランチに保存しない）"""
+    import pickle
+    last = json.load(open(LS + "SPY.json"))[-1][0]
+    nfile = sum(1 for f in os.listdir(LS) if f.endswith(".json") and not f.startswith("^"))
+    pk_ = C + "results/long_bear_trades.pkl"
+    if os.path.exists(pk_):
+        try:
+            z = pickle.load(open(pk_, "rb"))
+            if z.get("key") == (last, nfile):
+                print(f"作った売買を使う（{last}まで）", file=sys.stderr)
+                return z
+        except Exception:
+            pass
+    bl.KEEP_OPEN, bl.OVERLAP = True, True
+    W87 = watch87()
+    mem_sp = bl.load_members(C)   # S&P500 の構成期間（1996年〜）
+    syms = sorted(f[:-5] for f in os.listdir(LS) if f.endswith(".json") and not f.startswith("^"))   # ^SOX・^VIX は指数（売買しない）
+    data = {}
+    for s in syms:
+        d = load_long(s)
+        if d and len(d["c"]) > 300:
+            data[s] = d
+    gs = gspc_series()
+    f2.SPX.update(gs)
+    for s, d in data.items():
+        c2.prep(d)
+        bmo.prep(d, f2.SPX)
+        f2.prep(d)
+        for n in (5, 50):
+            d[f"ma{n}"] = d.get(f"ma{n}") or sma(d["c"], n)
+        d["ma150"] = sma(d["c"], 150)
+        d["sym"] = s
+    members = {s: [(data[s]["date"][0], "9999-12-31")] for s in data}
+    stocks = [s for s in data if s not in ETFS]
+    bt.add_rs_rank({s: data[s] for s in stocks}, members)
+    u = json.load(open(C + "universe.json"))
+    if os.path.exists(C + "industry_extra.json"):
+        u.update(json.load(open(C + "industry_extra.json")))
+    ind = {s: (u.get(s) or {}).get("industry") for s in data}
+    for s in data:
+        data[s]["ind"] = ind.get(s)
+    IR = bi.industry_ranks({s: data[s] for s in stocks}, members)
+    spy = data["SPY"]
+    days = [d for d in spy["date"] if d >= START]
+    di = {d: k for k, d in enumerate(days)}
+    prevd = {days[k]: days[k - 1] for k in range(1, len(days))}
+    print(f"準備ができた: {len(data)} 銘柄、{days[0]}〜{days[-1]}", file=sys.stderr)
+
+    A = {s for s in stocks if s in W87}
+    O = {s for s in stocks if s not in W87}
+    liq = lambda s_, i: s_["vol50"][i] is not None and s_["vol50"][i] * s_["c"][i] >= 2e6
+    in_sp = lambda s_, i: bl.is_member(mem_sp.get(s_["sym"], []), s_["date"][i])
+    okA = lambda s_, i, sp: s_["sym"] in A and liq(s_, i)
+    okO = lambda s_, i, sp: s_["sym"] in O and liq(s_, i) and in_sp(s_, i)
+    okAll = lambda s_, i, sp: okA(s_, i, sp) or okO(s_, i, sp)
+    okE = lambda s_, i, sp: s_["sym"] in ETFS
+
+    # テーマの外（毎朝の theme_scan.py の空き枠の候補・backtest_retest の OPT_OUTSIDE と同じ）: S&P500の構成銘柄で87銘柄でないもの、
+    # RS≧90・終値＞150日線＞20日前の150日線・業種の3カ月の強さが上位20%
+    elig = {}
+    for s in O:
+        s_ = data[s]
+        c_, m150 = s_["c"], s_["ma150"]
+        for i in range(170, len(c_)):
+            r_ = s_["rs"][i]
+            if r_ is None or r_ < 90 or m150[i] is None or m150[i - 20] is None or not (c_[i] > m150[i] > m150[i - 20]):
+                continue
+            if not liq(s_, i) or not in_sp(s_, i):
+                continue
+            rk = IR.get(s_["date"][i], {}).get(ind.get(s))
+            if rk is None or rk > 0.2:
+                continue
+            elig.setdefault(s_["date"][i], {})[s] = r_
+    okOut = lambda s_, i, sp: s_["sym"] in elig.get(s_["date"][i], ())
+
+    # 新高値V2 の「RSの上位10銘柄」（その週の前の金曜の順位。backtest_combo2 と同じ考え方）
+    fridays = [d for k, d in enumerate(days) if k + 1 == len(days) or dt.date.fromisoformat(days[k + 1]).isocalendar()[1] != dt.date.fromisoformat(d).isocalendar()[1]]
+    pos = {s: {d: k for k, d in enumerate(v["date"])} for s, v in data.items()}
+
+    def top10(pool_fn):
+        out = {}
+        for f in fridays:
+            xs = []
+            for s in stocks:
+                k = pos[s].get(f)
+                if k is None:
+                    continue
+                if pool_fn(data[s], k):
+                    xs.append((data[s]["rs"][k] or 0, s))
+            out[f] = {s for _, s in sorted(xs, reverse=True)[:10]}
+        week_of, fi, last = {}, 0, None
+        for d in days:
+            while fi < len(fridays) and fridays[fi] < d:
+                last = fridays[fi]
+                fi += 1
+            week_of[d] = last
+        return lambda s_, i, sp: s_["sym"] in out.get(week_of.get(s_["date"][i]), ())
+    ok10A = top10(lambda s_, k: okA(s_, k, None))
+    ok10O = top10(lambda s_, k: okO(s_, k, None))
+    ok10All = top10(lambda s_, k: okAll(s_, k, None))
+    ok10Out = top10(lambda s_, k: okOut(s_, k, None))
+
+    below50 = lambda j, s, k, px: s["ma50"][j] is not None and s["c"][j] < s["ma50"][j]
+    above5 = lambda j, s, k, px: s["ma5"][j] is not None and s["c"][j] > s["ma5"][j]
+    v2o = bmo.with_(c2.V2, f2.O)
+
+    def CR(i, s):
+        rr, r2 = bcr.drop(i, s), s["rsi2"][i]
+        return rr if rr <= -0.15 and r2 is not None and r2 <= 10 and bcr.was_strong(i, s) else None
+
+    def b3_exit(t):
+        s = data[t["sym"]]
+        o, h, l, c = s["o"], s["h"], s["l"], s["c"]
+        i0, n, px = pos[t["sym"]][t["in"]], len(c), t["px"]
+        if i0 >= n - 1:
+            return None
+        floor, pend, j = px * (1 - STOP), False, i0
+        while j < n:
+            if pend:
+                return j, o[j], False
+            if l[j] <= floor:
+                return j, min(o[j] if j > i0 else px, floor), True
+            if j > i0 and s["bb_up"][j - 1] is not None and h[j] >= s["bb_up"][j - 1]:
+                return j, max(o[j], s["bb_up"][j - 1]), False
+            if j + 1 >= n:
+                return j, c[j], False
+            if j - i0 >= bs.MAX_HOLD or (s["pctb"][j] is not None and s["pctb"][j] >= 1.0):
+                pend = True
+            j += 1
+        return None
+
+    def mk(sym, i0, i1, px, xp, rule, stopped):
+        s = data[sym]
+        if i1 == i0:
+            path = {s["date"][i0]: (1 - COST) ** 2 * xp / px}
+        else:
+            path = {s["date"][j]: (1 - COST) * s["c"][j] / px for j in range(i0, i1)}
+            path[s["date"][i1]] = (1 - COST) ** 2 * xp / px
+        sd = s["date"][i0 - 1] if i0 > 0 else s["date"][i0]   # 合図の日（前の取引日の引け）
+        return {"sym": sym, "rule": rule, "in": s["date"][i0], "out": s["date"][i1], "sd": sd, "path": path, "ret": path[s["date"][i1]] - 1,
+                "stopped": stopped, "rs": s["rs"][i0 - 1] if i0 > 0 and s["rs"][i0 - 1] is not None else 0, "ind": ind.get(sym)}
+
+    def gen_B(ok):
+        old, bs.STOP_MAX = bs.STOP_MAX, STOP
+        try:
+            raw = bs.simulate(data, members, bs.O_method3, bs.X_upper_band, START, days[-1], ok=ok)
+        finally:
+            bs.STOP_MAX = old
+        out = []
+        for t in raw:
+            x = b3_exit(t)
+            if x:
+                out.append(mk(t["sym"], pos[t["sym"]][t["in"]], x[0], t["px"], x[1], "B", x[2]))
+        return out
+
+    def gen_G(entry, exit_, ok, rule, mh=500):
+        out = []
+        for t in gen_trades(data, members, entry, exit_, START, days[-1], ok=ok, fill="open", max_hold=mh, stop_pct=STOP):
+            s = data[t["sym"]]
+            i0, i1 = pos[t["sym"]][t["in"]], pos[t["sym"]][t["out"]]
+            px, xp, stopped = t["px"], t["px"] * (1 + t["ret"]), t["why"] == "損切り"
+            floor = px * (1 - STOP)
+            for j in range(i0, i1):   # 損切りは日中の逆指値15%（backtest_retest の intraday と同じ）
+                if s["l"][j] <= floor:
+                    i1, xp, stopped = j, min(s["o"][j] if j > i0 else px, floor), True
+                    break
+            out.append(mk(t["sym"], i0, i1, px, xp, rule, stopped))
+        return out
+
+    def gen_set(ok, ok10, tag):
+        tr = gen_B(ok) + gen_G(CR, above5, ok, "C", 60) + gen_G(bm2.E_base(2.0), below50, ok, "M") + gen_G(v2o, below50, ok10, "V")
+        for t in tr:
+            t["set"] = tag
+        print(f"{tag}: 売買 {len(tr)}（" + "、".join(f"{r} {sum(1 for t in tr if t['rule'] == r)}" for r in "BCMV") + "）", file=sys.stderr)
+        return tr
+
+    TA = gen_set(okA, ok10A, "A")
+    TO = gen_set(okO, ok10O, "O")
+    TOut = gen_set(okOut, ok10Out, "Out")
+    VAll = [dict(t, set="All") for t in gen_G(v2o, below50, ok10All, "V")]
+    TE = gen_B(okE) + gen_G(CR, above5, okE, "C", 60) + gen_G(bm2.E_base(2.0), below50, okE, "M")
+    for t in TE:
+        t["set"] = "ETF"
+
+    z = {"key": (last, nfile), "TA": TA, "TO": TO, "TOut": TOut, "VAll": VAll, "TE": TE, "days": days, "n_stocks": len(stocks),
+         "nA99": sum(1 for s in A if data[s]["date"][0] < "1999-01-01"), "spyc": dict(zip(spy["date"], spy["c"]))}
+    os.makedirs(C + "results", exist_ok=True)
+    pickle.dump(z, open(pk_, "wb"), protocol=pickle.HIGHEST_PROTOCOL)
+    return z
+
+
+def make_index(cands):
+    """候補 [(優先, 売買)] を、買う日ごとの候補（優先・RSの高い順）にする"""
+    bi_ = {}
+    for p_, t in cands:
+        bi_.setdefault(t["in"], []).append((p_, t))
+    for v_ in bi_.values():
+        v_.sort(key=lambda x: (x[0], -x[1]["rs"]))
+    return bi_
+
+
+def port(by_in, days, di, seed, lo, hi, skip=0.25, log_eq=False):
+    """4枠・1銘柄＝資金÷4・同じ業種2銘柄まで。候補の skip を乱数で見送る。(最後の資金, 最大下落率, {日: 資金})"""
+    rnd = random.Random(seed)
+    cash, held, pk, mdd = 1.0, [], 1.0, 0.0
+    eqs = {}
+    eq = 1.0
+    for d in days[di[lo]:di[hi] + 1]:
+        still = []
+        for h in held:
+            v = h["t"]["path"].get(d)
+            if v is not None:
+                h["v"] = v
+            if h["t"]["out"] == d:
+                cash += h["size"] * h["v"]
+            else:
+                still.append(h)
+        held = still
+        eq = cash + sum(h["size"] * h["v"] for h in held)
+        for p_, t in by_in.get(d, ()):
+            if skip and rnd.random() < skip:
+                continue
+            if len(held) >= 4 or any(h["t"]["sym"] == t["sym"] for h in held):
+                continue
+            if t["ind"] and sum(1 for h in held if h["t"]["ind"] == t["ind"]) >= 2:
+                continue
+            size = min(eq / 4, cash)
+            if size <= eq * 0.02:
+                continue
+            cash -= size
+            v = t["path"].get(d, 1.0)
+            h = {"t": t, "size": size, "v": v}
+            if t["out"] == d:
+                cash += size * v
+            else:
+                held.append(h)
+        eq = cash + sum(h["size"] * h["v"] for h in held)
+        pk = max(pk, eq)
+        mdd = min(mdd, eq / pk - 1)
+        if log_eq:
+            eqs[d] = eq
+    return eq, mdd, eqs
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default="新分析ツール/バックテスト結果/実際の運用の期間の確認_2026-10-23/長い下げの中で今のルールを確かめる（1996年〜）.md")
@@ -160,7 +407,7 @@ def main():
     bl.KEEP_OPEN, bl.OVERLAP = True, True
     W87 = watch87()
     mem_sp = bl.load_members(C)   # S&P500 の構成期間（1996年〜）
-    syms = sorted(f[:-5] for f in os.listdir(LS) if f.endswith(".json"))
+    syms = sorted(f[:-5] for f in os.listdir(LS) if f.endswith(".json") and not f.startswith("^"))   # ^SOX・^VIX は指数（売買しない）
     data = {}
     for s in syms:
         d = load_long(s)
