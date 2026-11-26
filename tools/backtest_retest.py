@@ -5497,6 +5497,8 @@ def opt_stage(base, data, sim, days, ind, cache, part):
                         out["trades"].append([trow(x) for x in lg if x[0] not in ("eq", "req", "cb")])
             allf[nm_] = out
         allf["_regs"] = {k_: sorted(SKIPSET[k_]) for k_ in ("b50", "b50h", "b50nl", "b200h", "b50w30", "sox200", "both200") if k_ in SKIPSET}
+        for k_ in ("FTD_N", "FTD_S", "W30"):   # 2026-11-26: 底の合図の日（フォロースルー・デー・ステージ2）。切り替えて混ぜる形の「攻めに戻す合図」に使う
+            allf["_regs"]["bot_" + k_] = sorted(BOTTOM.get(k_, ()))
         allf["_breadth"] = BREADTH
         _js.dump(allf if os.environ.get("OPT_EQDUMP_ALL") == "1" else allf[REF], open(os.environ["OPT_EQDUMP"], "w"), ensure_ascii=False)
         print("資金を書き出し", os.environ["OPT_EQDUMP"], file=sys.stderr)
