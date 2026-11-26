@@ -3719,6 +3719,16 @@ def opt_stage(base, data, sim, days, ind, cache, part):
         f["VIX"] = "VIXが5日で+30%以上" if vx5 and vx >= vx5 * 1.3 else "VIX 30以上" if vx >= 30 else "VIXは普通"
         w_ = [v for v in hy[max(0, kd - 19):kd + 1] if v] if kd else []
         f["CRED"] = "信用の悪化（HYG/IEI −1.5%）" if w_ and len(w_) == 20 and hy[kd] / max(w_) - 1 <= -0.015 else "信用は普通"
+        # 2026-11-26 ユーザーの指示「RSIやMACD…デッドクロス・ゴールデンクロス・出来高などで様々な組み合わせで検証したと思います…検証してください」で足した切り口:
+        #   GC: 50日線と200日線の交わり（20取引日前と比べる）、VR: 合図の日の出来高÷その前の50日の平均、ST: 強さの条件（150日線が20取引日前より上でRS≧90）
+        m50p, m200p = ma(k - 20, 50), ma(k - 20, 200)
+        f["GC"] = ("20日以内にゴールデンクロス" if m50 > m200 and m50p is not None and m200p is not None and m50p <= m200p
+                   else "20日以内にデッドクロス" if m50 < m200 and m50p is not None and m200p is not None and m50p >= m200p
+                   else "50日線が200日線の上" if m50 > m200 else "50日線が200日線の下")
+        v0, va50 = vs_[k + 1] - vs_[k], (vs_[k] - vs_[k - 50]) / 50 if k >= 50 else None
+        f["VR"] = "出来高は普通" if not va50 else "出来高1.5倍以上" if v0 >= 1.5 * va50 else "出来高0.7倍未満" if v0 < 0.7 * va50 else "出来高は普通"
+        rs_k = (data[sym].get("rs") or [None] * (k + 1))[k] if k < len(data[sym].get("rs") or []) else None
+        f["ST"] = "強い（150日線↑・RS≧90）" if k >= 170 and ma(k, 150) > ma(k - 20, 150) and (rs_k or 0) >= 90 else "弱い"
         _ec[key] = f
         return f
     print("大手4社の決算の平均 −2%以下: " + "・".join(sorted(d for d in EAVGT[0.02] if d >= "2015-01-01")) + "、−4%以下: "
@@ -4203,7 +4213,7 @@ def opt_stage(base, data, sim, days, ind, cache, part):
         out = []
         for t in trs:
             if t.get("ghost") or t["sym"] not in HAS or (not t.get("force2x") and (mode == "none" or (mode == "reg" and prev(t["in"]) not in up))) \
-                    or (mode.startswith("boost_") and prev(t["in"]) not in up and t["sd"] not in SKIPSET[mode]) \
+                    or (not t.get("force2x") and mode.startswith("boost_") and prev(t["in"]) not in up and t["sd"] not in SKIPSET[mode]) \
                     or (mode == "reg_season" and (prev(t["in"]) not in up or int(t["in"][5:7]) in (5, 6, 7, 8, 9, 10))) \
                     or (mode == "reg_sox" and (prev(t["in"]) not in up or prev(t["in"]) not in up_sox)) \
                     or (mode.startswith("reg_not_") and (prev(t["in"]) not in up or prev(t["in"]) in KD[mode[8:]])):
@@ -4552,6 +4562,12 @@ def opt_stage(base, data, sim, days, ind, cache, part):
           "組み合わせの決まり②先に買うだけ": {"book": (os.environ.get("OPT_BOOK", ""), ("prio",))},
           "組み合わせの決まり③良い状況で新しい買い（上昇相場に入った日・一人勝ち）を足すだけ": {"book": (os.environ.get("OPT_BOOK", ""), ("add",))},
           "組み合わせの決まり④見送る・先に買う・足すの全部": {"book": (os.environ.get("OPT_BOOK", ""), ("skip", "prio", "add"))},
+          # 2026-11-26: 強さの条件＋QQQの上で使う形（tools/combo_boost.py で2015〜2021年の成績だけで作った決まり）
+          "組み合わせの決まり⑤良い状況の合図は2倍ETFで買う": {"book": (os.environ.get("OPT_BOOK", ""), ("boost",))},
+          "組み合わせの決まり⑥強さの条件で止める87銘柄の合図でも良い状況なら買う": {"book": (os.environ.get("OPT_BOOK", ""), ("admit",))},
+          "組み合わせの決まり⑦悪い状況の合図は見送る": {"book": (os.environ.get("OPT_BOOK", ""), ("skip2",))},
+          "組み合わせの決まり⑧⑤と⑥": {"book": (os.environ.get("OPT_BOOK", ""), ("boost", "admit"))},
+          "組み合わせの決まり⑨⑤と⑥と⑦": {"book": (os.environ.get("OPT_BOOK", ""), ("boost", "admit", "skip2"))},
           # 2026-11-12: 以前「惜しかった」信用取引の形（10/10 の古い土台）を今の土台で試し直す。金利は年7%と仮定
           "信用①6銘柄・信用取引1.5倍（1銘柄は資金の25%のまま）": {"slots": 6, "margin": (1.5, 0.07)},
           "信用②良い合図（急落の底のうち50日線の傾きが小さい20%）だけ、枠が埋まっていても信用取引で1つ別に買う": {"goodm": (0.07,)},
@@ -4969,6 +4985,13 @@ def opt_stage(base, data, sim, days, ind, cache, part):
                 trs = [t for t in trs if t["rule"] in ("S", "R", "Y") or not _hit(t, bk_["skip"])]
             if "prio" in use_:
                 trs = [{**t, "rs": t["rs"] + 1000} if t["rule"] not in ("S", "R") and _hit(t, bk_["prio"]) else t for t in trs]
+            # 2026-11-26: boost=良い状況の合図は2倍ETFで買う（S&P500の局面にかかわらず。2倍ETFのある銘柄）、admit=強さの条件で止める87銘柄の合図でも良い状況なら買う
+            if "boost" in use_:
+                trs = [{**t, "force2x": True} if t["rule"] in ("B", "C", "M", "V") and _hit(t, bk_.get("boost", [])) else t for t in trs]
+            if "admit" in use_:
+                trs = [{**t, "admit": True} if t["rule"] in ("B", "C", "M", "V") and t.get("x") != "out" and _hit(t, bk_.get("admit", [])) else t for t in trs]
+            if "skip2" in use_:   # 強さの条件の上で見送る状況（tools/combo_boost.py の skip）
+                trs = [t for t in trs if t["rule"] not in ("B", "C", "M", "V") or not _hit(t, bk_.get("skip2", []))]
         if sp.get("newsbad"):   # 2026-11-19 ユーザーの指示「悪材料ありの場合でもエントリーしたら利益出るのか」→「検証して」（tools/news_history.py の見出し。2023年〜・87銘柄だけ）
             md_ = sp["newsbad"]
             def _nf(t):
@@ -5103,7 +5126,7 @@ def opt_stage(base, data, sim, days, ind, cache, part):
                         return False
                     c_ = s_["c"]
                     return sum(c_[k - 149:k + 1]) > sum(c_[k - 169:k - 19]) and (s_["rs"][k] or 0) >= n_rs
-                trs = [t for t in trs if t["rule"] not in ("B", "C", "M", "V", "W") or t.get("x") == "out"
+                trs = [t for t in trs if t["rule"] not in ("B", "C", "M", "V", "W") or t.get("x") == "out" or t.get("admit")
                        or (regset_ is not None and t["sd"] not in regset_) or _strong(t["sym"], t["sd"])]
             elif k_ in ("uponly", "upish"):   # 2026-11-12 ユーザーの指示「上昇相場の銘柄を購入した方が年率は上がらないのか？」→「テストして」
                 # uponly: 合図の日に上昇相場（stock_regime の up）の銘柄だけ買う。upish: 上昇相場か「上げ」（終値が50日線より上で、50日線が10取引日前より上か20日線が5取引日前より上）だけ
