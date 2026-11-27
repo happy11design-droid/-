@@ -43,7 +43,7 @@ LS = C + "long/stocks/"
 COST = COSTS[2]
 STOP = 0.15
 START = "1996-01-02"
-ETFS = ("SPY", "QQQ", "SMH", "SOXX", "XLK")
+ETFS = ("SPY", "QQQ", "SMH", "SOXX", "XLK", "XLP", "XLV", "XLU")   # 2026-11-27: 守りの業種ETF も売買の銘柄に入れない
 
 
 def load_long(sym):

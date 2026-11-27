@@ -23,7 +23,7 @@ import backtest_lib as bl
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 C = os.path.expanduser("~/.cache/stock_backtest/")
 OUT = C + "long/stocks/"
-ETFS = ["SPY", "QQQ", "SMH", "SOXX", "XLK", "^SOX", "^VIX"]   # 2026-11-23: SOX・VIX の長い日足も（再開の合図の検証）
+ETFS = ["SPY", "QQQ", "SMH", "SOXX", "XLK", "^SOX", "^VIX", "XLP", "XLV", "XLU", "^IRX"]   # 2026-11-23: SOX・VIX、2026-11-27: 守りの業種ETF・短期国債の利回り（守りへの乗り換えの検証）
 
 
 def watch87():
